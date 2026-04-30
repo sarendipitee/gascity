@@ -505,27 +505,28 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		CopyFiles:              copyFiles,
 	}
 
-	return TemplateParams{
-		Command:                  command,
-		Prompt:                   prompt,
-		Env:                      env,
-		Hints:                    hints,
-		WorkDir:                  workDir,
-		SessionName:              sessName,
-		Alias:                    qualifiedName,
-		FPExtra:                  fpExtra,
-		ResolvedProvider:         resolved,
-		TemplateName:             templateNameFor(cfgAgent, qualifiedName),
-		InstanceName:             qualifiedName,
-		RigName:                  rigName,
-		RigRoot:                  rigRoot,
-		WakeMode:                 cfgAgent.WakeMode,
-		IsACP:                    sessionTransport == "acp",
-		HookEnabled:              hasHooks,
-		SessionOverride:          cfgAgent.Session,
-		EffectiveSessionProvider: effectiveSessionProvider(cfgAgent.Session, p.sessionProvider),
-		MCPServers:               mcpServers,
-	}, nil
+	params := TemplateParams{
+		Command:          command,
+		Prompt:           prompt,
+		Env:              env,
+		Hints:            hints,
+		WorkDir:          workDir,
+		SessionName:      sessName,
+		Alias:            qualifiedName,
+		FPExtra:          fpExtra,
+		ResolvedProvider: resolved,
+		TemplateName:     templateNameFor(cfgAgent, qualifiedName),
+		InstanceName:     qualifiedName,
+		RigName:          rigName,
+		RigRoot:          rigRoot,
+		WakeMode:         cfgAgent.WakeMode,
+		IsACP:            sessionTransport == "acp",
+		HookEnabled:      hasHooks,
+		MCPServers:       mcpServers,
+	}
+	params.SessionOverride = cfgAgent.Session
+	params.EffectiveSessionProvider = effectiveSessionProvider(cfgAgent.Session, p.sessionProvider)
+	return params, nil
 }
 
 func sessionDoltEnv(cityPath, rigRoot string, rigs []config.Rig) map[string]string {
