@@ -611,6 +611,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	// Validate cross-entity semantic constraints.
 	prov.Warnings = append(prov.Warnings, ValidateSemantics(root, path)...)
 	prov.Warnings = append(prov.Warnings, DetectLegacyProviderInheritance(root, path)...)
+	prov.Warnings = append(prov.Warnings, detectLegacyWorkspaceFields(root, path, prov.Workspace)...)
 
 	// Build the resolved provider cache now that compose + patch have
 	// populated the full provider table. Chain resolution errors
@@ -1397,7 +1398,7 @@ func trackRigs(prov *Provenance, rigs []Rig, source string) {
 }
 
 func trackWorkspace(prov *Provenance, meta toml.MetaData, source string) {
-	for _, f := range []string{"name", "provider", "start_command", "session_template", "install_agent_hooks"} {
+	for _, f := range []string{"name", "provider", "start_command", "session_template", "suspended", "install_agent_hooks", "global_fragments"} {
 		if meta.IsDefined("workspace", f) {
 			prov.Workspace[f] = source
 		}
