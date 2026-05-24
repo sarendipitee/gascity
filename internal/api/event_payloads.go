@@ -445,6 +445,7 @@ func init() {
 	events.RegisterPayload(events.SessionSuspended, events.NoPayload{})
 	events.RegisterPayload(events.SessionUpdated, events.NoPayload{})
 	events.RegisterPayload(events.SessionDrainAckedWithAssignedWork, SessionDrainAckedWithAssignedWorkPayload{})
+	events.RegisterPayload(events.SessionStranded, events.NoPayload{})
 	events.RegisterPayload(events.SessionWorkQueryFailed, SessionLifecyclePayload{})
 	events.RegisterPayload(events.ConvoyCreated, events.NoPayload{})
 	events.RegisterPayload(events.ConvoyClosed, events.NoPayload{})
@@ -471,4 +472,8 @@ func init() {
 	events.RegisterPayload(events.ProviderSwapped, events.NoPayload{})
 	events.RegisterPayload(events.WorkerOperation, WorkerOperationEventPayload{})
 	events.RegisterPayload(events.ProjectIdentityStamped, ProjectIdentityStampedPayload{})
+
+	// gc.store.maintenance.* — supervisor StoreMaintenanceLoop outcomes.
+	events.RegisterPayload(events.StoreMaintenanceDone, events.StoreMaintenanceDonePayload{})
+	events.RegisterPayload(events.StoreMaintenanceFailed, events.StoreMaintenanceFailedPayload{})
 }

@@ -2076,6 +2076,12 @@
             "$ref": "#/components/schemas/SessionSubmitSucceededPayload"
           },
           {
+            "$ref": "#/components/schemas/StoreMaintenanceDonePayload"
+          },
+          {
+            "$ref": "#/components/schemas/StoreMaintenanceFailedPayload"
+          },
+          {
             "$ref": "#/components/schemas/SupervisorFSPressureSkippedTickPayload"
           },
           {
@@ -6593,6 +6599,59 @@
         ],
         "type": "object"
       },
+      "StatusAgentDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "draining": {
+            "description": "True when the pool is draining this instance.",
+            "type": "boolean"
+          },
+          "expanded": {
+            "description": "True when this row is a pool-expanded instance (renderer indents differently).",
+            "type": "boolean"
+          },
+          "group_name": {
+            "description": "Pool group label for expanded rows; same as QualifiedName for singletons.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Unqualified agent name (for pool instances, the per-instance short name like 'polecat-1').",
+            "type": "string"
+          },
+          "qualified_name": {
+            "description": "Rig-qualified name when applicable, else the bare agent name.",
+            "type": "string"
+          },
+          "running": {
+            "description": "Observed running state of the agent's session.",
+            "type": "boolean"
+          },
+          "scale_label": {
+            "description": "'scaled (min=N, max=M)' header emitted once per pool group.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "city or rig.",
+            "type": "string"
+          },
+          "session_name": {
+            "description": "tmux session name CLI drain-ops key on.",
+            "type": "string"
+          },
+          "suspended": {
+            "description": "Whether the agent (or its rig) is suspended.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "qualified_name",
+          "scope",
+          "running",
+          "suspended"
+        ],
+        "type": "object"
+      },
       "StatusBody": {
         "additionalProperties": false,
         "properties": {
@@ -6600,6 +6659,16 @@
             "description": "Total agent count (deprecated, use agents.total).",
             "format": "int64",
             "type": "integer"
+          },
+          "agent_details": {
+            "description": "Per-agent state (for CLI status views). Empty when none.",
+            "items": {
+              "$ref": "#/components/schemas/StatusAgentDetail"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "agents": {
             "$ref": "#/components/schemas/StatusAgentCounts",
@@ -6612,6 +6681,16 @@
           "name": {
             "description": "City name.",
             "type": "string"
+          },
+          "named_session_details": {
+            "description": "Per-named-session detail. Empty when none configured.",
+            "items": {
+              "$ref": "#/components/schemas/StatusNamedSessionDetail"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "partial": {
             "description": "True when one or more status backing reads returned incomplete data.",
@@ -6636,6 +6715,16 @@
             "format": "int64",
             "type": "integer"
           },
+          "rig_details": {
+            "description": "Per-rig detail (for CLI status views). Empty when none.",
+            "items": {
+              "$ref": "#/components/schemas/StatusRigDetail"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "rigs": {
             "$ref": "#/components/schemas/StatusRigCounts",
             "description": "Rig state counts."
@@ -6644,6 +6733,14 @@
             "description": "Number of running agent processes.",
             "format": "int64",
             "type": "integer"
+          },
+          "session_counts_detail": {
+            "$ref": "#/components/schemas/StatusSessionCountsDetail",
+            "description": "Active/suspended session counts. Omitted when unavailable."
+          },
+          "store_health": {
+            "$ref": "#/components/schemas/StatusStoreHealth",
+            "description": "Dolt bead store health summary. Omitted when unavailable."
           },
           "suspended": {
             "description": "Whether the city is suspended.",
@@ -6698,6 +6795,29 @@
         ],
         "type": "object"
       },
+      "StatusNamedSessionDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "description": "Qualified named-session identity.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "Named-session mode (on-demand, always, etc.).",
+            "type": "string"
+          },
+          "status": {
+            "description": "Lifecycle status string (materialized, reserved-unmaterialized, etc.).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity",
+          "status",
+          "mode"
+        ],
+        "type": "object"
+      },
       "StatusRigCounts": {
         "additionalProperties": false,
         "properties": {
@@ -6715,6 +6835,99 @@
         "required": [
           "total",
           "suspended"
+        ],
+        "type": "object"
+      },
+      "StatusRigDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Rig name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Rig directory path.",
+            "type": "string"
+          },
+          "suspended": {
+            "description": "Whether the rig is suspended (either explicitly or because all its agents are suspended).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "suspended"
+        ],
+        "type": "object"
+      },
+      "StatusSessionCountsDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "description": "Number of active sessions.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "suspended": {
+            "description": "Number of suspended sessions.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "suspended"
+        ],
+        "type": "object"
+      },
+      "StatusStoreHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "last_gc_at": {
+            "description": "RFC3339 timestamp of last maintenance run.",
+            "type": "string"
+          },
+          "last_gc_status": {
+            "description": "Status of last maintenance run ('success' or 'failed').",
+            "type": "string"
+          },
+          "live_rows": {
+            "description": "Live bead row count.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "On-disk path of the Dolt store.",
+            "type": "string"
+          },
+          "ratio_mb_per_row": {
+            "description": "Derived megabytes per row.",
+            "format": "double",
+            "type": "number"
+          },
+          "size_bytes": {
+            "description": "Total bytes of the store directory.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "threshold_mb_per_row": {
+            "description": "Ratio threshold; a ratio above this trips warning.",
+            "format": "double",
+            "type": "number"
+          },
+          "warning": {
+            "description": "True when maintenance is overdue.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "size_bytes",
+          "live_rows",
+          "ratio_mb_per_row",
+          "warning",
+          "threshold_mb_per_row"
         ],
         "type": "object"
       },
@@ -6741,6 +6954,57 @@
           "in_progress",
           "ready",
           "open"
+        ],
+        "type": "object"
+      },
+      "StoreMaintenanceDonePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "after_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "before_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "duration_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "snapshot_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "duration_s",
+          "before_bytes",
+          "after_bytes",
+          "snapshot_path"
+        ],
+        "type": "object"
+      },
+      "StoreMaintenanceFailedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "error_msg": {
+            "type": "string"
+          },
+          "snapshot_path": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "error_msg",
+          "duration_s"
         ],
         "type": "object"
       },
@@ -7051,6 +7315,8 @@
             "extmsg.inbound": "#/components/schemas/TypedEventStreamEnvelopeExtmsgInbound",
             "extmsg.outbound": "#/components/schemas/TypedEventStreamEnvelopeExtmsgOutbound",
             "extmsg.unbound": "#/components/schemas/TypedEventStreamEnvelopeExtmsgUnbound",
+            "gc.store.maintenance.done": "#/components/schemas/TypedEventStreamEnvelopeGcStoreMaintenanceDone",
+            "gc.store.maintenance.failed": "#/components/schemas/TypedEventStreamEnvelopeGcStoreMaintenanceFailed",
             "mail.archived": "#/components/schemas/TypedEventStreamEnvelopeMailArchived",
             "mail.deleted": "#/components/schemas/TypedEventStreamEnvelopeMailDeleted",
             "mail.marked_read": "#/components/schemas/TypedEventStreamEnvelopeMailMarkedRead",
@@ -7076,6 +7342,7 @@
             "session.max_age_killed": "#/components/schemas/TypedEventStreamEnvelopeSessionMaxAgeKilled",
             "session.quarantined": "#/components/schemas/TypedEventStreamEnvelopeSessionQuarantined",
             "session.stopped": "#/components/schemas/TypedEventStreamEnvelopeSessionStopped",
+            "session.stranded": "#/components/schemas/TypedEventStreamEnvelopeSessionStranded",
             "session.suspended": "#/components/schemas/TypedEventStreamEnvelopeSessionSuspended",
             "session.undrained": "#/components/schemas/TypedEventStreamEnvelopeSessionUndrained",
             "session.updated": "#/components/schemas/TypedEventStreamEnvelopeSessionUpdated",
@@ -7144,6 +7411,12 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeExtmsgUnbound"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeGcStoreMaintenanceDone"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeGcStoreMaintenanceFailed"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeMailArchived"
@@ -7219,6 +7492,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionStopped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionStranded"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionSuspended"
@@ -7748,6 +8024,7 @@
                 "session.suspended",
                 "session.updated",
                 "session.drain_acked_with_assigned_work",
+                "session.stranded",
                 "session.work_query_failed",
                 "bead.created",
                 "bead.closed",
@@ -7788,7 +8065,9 @@
                 "extmsg.adapter_removed",
                 "extmsg.inbound",
                 "extmsg.outbound",
-                "events.rotated"
+                "events.rotated",
+                "gc.store.maintenance.done",
+                "gc.store.maintenance.failed"
               ]
             },
             "type": "string"
@@ -8141,6 +8420,90 @@
           "payload"
         ],
         "title": "TypedEventStreamEnvelope extmsg.unbound",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeGcStoreMaintenanceDone": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/StoreMaintenanceDonePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "gc.store.maintenance.done",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope gc.store.maintenance.done",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeGcStoreMaintenanceFailed": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/StoreMaintenanceFailedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "gc.store.maintenance.failed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope gc.store.maintenance.failed",
         "type": "object"
       },
       "TypedEventStreamEnvelopeMailArchived": {
@@ -9193,6 +9556,48 @@
         "title": "TypedEventStreamEnvelope session.stopped",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeSessionStranded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/NoPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "session.stranded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope session.stranded",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeSessionSuspended": {
         "additionalProperties": false,
         "properties": {
@@ -9552,6 +9957,8 @@
             "extmsg.inbound": "#/components/schemas/TypedTaggedEventStreamEnvelopeExtmsgInbound",
             "extmsg.outbound": "#/components/schemas/TypedTaggedEventStreamEnvelopeExtmsgOutbound",
             "extmsg.unbound": "#/components/schemas/TypedTaggedEventStreamEnvelopeExtmsgUnbound",
+            "gc.store.maintenance.done": "#/components/schemas/TypedTaggedEventStreamEnvelopeGcStoreMaintenanceDone",
+            "gc.store.maintenance.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeGcStoreMaintenanceFailed",
             "mail.archived": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailArchived",
             "mail.deleted": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailDeleted",
             "mail.marked_read": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailMarkedRead",
@@ -9577,6 +9984,7 @@
             "session.max_age_killed": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled",
             "session.quarantined": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionQuarantined",
             "session.stopped": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionStopped",
+            "session.stranded": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionStranded",
             "session.suspended": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionSuspended",
             "session.undrained": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionUndrained",
             "session.updated": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionUpdated",
@@ -9645,6 +10053,12 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeExtmsgUnbound"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeGcStoreMaintenanceDone"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeGcStoreMaintenanceFailed"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailArchived"
@@ -9720,6 +10134,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionStopped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionStranded"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionSuspended"
@@ -10296,6 +10713,7 @@
                 "session.suspended",
                 "session.updated",
                 "session.drain_acked_with_assigned_work",
+                "session.stranded",
                 "session.work_query_failed",
                 "bead.created",
                 "bead.closed",
@@ -10336,7 +10754,9 @@
                 "extmsg.adapter_removed",
                 "extmsg.inbound",
                 "extmsg.outbound",
-                "events.rotated"
+                "events.rotated",
+                "gc.store.maintenance.done",
+                "gc.store.maintenance.failed"
               ]
             },
             "type": "string"
@@ -10722,6 +11142,98 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope extmsg.unbound",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeGcStoreMaintenanceDone": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/StoreMaintenanceDonePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "gc.store.maintenance.done",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope gc.store.maintenance.done",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeGcStoreMaintenanceFailed": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/StoreMaintenanceFailedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "gc.store.maintenance.failed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope gc.store.maintenance.failed",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeMailArchived": {
@@ -11872,6 +12384,52 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope session.stopped",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeSessionStranded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/NoPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "session.stranded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope session.stranded",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeSessionSuspended": {
@@ -13090,6 +13648,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -13629,6 +14194,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -14171,6 +14743,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -14384,6 +14963,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -14559,6 +15145,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -14702,6 +15295,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -14997,6 +15597,16 @@
               "description": "Filter by rig.",
               "type": "string"
             }
+          },
+          {
+            "description": "Include closed beads.",
+            "explode": false,
+            "in": "query",
+            "name": "all",
+            "schema": {
+              "description": "Include closed beads.",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -15010,6 +15620,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15098,6 +15715,13 @@
             },
             "description": "Created",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15168,6 +15792,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15248,6 +15879,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15308,6 +15946,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15368,6 +16013,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15561,6 +16213,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15714,6 +16373,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -15972,6 +16638,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -16051,6 +16724,13 @@
             },
             "description": "Created",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -16183,6 +16863,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -16588,6 +17275,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -16802,6 +17496,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -17385,6 +18086,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -18236,6 +18944,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -18324,6 +19039,13 @@
             },
             "description": "Created",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -18404,6 +19126,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Request-Id": {
                 "$ref": "#/components/headers/X-GC-Request-Id"
               }
@@ -18476,6 +19205,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -18637,6 +19373,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -18987,6 +19730,13 @@
             },
             "description": "Created",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -19559,6 +20309,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Request-Id": {
                 "$ref": "#/components/headers/X-GC-Request-Id"
               }
@@ -19744,6 +20501,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -19905,6 +20669,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -19965,6 +20736,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20177,6 +20955,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20237,6 +21022,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20449,6 +21241,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20509,6 +21308,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20793,6 +21599,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -20934,6 +21747,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21288,6 +22108,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21542,6 +22369,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21683,6 +22517,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21816,6 +22657,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21883,6 +22731,19 @@
               "description": "Include last output preview.",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Number of lines to include in the last output preview when peek=true. Defaults to 5.",
+            "explode": false,
+            "in": "query",
+            "name": "peek_lines",
+            "schema": {
+              "description": "Number of lines to include in the last output preview when peek=true. Defaults to 5.",
+              "format": "int64",
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -21896,6 +22757,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -21985,6 +22853,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -22055,6 +22930,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -22135,6 +23017,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -22444,6 +23333,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -22535,6 +23431,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -22626,6 +23529,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -23270,6 +24180,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -23455,6 +24372,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -23679,6 +24603,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",
@@ -23931,6 +24862,13 @@
             },
             "description": "OK",
             "headers": {
+              "X-GC-Cache-Age-S": {
+                "schema": {
+                  "description": "Age in seconds of the CachingStore snapshot that served this response (0 if not applicable).",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
               "X-GC-Index": {
                 "schema": {
                   "description": "Latest event sequence number.",

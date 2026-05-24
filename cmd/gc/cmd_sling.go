@@ -882,7 +882,14 @@ func doSlingBatchWithJSON(opts slingOpts, deps slingDeps, querier BeadChildQueri
 			return writeSlingJSONResult(result, jsonStdout, stderr)
 		}
 		// For batch dry-run, look up the container bead for display.
-		if querier != nil {
+		// DoSling sets ContainerType on the result only when it actually
+		// went down the batch path (i.e. the bead is a container type
+		// like convoy). For leaf tasks it returns the single-bead result
+		// with ContainerType unset — so the dry-run preview must use
+		// dryRunSingle, otherwise it renders the misleading "container
+		// with zero children" output even though the real run would
+		// route the bead itself.
+		if result.ContainerType != "" && querier != nil {
 			if b, getErr := querier.Get(opts.BeadOrFormula); getErr == nil {
 				children, _ := dryRunBatchChildren(querier, b.ID)
 				var open []beads.Bead
@@ -1458,8 +1465,9 @@ func doSlingNudge(a *config.Agent, cityName, cityPath string, cfg *config.City,
 	if a.SupportsInstanceExpansion() {
 		// Find a running multi-session instance to nudge.
 		sp0 := scaleParamsFor(a)
-		for _, qn := range discoverPoolInstances(a.Name, a.Dir, sp0, a, cityName, st, sp) {
-			sn := lookupSessionNameOrLegacy(store, cityName, qn, st)
+		for _, ref := range resolvePoolSessionRefs(store, cfg, a.Name, a.Dir, sp0, a, cityName, st, sp, stderr) {
+			qn := ref.qualifiedInstance
+			sn := ref.sessionName
 			running, err := workerSessionTargetRunningWithConfig(cityPath, store, sp, cfg, sn)
 			if err == nil && running {
 				member, ok := resolveAgentIdentity(cfg, qn, currentRigContext(cfg))

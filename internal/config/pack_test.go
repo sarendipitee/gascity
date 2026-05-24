@@ -1219,8 +1219,6 @@ func TestExpandCityPacks_FormulaDirsStacked(t *testing.T) {
 name = "alpha"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "agent-a"
@@ -1231,8 +1229,6 @@ name = "agent-a"
 name = "beta"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "agent-b"
@@ -1421,8 +1417,6 @@ func TestExpandPacks_RigFormulaDirsMultiple(t *testing.T) {
 name = "alpha"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "worker-a"
@@ -1433,8 +1427,6 @@ name = "worker-a"
 name = "beta"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "worker-b"
@@ -1621,8 +1613,6 @@ name = "gastown"
 version = "1.0.0"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "mayor"
@@ -1796,8 +1786,6 @@ name = "gastown"
 version = "1.0.0"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "witness"
@@ -2427,8 +2415,6 @@ func TestPackIncludesFormulas(t *testing.T) {
 name = "maintenance"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "dog"
@@ -2442,8 +2428,6 @@ name = "gastown"
 schema = 1
 includes = ["../maintenance"]
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "mayor"
@@ -2586,8 +2570,6 @@ func TestExpandCityPacksWithIncludes(t *testing.T) {
 name = "maintenance"
 schema = 1
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "dog"
@@ -2602,8 +2584,6 @@ name = "gastown"
 schema = 1
 includes = ["../maintenance"]
 
-[formulas]
-dir = "formulas"
 
 [[agent]]
 name = "mayor"
@@ -4341,6 +4321,32 @@ session_live = ["echo global"]
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("SessionLive[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestPackGlobal_DedupesPackAcrossCityAndRigScopes(t *testing.T) {
+	cfg := &City{
+		PackGlobals: []ResolvedPackGlobal{
+			{PackName: "gastown", SessionLive: []string{"theme.sh", "keys.sh"}},
+		},
+		RigPackGlobals: map[string][]ResolvedPackGlobal{
+			"my-rig": {{PackName: "gastown", SessionLive: []string{"theme.sh", "keys.sh"}}},
+		},
+		Agents: []Agent{
+			{Name: "city-agent"},
+			{Name: "rig-agent", Dir: "my-rig"},
+		},
+	}
+
+	applyPackGlobals(cfg)
+
+	for _, a := range cfg.Agents {
+		if len(a.SessionLive) != 2 {
+			t.Fatalf("agent %q SessionLive = %v, want one gastown global application", a.Name, a.SessionLive)
+		}
+		if a.SessionLive[0] != "theme.sh" || a.SessionLive[1] != "keys.sh" {
+			t.Fatalf("agent %q SessionLive = %v, want [theme.sh keys.sh]", a.Name, a.SessionLive)
 		}
 	}
 }

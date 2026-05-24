@@ -869,7 +869,7 @@ func TestHandleSessionListActiveBeadUsesCachedLookup(t *testing.T) {
 	resp := sessionResponse{}
 	srv.enrichSessionResponse(&resp, info, fs.Config(), sessionResponseCapabilityHandle{
 		state: worker.State{Phase: worker.PhaseReady},
-	}, false, false, false)
+	}, false, false, false, 0)
 
 	if !resp.Running {
 		t.Fatal("Running = false, want true")
@@ -1036,7 +1036,7 @@ func TestHandleSessionListActiveBeadUsesCachedListWhenAvailable(t *testing.T) {
 	resp := sessionResponse{}
 	srv.enrichSessionResponse(&resp, info, fs.Config(), sessionResponseCapabilityHandle{
 		state: worker.State{Phase: worker.PhaseReady},
-	}, false, false, false)
+	}, false, false, false, 0)
 
 	if got := resp.ActiveBead; got != work.ID {
 		t.Fatalf("active_bead = %q, want cached %q", got, work.ID)
@@ -1074,7 +1074,7 @@ func TestHandleSessionGetActiveBeadUsesLiveLookup(t *testing.T) {
 	resp := sessionResponse{}
 	srv.enrichSessionResponse(&resp, info, fs.Config(), sessionResponseCapabilityHandle{
 		state: worker.State{Phase: worker.PhaseReady},
-	}, false, true, true)
+	}, false, true, true, 0)
 
 	if !resp.Running {
 		t.Fatal("Running = false, want true")
@@ -1847,6 +1847,44 @@ func TestHandleSessionListIncludesReason(t *testing.T) {
 	}
 	if item.Reason != "user-hold" {
 		t.Errorf("got reason %q, want %q", item.Reason, "user-hold")
+	}
+}
+
+func TestHandleSessionListShowsResetPendingForLiveRuntime(t *testing.T) {
+	fs := newSessionFakeState(t)
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	info := createTestSession(t, fs.cityBeadStore, fs.sp, "Reset Pending")
+	if !fs.sp.IsRunning(info.SessionName) {
+		t.Fatalf("session %q should be running in fake provider", info.SessionName)
+	}
+	if err := fs.cityBeadStore.SetMetadataBatch(info.ID, map[string]string{
+		"restart_requested": "true",
+		"sleep_reason":      "user-hold",
+	}); err != nil {
+		t.Fatalf("set reset metadata: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", cityURL(fs, "/sessions"), nil)
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var body struct {
+		Items []sessionResponse `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 1 {
+		t.Fatalf("got %d items, want 1", len(body.Items))
+	}
+	if body.Items[0].Reason != "reset-pending" {
+		t.Fatalf("reason = %q, want reset-pending", body.Items[0].Reason)
 	}
 }
 

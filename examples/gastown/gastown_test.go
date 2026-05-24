@@ -202,6 +202,11 @@ func loadExpanded(t *testing.T) *config.City {
 
 func TestCityTomlParses(t *testing.T) {
 	dir := exampleDir()
+	// city.toml is the deployment shell — imports and the default-rig
+	// binding now live in pack.toml. Load reads city.toml without expanding
+	// pack.toml, so this assertion sees only what city.toml literally
+	// declares; the post-expansion shape is exercised separately by
+	// loadExpanded.
 	cfg, err := config.Load(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -212,7 +217,6 @@ func TestCityTomlParses(t *testing.T) {
 	if len(cfg.Workspace.LegacyIncludes()) != 0 {
 		t.Errorf("Workspace.Includes = %v, want empty (migrated to pack.toml)", cfg.Workspace.LegacyIncludes())
 	}
-	// Imports live in pack.toml (portable definition), not city.toml (deployment).
 	if len(cfg.Imports) != 0 {
 		t.Errorf("cfg.Imports = %v, want empty (imports migrated to pack.toml)", cfg.Imports)
 	}
@@ -243,12 +247,20 @@ func TestCityPackTomlParses(t *testing.T) {
 	if gastownImp.Source != "packs/gastown" {
 		t.Errorf("pack.toml imports[\"gastown\"].Source = %q, want %q", gastownImp.Source, "packs/gastown")
 	}
-	gastownDefault, ok := tc.Defaults.Rig.Imports["gastown"]
+	cityData, err := os.ReadFile(filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("reading city.toml: %v", err)
+	}
+	var cityCfg config.City
+	if _, err := toml.Decode(string(cityData), &cityCfg); err != nil {
+		t.Fatalf("parsing city.toml: %v", err)
+	}
+	gastownDefault, ok := cityCfg.Defaults.Rig.Imports["gastown"]
 	if !ok {
-		t.Fatalf("pack.toml defaults.rig.imports = %v, want entry for \"gastown\"", tc.Defaults.Rig.Imports)
+		t.Fatalf("city.toml defaults.rig.imports = %v, want entry for \"gastown\"", cityCfg.Defaults.Rig.Imports)
 	}
 	if gastownDefault.Source != "packs/gastown" {
-		t.Errorf("pack.toml defaults.rig.imports[\"gastown\"].Source = %q, want %q", gastownDefault.Source, "packs/gastown")
+		t.Errorf("city.toml defaults.rig.imports[\"gastown\"].Source = %q, want %q", gastownDefault.Source, "packs/gastown")
 	}
 }
 
@@ -466,7 +478,7 @@ func TestPolecatFormulaSignalsRefineryAfterReassign(t *testing.T) {
 	assertContainsInOrder(t, body,
 		"**5. Reassign to refinery:**",
 		refineryTarget,
-		`gc bd update {{issue}} --status=open --assignee="$REFINERY_TARGET" --set-metadata gc.routed_to="$REFINERY_TARGET"`,
+		`gc bd update {{issue}} --status=open --assignee="$REFINERY_TARGET" --set-metadata gc.routed_to=""`,
 		"**6. Signal refinery to check for work immediately",
 		refineryTarget,
 		`gc session wake "$REFINERY_TARGET" || true`,
@@ -482,6 +494,9 @@ func TestPolecatFormulaSignalsRefineryAfterReassign(t *testing.T) {
 		if strings.Contains(body, bad) {
 			t.Fatalf("polecat formula must preserve refinery handoff diagnostics and pass a nudge message; found %q", bad)
 		}
+	}
+	if strings.Contains(body, `--assignee="$REFINERY_TARGET" --set-metadata gc.routed_to="$REFINERY_TARGET"`) {
+		t.Fatal("polecat formula must clear gc.routed_to instead of routing to the refinery named session")
 	}
 }
 
@@ -550,11 +565,14 @@ func TestPolecatPromptDoneSequenceSignalsRefinery(t *testing.T) {
 	assertContainsInOrder(t, body,
 		"## FINAL REMINDER: RUN THE DONE SEQUENCE",
 		`REFINERY_TARGET="${GC_RIG:+$GC_RIG/}{{ .BindingPrefix }}refinery"`,
-		`gc bd update <work-bead> --status=open --assignee="$REFINERY_TARGET" --set-metadata gc.routed_to="$REFINERY_TARGET"`,
+		`gc bd update <work-bead> --status=open --assignee="$REFINERY_TARGET" --set-metadata gc.routed_to=""`,
 		`gc session wake "$REFINERY_TARGET" || true`,
 		`gc session nudge "$REFINERY_TARGET" "Run 'gc prime' to check merge queue and begin processing." || true`,
 		`gc runtime drain-ack`,
 	)
+	if strings.Contains(body, `--assignee="$REFINERY_TARGET" --set-metadata gc.routed_to="$REFINERY_TARGET"`) {
+		t.Fatal("polecat prompt must clear gc.routed_to instead of routing to the refinery named session")
+	}
 	if !strings.Contains(body, "Done sequence (push, set metadata, reassign, wake refinery, nudge refinery, `gc runtime drain-ack`, exit)") {
 		t.Fatalf("polecat quick reference must include the refinery wake+nudge handoff")
 	}
@@ -1551,6 +1569,63 @@ func TestGastownPatrolWispCommandsPropagateRoutingNamespace(t *testing.T) {
 	}
 }
 
+func TestGastownPatrolPromptFallbackPreservesLifecycle(t *testing.T) {
+	checks := []struct {
+		rel       string
+		agentName string
+		template  string
+		formula   string
+		pourLine  string
+	}{
+		{
+			rel:       "packs/gastown/agents/deacon/prompt.template.md",
+			agentName: "gascity/gastown.deacon",
+			template:  "deacon",
+			formula:   "mol-deacon-patrol",
+			pourLine:  `NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix=gastown. --json | jq -r '.new_epic_id // empty')`,
+		},
+		{
+			rel:       "packs/gastown/agents/witness/prompt.template.md",
+			agentName: "gascity/gastown.witness",
+			template:  "witness",
+			formula:   "mol-witness-patrol",
+			pourLine:  `NEXT=$(gc bd mol wisp mol-witness-patrol --root-only --var binding_prefix='gastown.' --json | jq -r '.new_epic_id // empty')`,
+		},
+	}
+
+	for _, check := range checks {
+		body := renderGastownPromptForPack(t, check.rel, check.agentName, check.template, "gascity", "gastown", "gastown.")
+		section := sectionBetween(t, body, "## CRITICAL: No Idle State Between Cycles", "## Context Exhaustion")
+		assertContainsInOrder(t, section,
+			`run `+"`gc hook`"+` immediately`,
+			`CURRENT_WISP=${GC_BEAD_ID:-}`,
+			`if [ -z "$CURRENT_WISP" ]; then`,
+			`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+			`ASSIGNED_WISP=$(gc bd list --assignee="$GC_AGENT" --status=open --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+			`if [ -n "$CURRENT_WISP" ] && [ -z "$ASSIGNED_WISP" ]; then`,
+			check.pourLine,
+			`if [ -z "$NEXT" ]; then`,
+			`if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then`,
+			`gc bd mol burn "$CURRENT_WISP" --force`,
+			`elif [ -n "$CURRENT_WISP" ]; then`,
+			`gc bd mol burn "$CURRENT_WISP" --force`,
+			`elif [ -z "$ASSIGNED_WISP" ]; then`,
+			check.pourLine,
+			`if [ -z "$NEXT" ]; then`,
+			`if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then`,
+			`gc hook`,
+		)
+		for _, bad := range []string{`--assignee="$GC_ALIAS"`, "sleep 5"} {
+			if strings.Contains(section, bad) {
+				t.Fatalf("%s no-idle fallback still contains %q", check.rel, bad)
+			}
+		}
+		if !strings.Contains(section, check.formula) {
+			t.Fatalf("%s no-idle fallback does not mention %s", check.rel, check.formula)
+		}
+	}
+}
+
 func TestRefineryPatrolRestartGuidanceAssignsSuccessor(t *testing.T) {
 	dir := exampleDir()
 	promptPath := filepath.Join(dir, "packs", "gastown", "agents", "refinery", "prompt.template.md")
@@ -1705,9 +1780,7 @@ func TestGastownPromptRoutedToHandoffIsFullyQualifiedUnderBinding(t *testing.T) 
 			rel:          "packs/gastown/agents/polecat/prompt.template.md",
 			agentName:    rigName + "/" + bindingPrefix + "furiosa",
 			templateName: "polecat",
-			wantRoutes: map[string]string{
-				`"${GC_RIG:+$GC_RIG/}gastown.refinery"`: rigName + "/" + bindingPrefix + "refinery",
-			},
+			wantRoutes:   map[string]string{},
 		},
 		{
 			rel:          "packs/gastown/agents/witness/prompt.template.md",

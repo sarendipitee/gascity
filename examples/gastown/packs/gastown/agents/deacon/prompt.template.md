@@ -76,7 +76,52 @@ gc bd formula show mol-deacon-patrol
 # Step 5: Execute — work through the steps in order
 ```
 
-**Hook -> Read formula steps (`gc bd formula show <name>`) -> Follow in order -> pour next iteration.**
+**Hook -> Read formula steps (`gc bd formula show <name>`) -> Follow in order -> pour next iteration -> run `gc hook`.**
+
+## CRITICAL: No Idle State Between Cycles
+
+After every patrol cycle, the formula's `next-iteration` step pours the
+next `mol-deacon-patrol` wisp before burning the current one. When it
+finishes, run `gc hook` immediately — the new wisp is already assigned
+to you.
+
+**Do NOT enter "Standing by for the next hook" idle state.** That phrase
+is a bug indicator. Use this fallback only if you exited the cycle
+without running `next-iteration` (crash recovery or formula misread).
+If `next-iteration` already ran, do not pour again; run `gc hook`.
+
+```bash
+CURRENT_WISP=${GC_BEAD_ID:-}
+if [ -z "$CURRENT_WISP" ]; then
+  CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')
+fi
+ASSIGNED_WISP=$(gc bd list --assignee="$GC_AGENT" --status=open --type=wisp --limit=1 --json | jq -r '.[0].id // empty')
+if [ -n "$CURRENT_WISP" ] && [ -z "$ASSIGNED_WISP" ]; then
+  NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
+  if [ -z "$NEXT" ]; then
+    echo "Could not pour next deacon wisp; not burning."
+    exit 1
+  fi
+  if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then
+    echo "Could not assign next deacon wisp; not burning."
+    exit 1
+  fi
+  gc bd mol burn "$CURRENT_WISP" --force
+elif [ -n "$CURRENT_WISP" ]; then
+  gc bd mol burn "$CURRENT_WISP" --force
+elif [ -z "$ASSIGNED_WISP" ]; then
+  NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
+  if [ -z "$NEXT" ]; then
+    echo "Could not bootstrap next deacon wisp."
+    exit 1
+  fi
+  if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then
+    echo "Could not assign bootstrap deacon wisp."
+    exit 1
+  fi
+fi
+gc hook
+```
 
 ## Context Exhaustion
 
