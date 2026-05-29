@@ -19,6 +19,7 @@ var (
 	newDoctorDoltServerCheck    = doctor.NewDoltServerCheck
 	newDoctorRigDoltServerCheck = doctor.NewRigDoltServerCheck
 	newDoctorDoltBackupCheck    = doctor.NewDoltBackupCheck
+	newDoctorDoltLocalOnlyCheck = doctor.NewDoltLocalOnlyRemoteCheck
 )
 
 func newDoctorCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -313,6 +314,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 			// skip non-managed-bdstore rigs and GC_DOLT=skip environments.
 			if rigUsesManagedBdStoreContract(cityPath, rig) && !gcDoltSkip() {
 				register(newDoctorDoltBackupCheck(cityPath, rig, managedDoltDataDir))
+				register(newDoctorDoltLocalOnlyCheck(cityPath, rig, managedDoltDataDir))
 			}
 		}
 	}
