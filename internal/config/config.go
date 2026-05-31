@@ -1503,7 +1503,7 @@ type OrdersConfig struct {
 	Overrides []OrderOverride `toml:"overrides,omitempty"`
 }
 
-// OrderOverride modifies a scanned order's scheduling fields.
+// OrderOverride modifies a scanned order's scheduling fields and exec env.
 // Uses pointer fields to distinguish "not set" from "set to zero value."
 type OrderOverride struct {
 	// Name is the order name to target (required).
@@ -1530,6 +1530,9 @@ type OrderOverride struct {
 	Pool *string `toml:"pool,omitempty"`
 	// Timeout overrides the per-order timeout. Go duration string.
 	Timeout *string `toml:"timeout,omitempty"`
+	// Env adds or overrides environment variables exported into an exec
+	// order's child process.
+	Env map[string]string `toml:"env,omitempty"`
 }
 
 func (o *OrderOverride) normalizeLegacyAliases() {
