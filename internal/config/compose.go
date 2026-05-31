@@ -415,7 +415,13 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	rootIncludes := append([]string{}, rootPackIncludes...)
 	rootIncludes = append(rootIncludes, root.Workspace.LegacyIncludes()...)
 	root.Workspace.SetLegacyIncludes(rootIncludes)
-	existingPacks := resolvedPackNames(root.Workspace.LegacyIncludes(), root.Imports, fs, cityRoot)
+
+	// Resolve named pack references before computing reachability so builtin
+	// injection sees the same cache paths that pack expansion will use.
+	resolveNamedPacks(root, cityRoot)
+	rootIncludes = root.Workspace.LegacyIncludes()
+
+	existingPacks := resolvedConfigPackNames(root, fs, cityRoot)
 	for _, inc := range packIncludes {
 		name := readPackNameFromDir(inc)
 		if name != "" && existingPacks[name] {
@@ -427,9 +433,6 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 
 	adjustPatchPaths(&root.Patches, cityRoot, cityRoot)
 	adjustRigOverridePaths(root.Rigs, cityRoot, cityRoot)
-
-	// Resolve named pack references to cache paths before any expansion.
-	resolveNamedPacks(root, cityRoot)
 
 	implicitImports, implicitPath, implicitData, implicitErr := readImplicitImportsWithData()
 	if implicitErr != nil {
@@ -1549,16 +1552,16 @@ func trackWorkspace(prov *Provenance, meta toml.MetaData, source string) {
 }
 
 // resolvedPackNames collects pack names that are reachable from a set of
-// top-level include paths and imports. It walks both legacy [pack].includes
-// and V2 [imports] transitively so builtin system-pack injection can be
-// skipped when a user pack already brings the same pack into the city
-// closure.
+// top-level include paths and imports. It walks legacy [pack].includes
+// transitively and follows V2 [imports] according to each import's transitive
+// setting so builtin system-pack injection can be skipped when a user pack
+// already brings the same pack into the city closure.
 func resolvedPackNames(includes []string, imports map[string]Import, sysFS fsys.FS, cityRoot string) map[string]bool {
 	names := make(map[string]bool, len(includes)+len(imports))
-	seenDirs := make(map[string]bool)
+	expandedDirs := make(map[string]bool)
 
-	var visit func(ref, declDir string)
-	visit = func(ref, declDir string) {
+	var visit func(ref, declDir string, transitive bool)
+	visit = func(ref, declDir string, transitive bool) {
 		dir, err := resolvePackRef(ref, declDir, cityRoot)
 		if err != nil {
 			return
@@ -1567,11 +1570,6 @@ func resolvedPackNames(includes []string, imports map[string]Import, sysFS fsys.
 		if absErr != nil {
 			absDir = dir
 		}
-		if seenDirs[absDir] {
-			return
-		}
-		seenDirs[absDir] = true
-
 		data, err := sysFS.ReadFile(filepath.Join(dir, packFile))
 		if err != nil {
 			return
@@ -1588,20 +1586,47 @@ func resolvedPackNames(includes []string, imports map[string]Import, sysFS fsys.
 		}
 
 		names[pc.Pack.Name] = true
+		if !transitive {
+			return
+		}
+		if expandedDirs[absDir] {
+			return
+		}
+		expandedDirs[absDir] = true
 		for _, sub := range pc.Pack.Includes {
-			visit(sub, dir)
+			visit(sub, dir, true)
 		}
 		for _, imp := range pc.Imports {
-			visit(imp.Source, dir)
+			visit(imp.Source, dir, imp.ImportIsTransitive())
 		}
 	}
 
 	for _, inc := range includes {
-		visit(inc, cityRoot)
+		visit(inc, cityRoot, true)
 	}
 	for _, imp := range imports {
-		visit(imp.Source, cityRoot)
+		visit(imp.Source, cityRoot, imp.ImportIsTransitive())
 	}
+	return names
+}
+
+// resolvedConfigPackNames collects all pack names reachable from the city,
+// rig, and default-rig pack graphs before builtin extra includes are injected.
+func resolvedConfigPackNames(cfg *City, sysFS fsys.FS, cityRoot string) map[string]bool {
+	names := resolvedPackNames(cfg.Workspace.LegacyIncludes(), cfg.Imports, sysFS, cityRoot)
+	add := func(more map[string]bool) {
+		for name := range more {
+			names[name] = true
+		}
+	}
+
+	for _, rig := range cfg.Rigs {
+		add(resolvedPackNames(rig.Includes, rig.Imports, sysFS, cityRoot))
+	}
+
+	add(resolvedPackNames(cfg.Workspace.LegacyDefaultRigIncludes(), nil, sysFS, cityRoot))
+	add(resolvedPackNames(nil, cfg.DefaultRigImports, sysFS, cityRoot))
+
 	return names
 }
 
