@@ -36,6 +36,22 @@ export CGO_LDFLAGS
 endif
 endif
 
+# Linux: some non-system compilers (Nix, Flox, etc.) don't search /usr/include
+# or /usr/lib by default. If system ICU headers exist but the compiler doesn't
+# see them, add the system paths explicitly.
+ifeq ($(shell uname),Linux)
+SYS_USR_INCLUDE := /usr/include
+SYS_USR_LIB := /usr/lib/$(shell dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null || echo "x86_64-linux-gnu")
+ifneq ($(wildcard $(SYS_USR_INCLUDE)/unicode/uregex.h),)
+ifeq ($(shell $(CC) -E -Wp,-v -x c /dev/null 2>&1 | grep -q /usr/include && echo yes),)
+CGO_CPPFLAGS += -I$(SYS_USR_INCLUDE)
+CGO_LDFLAGS += -L$(SYS_USR_LIB)
+export CGO_CPPFLAGS
+export CGO_LDFLAGS
+endif
+endif
+endif
+
 .PHONY: build check check-all check-bd check-docker check-docs check-dolt check-native-dependency-surface check-routed-test-rows check-version-tag lint lint-full lint-new lint-changed fmt-check fmt vet test test-fast-parallel test-fsys-darwin-compile test-pack-registry-live test-native-doltlite-beads test-cmd-gc-process test-cmd-gc-process-shard test-cmd-gc-process-parallel test-worker-core test-worker-core-phase2 test-worker-core-phase2-real-transport setup-worker-inference test-worker-inference test-worker-inference-phase3 test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-parallel test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-local-full-parallel test-mcp-mail test-docker test-k8s test-cover cover install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev diagrams-excalidraw dashboard-smoke
 
 ## build: compile gc binary with version metadata
