@@ -38,14 +38,18 @@ endif
 
 # Linux: some non-system compilers (Nix, Flox, etc.) don't search /usr/include
 # or /usr/lib by default. If system ICU headers exist but the compiler doesn't
-# see them, add the system paths explicitly.
+# see them, intentionally let system paths participate in the whole CGO build.
 ifeq ($(shell uname),Linux)
-SYS_USR_INCLUDE := /usr/include
-SYS_USR_LIB := /usr/lib/$(shell dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null || echo "x86_64-linux-gnu")
+SYS_USR_INCLUDE ?= /usr/include
+SYS_USR_LIB_ROOT ?= /usr/lib
+SYS_USR_LIB64_ROOT ?= /usr/lib64
 ifneq ($(wildcard $(SYS_USR_INCLUDE)/unicode/uregex.h),)
-ifeq ($(shell $(CC) -E -Wp,-v -x c /dev/null 2>&1 | grep -q /usr/include && echo yes),)
+ifeq ($(shell $(CC) -E -Wp,-v -x c /dev/null 2>&1 | sed 's/^[[:space:]]*//' | grep -F -x -q "$(SYS_USR_INCLUDE)" && echo yes),)
+SYS_USR_MULTIARCH_CANDIDATES := $(strip $(shell dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null) $(shell $(CC) -print-multiarch 2>/dev/null))
+SYS_USR_LIB_CANDIDATES := $(foreach arch,$(SYS_USR_MULTIARCH_CANDIDATES),$(SYS_USR_LIB_ROOT)/$(arch)) $(SYS_USR_LIB64_ROOT) $(SYS_USR_LIB_ROOT)
+SYS_USR_LIB_DIRS := $(strip $(foreach dir,$(SYS_USR_LIB_CANDIDATES),$(if $(wildcard $(dir)),$(dir))))
 CGO_CPPFLAGS += -I$(SYS_USR_INCLUDE)
-CGO_LDFLAGS += -L$(SYS_USR_LIB)
+CGO_LDFLAGS += $(addprefix -L,$(SYS_USR_LIB_DIRS))
 export CGO_CPPFLAGS
 export CGO_LDFLAGS
 endif
