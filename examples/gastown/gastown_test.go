@@ -816,7 +816,7 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	assertContainsInOrder(t, fallback,
 		`if [ -n "" ]; then`,
 		`else`,
-		`make test`,
+		`timeout 30m make test`,
 	)
 
 	configured := cookPolecatSelfReviewDescription(t, map[string]string{
@@ -829,9 +829,9 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	}
 	assertContainsInOrder(t, configured,
 		`if [ -n "scripts/affected-tests.sh" ]; then`,
-		`scripts/affected-tests.sh`,
+		`timeout 30m scripts/affected-tests.sh`,
 		`else`,
-		`make test`,
+		`timeout 30m make test`,
 	)
 }
 
