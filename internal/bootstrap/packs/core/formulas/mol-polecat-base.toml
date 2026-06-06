@@ -278,7 +278,7 @@ debug cruft, unintended file changes. Fix anything you find.
 {{typecheck_command}}
 {{lint_command}}
 {{build_command}}
-{{test_command}}
+timeout 30m {{test_command}}
 ```
 
 **ALL CHECKS MUST PASS.** If your change caused the failure, fix it.
