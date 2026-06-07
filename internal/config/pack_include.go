@@ -110,15 +110,19 @@ func resolvePackRef(ref, declDir, cityRoot string) (string, error) {
 	}
 	if isRemoteInclude(ref) {
 		source, subpath, gitRef := parseRemoteInclude(ref)
-		if gitRef == "" {
-			if cacheDir, ok, err := resolveLockedRemoteImport(ref, cityRoot); err != nil {
-				return "", err
-			} else if ok {
-				if subpath != "" {
-					return filepath.Join(cacheDir, subpath), nil
-				}
-				return cacheDir, nil
+		// Check the import lock using the base source URL (without gitRef or
+		// subpath). When "gc import install" has locked this source, serve the
+		// pack from the shared repo cache rather than the city-local includes
+		// cache. This also handles pack.toml includes with explicit branch refs
+		// (e.g., "#main") that would otherwise bypass the lock and require
+		// manual "gc init" to populate .gc/cache/includes/.
+		if cacheDir, ok, err := resolveLockedRemoteImport(source, cityRoot); err != nil {
+			return "", err
+		} else if ok {
+			if subpath != "" {
+				return filepath.Join(cacheDir, subpath), nil
 			}
+			return cacheDir, nil
 		}
 		cacheDir, err := fetchRemoteInclude(source, gitRef, cityRoot)
 		if err != nil {
