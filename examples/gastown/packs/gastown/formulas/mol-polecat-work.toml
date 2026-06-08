@@ -353,10 +353,9 @@ but we never push with untracked work left behind.
 AUTO_PUSH=$(gc bd show "$WORK_BEAD_ID" --json | jq -r '.[0].metadata | if has("auto_push") then (.auto_push | tostring) else "" end')
 if [ "$AUTO_PUSH" = "false" ]; then
   echo "auto_push=false: halting at branch-ready (no push, no refinery handoff)"
-  BRANCH=$(git branch --show-current)
   gc bd update "$WORK_BEAD_ID" \
     --status=open --assignee="" \
-    --set-metadata branch="$BRANCH" \
+    --set-metadata branch="$EXPECTED_BRANCH" \
     --set-metadata target={{base_branch}} \
     --set-metadata branch_ready=true \
     --set-metadata halt_reason=auto_push_false \

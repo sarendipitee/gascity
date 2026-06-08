@@ -251,16 +251,27 @@ Nudges from other agents may arrive via your hook. When working:
 **Before your session ends, you MUST run the done sequence.**
 
 ```bash
+# Branch-shape gate: refuse to push if not on the per-bead branch.
+# Catches directory-discipline violations (e.g. running from rig root while
+# on 'dev') that would stamp the wrong branch ref on multiple unrelated beads.
+BEAD_BRANCH="polecat/<work-bead>"
+CURRENT_BRANCH=$(git branch --show-current)
+if [ "$CURRENT_BRANCH" != "$BEAD_BRANCH" ]; then
+  echo "BRANCH GATE FAILED: must be on $BEAD_BRANCH, not ${CURRENT_BRANCH:-HEAD-detached}"
+  echo "Run workspace-setup first to create the per-bead branch, then resubmit."
+  gc runtime drain-ack
+  exit 1
+fi
+
 # Explicit opt-out gate: respect mol-pr-from-issue auto_push=false (halt-at-branch-ready).
 # mol-pr-from-issue writes metadata.auto_push on the work bead. Other formulas
 # (mol-polecat-work) leave it unset — those flow through unchanged.
 AUTO_PUSH=$(gc bd show <work-bead> --json | jq -r '.[0].metadata | if has("auto_push") then (.auto_push | tostring) else "" end')
 if [ "$AUTO_PUSH" = "false" ]; then
   echo "auto_push=false: halting at branch-ready (no push, no refinery handoff)"
-  BRANCH=$(git branch --show-current)
   gc bd update <work-bead> \
     --status=open --assignee="" \
-    --set-metadata branch="$BRANCH" \
+    --set-metadata branch="$BEAD_BRANCH" \
     --set-metadata target={{ .DefaultBranch }} \
     --set-metadata branch_ready=true \
     --set-metadata halt_reason=auto_push_false \
@@ -271,7 +282,7 @@ if [ "$AUTO_PUSH" = "false" ]; then
 fi
 git push origin HEAD
 gc bd update <work-bead> \
-  --set-metadata branch=$(git branch --show-current) \
+  --set-metadata branch="$BEAD_BRANCH" \
   --set-metadata target={{ .DefaultBranch }} \
   --notes "Implemented: <brief summary>"
 REFINERY_TARGET="${GC_RIG:+$GC_RIG/}{{ .BindingPrefix }}refinery"

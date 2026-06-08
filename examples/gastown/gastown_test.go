@@ -798,6 +798,50 @@ func TestPolecatPromptInlinesBranchConvention(t *testing.T) {
 	)
 }
 
+// TestPolecatDoneSequenceHasBranchShapeGate is the regression test for
+// gcy-cja: the done sequence in the polecat prompt and approval-fallacy
+// template must include a fail-closed branch-shape gate BEFORE push and
+// metadata-write so that a directory-discipline violation (running from
+// a rig root on 'dev' instead of the per-bead worktree) cannot stamp
+// metadata.branch='dev' on multiple unrelated beads.
+func TestPolecatDoneSequenceHasBranchShapeGate(t *testing.T) {
+	dir := exampleDir()
+
+	promptPath := filepath.Join(dir, "packs", "gastown", "agents", "polecat", "prompt.template.md")
+	promptData, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("reading polecat prompt: %v", err)
+	}
+	assertContainsInOrder(t, string(promptData),
+		"## FINAL REMINDER: RUN THE DONE SEQUENCE",
+		`BEAD_BRANCH="polecat/<work-bead>"`,
+		`CURRENT_BRANCH=$(git branch --show-current)`,
+		`if [ "$CURRENT_BRANCH" != "$BEAD_BRANCH" ]; then`,
+		`gc runtime drain-ack`,
+		"exit 1",
+		"fi",
+		"git push origin HEAD",
+		`--set-metadata branch="$BEAD_BRANCH"`,
+	)
+
+	fallacyPath := filepath.Join(dir, "packs", "gastown", "template-fragments", "approval-fallacy.template.md")
+	fallacyData, err := os.ReadFile(fallacyPath)
+	if err != nil {
+		t.Fatalf("reading approval-fallacy template: %v", err)
+	}
+	assertContainsInOrder(t, string(fallacyData),
+		"### The Done Sequence",
+		`BEAD_BRANCH="polecat/<work-bead>"`,
+		`CURRENT_BRANCH=$(git branch --show-current)`,
+		`if [ "$CURRENT_BRANCH" != "$BEAD_BRANCH" ]; then`,
+		`gc runtime drain-ack`,
+		"exit 1",
+		"fi",
+		"git push origin HEAD",
+		`--set-metadata branch="$BEAD_BRANCH"`,
+	)
+}
+
 func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	fallback := cookPolecatSelfReviewDescription(t, map[string]string{
 		"issue":        "HW-42",
@@ -893,12 +937,17 @@ func TestPolecatPromptHaltsOnAutoPushFalse(t *testing.T) {
 
 	assertContainsInOrder(t, body,
 		"## FINAL REMINDER: RUN THE DONE SEQUENCE",
+		`BEAD_BRANCH="polecat/<work-bead>"`,
+		`CURRENT_BRANCH=$(git branch --show-current)`,
+		`if [ "$CURRENT_BRANCH" != "$BEAD_BRANCH" ]; then`,
+		`gc runtime drain-ack`,
+		"exit 1",
+		"fi",
 		`AUTO_PUSH=$(gc bd show <work-bead> --json | jq -r '.[0].metadata | if has("auto_push") then (.auto_push | tostring) else "" end')`,
 		`if [ "$AUTO_PUSH" = "false" ]; then`,
-		`BRANCH=$(git branch --show-current)`,
 		`gc bd update <work-bead> \`,
 		`--status=open --assignee=""`,
-		`--set-metadata branch="$BRANCH"`,
+		`--set-metadata branch="$BEAD_BRANCH"`,
 		`--set-metadata target={{ .DefaultBranch }}`,
 		`--set-metadata branch_ready=true`,
 		`--set-metadata halt_reason=auto_push_false`,
@@ -922,12 +971,17 @@ func TestPolecatRenderedApprovalFallacyHaltsOnAutoPushFalse(t *testing.T) {
 	doneSequence := sectionBetween(t, body, "### The Done Sequence", "This pushes your branch")
 
 	assertContainsInOrder(t, doneSequence,
+		`BEAD_BRANCH="polecat/<work-bead>"`,
+		`CURRENT_BRANCH=$(git branch --show-current)`,
+		`if [ "$CURRENT_BRANCH" != "$BEAD_BRANCH" ]; then`,
+		`gc runtime drain-ack`,
+		"exit 1",
+		"fi",
 		`AUTO_PUSH=$(gc bd show <work-bead> --json | jq -r '.[0].metadata | if has("auto_push") then (.auto_push | tostring) else "" end')`,
 		`if [ "$AUTO_PUSH" = "false" ]; then`,
-		`BRANCH=$(git branch --show-current)`,
 		`gc bd update <work-bead> \`,
 		`--status=open --assignee=""`,
-		`--set-metadata branch="$BRANCH"`,
+		`--set-metadata branch="$BEAD_BRANCH"`,
 		`--set-metadata target=main`,
 		`--set-metadata branch_ready=true`,
 		`--set-metadata halt_reason=auto_push_false`,
@@ -953,10 +1007,9 @@ func TestPolecatFormulaHaltsOnAutoPushFalse(t *testing.T) {
 		"Push your branch:",
 		`AUTO_PUSH=$(gc bd show "$WORK_BEAD_ID" --json | jq -r '.[0].metadata | if has("auto_push") then (.auto_push | tostring) else "" end')`,
 		`if [ "$AUTO_PUSH" = "false" ]; then`,
-		`BRANCH=$(git branch --show-current)`,
 		`gc bd update "$WORK_BEAD_ID" \`,
 		`--status=open --assignee=""`,
-		`--set-metadata branch="$BRANCH"`,
+		`--set-metadata branch="$EXPECTED_BRANCH"`,
 		`--set-metadata target={{base_branch}}`,
 		`--set-metadata branch_ready=true`,
 		`--set-metadata halt_reason=auto_push_false`,
