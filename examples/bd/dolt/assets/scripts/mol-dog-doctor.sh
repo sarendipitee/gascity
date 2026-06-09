@@ -43,7 +43,9 @@ dolt_sql() {
         dolt --host "$HOST" --port "$PORT" --user "$USER" --no-tls sql "$@"
 }
 
-# CONN_MAX: explicit override > server @@GLOBAL.max_connections > fallback.
+# CONN_MAX: explicit override > server @@GLOBAL.max_connections > 256 fallback.
+# The legacy default (50) was far below the server's actual cap (256), causing
+# false "near capacity" advisories at normal idle-connection counts.
 if [ -n "${GC_DOCTOR_CONN_MAX:-}" ]; then
     CONN_MAX="$GC_DOCTOR_CONN_MAX"
 else
