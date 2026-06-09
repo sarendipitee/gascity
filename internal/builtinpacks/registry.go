@@ -15,7 +15,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/examples/bd"
 	"github.com/gastownhall/gascity/examples/dolt"
-	"github.com/gastownhall/gascity/examples/gastown/packs/gastown"
 	"github.com/gastownhall/gascity/examples/gastown/packs/maintenance"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -48,13 +47,18 @@ type Pack struct {
 }
 
 // All returns every pack bundled with gc in deterministic order.
+//
+// Gastown is intentionally NOT bundled: it is maintained in the external
+// gascity-packs repository as the single source of truth and is loaded only
+// through an explicit remote import (see config.PublicGastownPackSource). It
+// has no embedded mirror here, so importing it requires network access to
+// gascity-packs at the pinned commit.
 func All() []Pack {
 	return []Pack{
 		{Name: "core", Subpath: "internal/bootstrap/packs/core", FS: core.PackFS},
 		{Name: "bd", Subpath: "examples/bd", FS: bd.PackFS},
 		{Name: "dolt", Subpath: "examples/dolt", FS: dolt.PackFS},
 		{Name: "maintenance", Subpath: "examples/gastown/packs/maintenance", FS: maintenance.PackFS},
-		{Name: "gastown", Subpath: "examples/gastown/packs/gastown", FS: gastown.PackFS},
 	}
 }
 
@@ -125,7 +129,7 @@ func syntheticPackLayouts() []syntheticPackLayout {
 
 func publicSubpathForPack(name string) (string, bool) {
 	switch name {
-	case "gastown", "maintenance":
+	case "maintenance":
 		return name, true
 	default:
 		return "", false

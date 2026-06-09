@@ -24,7 +24,6 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 		"bd=examples/bd",
 		"dolt=examples/dolt",
 		"maintenance=examples/gastown/packs/maintenance",
-		"gastown=examples/gastown/packs/gastown",
 	}
 	if strings.Join(first, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("All = %v, want %v", first, want)
@@ -37,6 +36,28 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 		}
 		if source != Repository+"//"+pack.Subpath {
 			t.Fatalf("Source(%q) = %q, want canonical source", pack.Name, source)
+		}
+	}
+}
+
+func TestGastownIsNotBundled(t *testing.T) {
+	if _, ok := ByName("gastown"); ok {
+		t.Error("ByName(\"gastown\") ok = true, want false: gastown must not be bundled")
+	}
+	for _, pack := range All() {
+		if pack.Name == "gastown" {
+			t.Errorf("All() contains gastown, want it excluded from the bundled set")
+		}
+	}
+	// The public gascity-packs gastown source must resolve as an ordinary
+	// remote (not a bundled synthetic source), so imports clone gascity-packs.
+	for _, src := range []string{
+		"https://github.com/gastownhall/gascity-packs.git//gastown",
+		"https://github.com/gastownhall/gascity-packs/tree/main/gastown",
+		Repository + "//examples/gastown/packs/gastown",
+	} {
+		if IsSource(src) {
+			t.Errorf("IsSource(%q) = true, want false: gastown is no longer bundled", src)
 		}
 	}
 }

@@ -95,10 +95,14 @@ func TestResolveInstalledRemoteImportAcceptsBundledSyntheticCache(t *testing.T) 
 	}
 }
 
-func TestResolveImportPackRefAcceptsPublicGastownSyntheticCache(t *testing.T) {
+func TestResolveImportPackRefAcceptsPublicMaintenanceSyntheticCache(t *testing.T) {
 	home, cityDir := setupBundledImportTest(t)
-	source := PublicGastownPackSource
-	commit := strings.TrimPrefix(PublicGastownPackVersion, "sha:")
+	// Maintenance is the bundled pack that carries a public gascity-packs
+	// alias, so it exercises the public-repo synthetic-cache resolution path.
+	// (Gastown is intentionally no longer bundled; it resolves over the
+	// network from gascity-packs instead.)
+	source := builtinpacks.PublicRepository + "//maintenance"
+	commit := "abc123def456abc123def456abc123def456abc123de"
 	writeBundledImportLock(t, cityDir, source, commit)
 	cacheDir := bundledRepoCacheDir(home, source, commit)
 	if err := builtinpacks.MaterializeSyntheticRepo(cacheDir, commit); err != nil {
@@ -109,7 +113,7 @@ func TestResolveImportPackRefAcceptsPublicGastownSyntheticCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImportPackRef: %v", err)
 	}
-	want := filepath.Join(cacheDir, "gastown")
+	want := filepath.Join(cacheDir, "maintenance")
 	if got != want {
 		t.Fatalf("import path = %q, want %q", got, want)
 	}
