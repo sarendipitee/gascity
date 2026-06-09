@@ -509,6 +509,9 @@ func (s *Server) humaHandleBeadClose(_ context.Context, input *BeadCloseInput) (
 			if errors.Is(err, beads.ErrNotFound) {
 				return nil, huma.Error409Conflict("conflict: bead " + id + " was deleted concurrently")
 			}
+			if errors.Is(err, beads.ErrStatusConflict) {
+				return nil, huma.Error409Conflict("conflict: bead " + id + " status changed concurrently")
+			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		resp := &OKResponse{}
@@ -534,6 +537,9 @@ func (s *Server) humaHandleBeadReopen(_ context.Context, input *BeadReopenInput)
 			return nil, huma.Error409Conflict("conflict: bead " + id + " is not closed (status: " + b.Status + ")")
 		}
 		if err := store.Reopen(id); err != nil {
+			if errors.Is(err, beads.ErrStatusConflict) {
+				return nil, huma.Error409Conflict("conflict: bead " + id + " status changed concurrently")
+			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		resp := &OKResponse{}
@@ -623,6 +629,10 @@ func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInpu
 			}
 			opts.Assignee = &assignee
 		}
+		if opts.Status != nil {
+			expectedStatus := current.Status
+			opts.ExpectedStatus = &expectedStatus
+		}
 		waitStatus := current.Status
 		if opts.Status != nil {
 			waitStatus = *opts.Status
@@ -634,6 +644,9 @@ func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInpu
 		if err := store.Update(id, opts); err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
 				return nil, huma.Error409Conflict("conflict: bead " + id + " was deleted concurrently")
+			}
+			if errors.Is(err, beads.ErrStatusConflict) {
+				return nil, huma.Error409Conflict("conflict: bead " + id + " status changed concurrently")
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

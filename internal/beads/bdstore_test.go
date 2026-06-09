@@ -1002,6 +1002,38 @@ func TestBdStoreUpdatePassesPriority(t *testing.T) {
 	}
 }
 
+func TestBdStoreUpdateWithExpectedStatusSplitsConditionalStatusAndRemainingFields(t *testing.T) {
+	var calls []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "bd" && len(args) == 3 && args[0] == "show" && args[1] == "--json" && args[2] == "bd-42":
+			return []byte(`[{"id":"bd-42","title":"before","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}]`), nil
+		case name == "bd" && len(args) >= 2 && args[0] == "sql":
+			return []byte(`{"rows_affected":1,"schema_version":1}`), nil
+		case name == "bd" && len(args) == 5 && args[0] == "update" && args[1] == "--json" && args[2] == "bd-42" && args[3] == "--set-metadata" && args[4] == "gc.outcome=pass":
+			return []byte(`[{"id":"bd-42","title":"before","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","metadata":{"gc.outcome":"pass"}}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: bd %s", strings.Join(args, " "))
+		}
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	expected := "open"
+	next := "closed"
+	if err := s.Update("bd-42", beads.UpdateOpts{Status: &next, ExpectedStatus: &expected, Metadata: map[string]string{"gc.outcome": "pass"}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	wantCalls := []string{
+		"bd show --json bd-42",
+		"bd sql --json UPDATE issues SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = 'bd-42' AND status = 'open'",
+		"bd update --json bd-42 --set-metadata gc.outcome=pass",
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", calls, wantCalls)
+	}
+}
+
 func TestBdStoreTxCombinesWritesForSameBead(t *testing.T) {
 	var commands []string
 	closed := false

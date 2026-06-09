@@ -114,6 +114,9 @@ func (m *MemStore) Update(id string, opts UpdateOpts) error {
 	defer m.mu.Unlock()
 	for i := range m.beads {
 		if m.beads[i].ID == id {
+			if opts.ExpectedStatus != nil && m.beads[i].Status != *opts.ExpectedStatus {
+				return statusConflictError(id, *opts.ExpectedStatus, m.beads[i].Status)
+			}
 			if opts.Title != nil {
 				m.beads[i].Title = *opts.Title
 			}
@@ -202,9 +205,7 @@ func (m *MemStore) Close(id string) error {
 			if m.beads[i].Status == "closed" {
 				return nil
 			}
-			m.beads[i].Status = "closed"
-			m.beads[i].UpdatedAt = time.Now()
-			return nil
+			return m.updateStatusLocked(i, "closed", m.beads[i].Status)
 		}
 	}
 	return fmt.Errorf("closing bead %q: %w", id, ErrNotFound)
@@ -220,12 +221,19 @@ func (m *MemStore) Reopen(id string) error {
 			if m.beads[i].Status == "open" {
 				return nil
 			}
-			m.beads[i].Status = "open"
-			m.beads[i].UpdatedAt = time.Now()
-			return nil
+			return m.updateStatusLocked(i, "open", m.beads[i].Status)
 		}
 	}
 	return fmt.Errorf("reopening bead %q: %w", id, ErrNotFound)
+}
+
+func (m *MemStore) updateStatusLocked(i int, nextStatus, expectedStatus string) error {
+	if m.beads[i].Status != expectedStatus {
+		return statusConflictError(m.beads[i].ID, expectedStatus, m.beads[i].Status)
+	}
+	m.beads[i].Status = nextStatus
+	m.beads[i].UpdatedAt = time.Now()
+	return nil
 }
 
 // CloseAll closes multiple beads in a single batch and sets metadata on each.

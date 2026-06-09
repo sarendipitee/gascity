@@ -112,6 +112,38 @@ func TestDoltliteReadStoreReadyUsesDoltlite(t *testing.T) {
 	}
 }
 
+func TestDoltliteReadStoreReadyCacheInvalidatesOnExternalWrite(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+
+	initial, err := store.Ready()
+	if err != nil {
+		t.Fatalf("initial Ready: %v", err)
+	}
+	initialCount := len(initial)
+
+	writer := openTestDoltliteWriter(t, store.db)
+	defer writer.Close() //nolint:errcheck // test cleanup
+	insertTestDoltliteIssue(t, writer, "issues", "labels", "dependencies", testDoltliteIssue{
+		ID:        "gc-ready-external",
+		Title:     "external ready",
+		Status:    "open",
+		IssueType: "task",
+		CreatedAt: time.Now().UTC().Add(5 * time.Second),
+	})
+
+	after, err := store.Ready()
+	if err != nil {
+		t.Fatalf("Ready after external write: %v", err)
+	}
+	if len(after) != initialCount+1 {
+		t.Fatalf("Ready() len = %d, want %d after external write", len(after), initialCount+1)
+	}
+	if !hasTestBead(after, "gc-ready-external") {
+		t.Fatalf("Ready() missing external write bead: %#v", after)
+	}
+}
+
 func TestDoltliteReadStoreReadyBlocksWorkflowDependencyTypes(t *testing.T) {
 	store, closeStore := newTestDoltliteReadStore(t)
 	defer closeStore()
@@ -529,6 +561,115 @@ func TestDoltliteReadStoreCachesInvalidateOnWorkingSetWrites(t *testing.T) {
 	}
 	if !hasTestBead(ready, "gc-ready-2") {
 		t.Fatalf("Ready after task write missing gc-ready-2: %#v", ready)
+	}
+}
+
+func TestDoltliteReadStoreCreatesNoHistoryWispsInProcess(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+	store.BdStore = NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
+		t.Fatal("DoltliteReadStore.Create(NoHistory) shelled out to bd")
+		return nil, nil
+	})
+
+	created, err := store.Create(Bead{
+		Title:     "order:rig/direct",
+		Labels:    []string{"order-run:rig/direct", "gc:order-tracking"},
+		NoHistory: true,
+		Metadata:  map[string]string{"gc.order": "rig/direct"},
+	})
+	if err != nil {
+		t.Fatalf("Create(NoHistory): %v", err)
+	}
+	if created.ID == "" || !created.NoHistory || created.Ephemeral {
+		t.Fatalf("created bead = %#v, want no-history wisp with generated id", created)
+	}
+
+	rows, err := store.List(ListQuery{Label: "order-run:rig/direct", TierMode: TierWisps})
+	if err != nil {
+		t.Fatalf("List created wisp: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("created wisp rows = %d, want 1: %#v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.ID != created.ID || got.Metadata["gc.order"] != "rig/direct" || !got.NoHistory || got.Ephemeral {
+		t.Fatalf("created wisp = %#v, want %#v metadata and no-history flag", got, created.ID)
+	}
+	if !slices.Contains(got.Labels, "gc:order-tracking") {
+		t.Fatalf("created labels = %v, missing gc:order-tracking", got.Labels)
+	}
+}
+
+func TestDoltliteReadStoreWispDependenciesStayInProcess(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+	store.BdStore = NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
+		t.Fatal("DoltliteReadStore wisp dependency mutation shelled out to bd")
+		return nil, nil
+	})
+
+	if err := store.DepAdd("gc-tier-wisp", "gc-tier-issue", "relates-to"); err != nil {
+		t.Fatalf("DepAdd wisp -> issue: %v", err)
+	}
+	deps, err := store.DepList("gc-tier-wisp", "down")
+	if err != nil {
+		t.Fatalf("DepList after DepAdd: %v", err)
+	}
+	if !hasTestDep(deps, "gc-tier-wisp", "gc-tier-issue", "relates-to") {
+		t.Fatalf("deps after DepAdd = %#v, missing wisp -> issue relates-to", deps)
+	}
+
+	if err := store.DepAdd("gc-tier-wisp", "gc-tier-nohistory", "blocks"); err != nil {
+		t.Fatalf("DepAdd wisp -> wisp: %v", err)
+	}
+	deps, err = store.DepList("gc-tier-wisp", "down")
+	if err != nil {
+		t.Fatalf("DepList after wisp target DepAdd: %v", err)
+	}
+	if !hasTestDep(deps, "gc-tier-wisp", "gc-tier-nohistory", "blocks") {
+		t.Fatalf("deps after wisp target DepAdd = %#v, missing wisp -> wisp blocks", deps)
+	}
+
+	if err := store.DepRemove("gc-tier-wisp", "gc-tier-issue"); err != nil {
+		t.Fatalf("DepRemove: %v", err)
+	}
+	deps, err = store.DepList("gc-tier-wisp", "down")
+	if err != nil {
+		t.Fatalf("DepList after DepRemove: %v", err)
+	}
+	if hasTestDep(deps, "gc-tier-wisp", "gc-tier-issue", "relates-to") {
+		t.Fatalf("deps after DepRemove = %#v, still has removed dependency", deps)
+	}
+}
+
+func TestDoltliteReadStoreDeletesWispsInProcess(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+	store.BdStore = NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
+		t.Fatal("DoltliteReadStore.Delete(wisp) shelled out to bd")
+		return nil, nil
+	})
+
+	if err := store.DepAdd("gc-tier-nohistory", "gc-tier-wisp", "blocks"); err != nil {
+		t.Fatalf("seed wisp dependency: %v", err)
+	}
+	if err := store.Delete("gc-tier-wisp"); err != nil {
+		t.Fatalf("Delete wisp: %v", err)
+	}
+	rows, err := store.List(ListQuery{Label: "tier-test", TierMode: TierWisps, IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("List after Delete: %v", err)
+	}
+	if hasTestBead(rows, "gc-tier-wisp") {
+		t.Fatalf("wisp rows after Delete = %#v, still contains deleted wisp", rows)
+	}
+	deps, err := store.DepList("gc-tier-nohistory", "down")
+	if err != nil {
+		t.Fatalf("DepList after Delete: %v", err)
+	}
+	if hasTestDep(deps, "gc-tier-nohistory", "gc-tier-wisp", "blocks") {
+		t.Fatalf("deps after Delete = %#v, still references deleted wisp", deps)
 	}
 }
 
@@ -1228,6 +1369,15 @@ func findTestBead(t *testing.T, rows []Bead, id string) Bead {
 func hasTestBead(rows []Bead, id string) bool {
 	for _, row := range rows {
 		if row.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTestDep(rows []Dep, issueID, dependsOnID, depType string) bool {
+	for _, row := range rows {
+		if row.IssueID == issueID && row.DependsOnID == dependsOnID && row.Type == depType {
 			return true
 		}
 	}

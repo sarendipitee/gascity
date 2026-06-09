@@ -358,8 +358,9 @@ func reopenClosedConfiguredNamedSessionBead(
 			fmt.Fprintf(stderr, "session beads: session_name %q for %s unavailable during reopen: %v\n", sessionName, identity, err) //nolint:errcheck
 			return nil
 		}
+		expectedStatus := bead.Status
 		open := "open"
-		if err := store.Update(bead.ID, beads.UpdateOpts{Status: &open}); err != nil {
+		if err := store.Update(bead.ID, beads.UpdateOpts{Status: &open, ExpectedStatus: &expectedStatus}); err != nil {
 			fmt.Fprintf(stderr, "session beads: reopening configured named session %q: %v\n", identity, err) //nolint:errcheck
 			return nil
 		}
@@ -466,12 +467,13 @@ func retireDuplicateConfiguredNamedSessionBeads(
 				!stopRuntimeBeforeSessionBeadMutation(store, sp, cfg, b, "duplicate named session", stderr) {
 				continue
 			}
+			expectedStatus := b.Status
 			batch := session.RetireNamedSessionPatch(now, "duplicate-repair", identity)
 			if setMetaBatch(store, b.ID, batch, stderr) != nil {
 				continue
 			}
 			status := "open"
-			if err := store.Update(b.ID, beads.UpdateOpts{Status: &status}); err != nil {
+			if err := store.Update(b.ID, beads.UpdateOpts{Status: &status, ExpectedStatus: &expectedStatus}); err != nil {
 				fmt.Fprintf(stderr, "session beads: archiving duplicate named session %s: %v\n", b.ID, err) //nolint:errcheck
 				continue
 			}
@@ -536,12 +538,13 @@ func retireRemovedConfiguredNamedSessionBead(
 	if !stopRuntimeBeforeSessionBeadMutation(store, sp, nil, b, "removed named session", stderr) {
 		return false
 	}
+	expectedStatus := b.Status
 	batch := session.RetireNamedSessionPatch(now, "removed-configured-named-session", namedSessionIdentity(b))
 	if setMetaBatch(store, b.ID, batch, stderr) != nil {
 		return false
 	}
 	status := "open"
-	if err := store.Update(b.ID, beads.UpdateOpts{Status: &status}); err != nil {
+	if err := store.Update(b.ID, beads.UpdateOpts{Status: &status, ExpectedStatus: &expectedStatus}); err != nil {
 		fmt.Fprintf(stderr, "session beads: archiving removed named session %s: %v\n", b.ID, err) //nolint:errcheck
 		return false
 	}

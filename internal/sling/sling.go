@@ -1533,7 +1533,8 @@ func PromoteWorkflowLaunchBead(store beads.Store, beadID string) error {
 		return nil
 	}
 	status := "in_progress"
-	return store.Update(beadID, beads.UpdateOpts{Status: &status})
+	expectedStatus := bead.Status
+	return store.Update(beadID, beads.UpdateOpts{Status: &status, ExpectedStatus: &expectedStatus})
 }
 
 // BeadCheckResult holds the result of pre-flight bead state checks.

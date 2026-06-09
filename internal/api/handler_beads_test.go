@@ -28,6 +28,10 @@ type prefixedAliasStore struct {
 	childrenCalls int
 }
 
+type statusConflictStore struct {
+	beads.Store
+}
+
 func newPrefixedAliasStore(prefix string) *prefixedAliasStore {
 	return &prefixedAliasStore{
 		prefix: prefix,
@@ -136,6 +140,10 @@ func (s *prefixedAliasStore) Update(id string, opts beads.UpdateOpts) error {
 		opts.ParentID = &parentID
 	}
 	return s.base.Update(s.aliasToBase(id), opts)
+}
+
+func (s *statusConflictStore) Update(string, beads.UpdateOpts) error {
+	return beads.ErrStatusConflict
 }
 
 func (s *prefixedAliasStore) Close(id string) error {
@@ -1585,6 +1593,26 @@ func TestBeadUpdateNullPriorityRejected(t *testing.T) {
 	got, _ := store.Get(b.ID)
 	if got.Priority == nil || *got.Priority != 1 {
 		t.Fatalf("Priority = %v, want unchanged 1 (existing value preserved after 4xx)", got.Priority)
+	}
+}
+
+func TestBeadUpdateStatusConflictReturns409(t *testing.T) {
+	state := newFakeState(t)
+	base := beads.NewMemStore()
+	state.stores["myrig"] = &statusConflictStore{Store: base}
+	b, err := base.Create(beads.Bead{Title: "Test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newTestCityHandler(t, state)
+
+	body := `{"status":"closed"}`
+	req := newPostRequest(cityURL(state, "/bead/")+b.ID+"/update", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("update status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }
 
