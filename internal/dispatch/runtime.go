@@ -1029,7 +1029,8 @@ func sourceChainRootIDs(roots []beads.Bead) string {
 
 func closeSourceBeadPreservingOutcome(store beads.Store, bead beads.Bead) error {
 	status := "closed"
-	opts := beads.UpdateOpts{Status: &status}
+	expectedStatus := bead.Status
+	opts := beads.UpdateOpts{Status: &status, ExpectedStatus: &expectedStatus}
 	if strings.TrimSpace(bead.Metadata[beadmeta.OutcomeMetadataKey]) == "" {
 		opts.Metadata = map[string]string{beadmeta.OutcomeMetadataKey: "pass"}
 	}

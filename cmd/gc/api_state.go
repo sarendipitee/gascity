@@ -338,6 +338,10 @@ func (cs *controllerState) openRigStore(provider, rigName, rigPath, prefix strin
 		},
 		OpenExecStore: openExecStore,
 		OpenNativeStore: func() (beads.Store, error) {
+			bdStore := bdStoreForRig(scopeRoot, cs.cityPath, cfg, prefix)
+			if optimized, ok := openOptimizedDoltliteStore(scopeRoot, cs.cityPath, bdStore); ok {
+				return optimized, nil
+			}
 			env, err := nativeDoltOpenEnvForScope(cs.cityPath, cfg, scopeRoot)
 			if err != nil {
 				return nil, fmt.Errorf("project native rig store env %s: %w", scopeRoot, err)

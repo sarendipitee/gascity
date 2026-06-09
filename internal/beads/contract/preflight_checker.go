@@ -191,6 +191,9 @@ func (c PreflightChecker) checkDoltModeSafe(metadata preflightMetadata, ctx Pref
 
 func (c PreflightChecker) checkIdentityMatch(scope string, metadata preflightMetadata) PreflightCheckResult {
 	details := PreflightDetails{MetadataProjectID: metadata.ProjectID}
+	if metadata.Backend == "doltlite" {
+		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckPass, "identity match not required for doltlite backend", details)
+	}
 	if metadata.ProjectID == "" {
 		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckFail, "metadata project_id is missing", details)
 	}

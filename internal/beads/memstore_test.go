@@ -160,6 +160,35 @@ func TestMemStoreReleaseIfCurrentDoesNotClobberConcurrentClaim(t *testing.T) {
 	}
 }
 
+func TestMemStoreUpdateRejectsStaleExpectedStatus(t *testing.T) {
+	s := beads.NewMemStore()
+	b, err := s.Create(beads.Bead{Title: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "open"
+	closed := "closed"
+	if err := s.Update(b.ID, beads.UpdateOpts{Status: &closed, ExpectedStatus: &expected}); err != nil {
+		t.Fatalf("initial status transition: %v", err)
+	}
+
+	staleExpected := "open"
+	reopen := "open"
+	err = s.Update(b.ID, beads.UpdateOpts{Status: &reopen, ExpectedStatus: &staleExpected})
+	if !errors.Is(err, beads.ErrStatusConflict) {
+		t.Fatalf("stale transition error = %v, want ErrStatusConflict", err)
+	}
+
+	got, err := s.Get(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("status = %q, want closed after stale conflict", got.Status)
+	}
+}
+
 func TestMemStoreListByLabel(t *testing.T) {
 	s := beads.NewMemStore()
 

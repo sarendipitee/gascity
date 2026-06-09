@@ -491,6 +491,16 @@ func (s *NativeDoltStore) Update(id string, opts UpdateOpts) error {
 	ctx, cancel := nativeDoltOperationContext(context.TODO())
 	defer cancel()
 	err = storage.RunInTransaction(ctx, fmt.Sprintf("gc: update bead %s", id), func(tx beadslib.Transaction) error {
+		issue, err := tx.GetIssue(ctx, id)
+		if err != nil {
+			return nativeStoreError(id, err)
+		}
+		if issue == nil {
+			return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+		}
+		if opts.ExpectedStatus != nil && string(issue.Status) != *opts.ExpectedStatus {
+			return statusConflictError(id, *opts.ExpectedStatus, string(issue.Status))
+		}
 		if opts.ParentID != nil {
 			if err := s.validateUpdateParent(ctx, tx, *opts.ParentID); err != nil {
 				return err

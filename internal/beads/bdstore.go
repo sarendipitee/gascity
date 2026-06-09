@@ -988,6 +988,20 @@ func (s *BdStore) Get(id string) (Bead, error) {
 
 // Update modifies fields of an existing bead via bd update.
 func (s *BdStore) Update(id string, opts UpdateOpts) error {
+	if opts.ExpectedStatus != nil && opts.Status != nil {
+		if err := s.updateStatusIfCurrent(id, *opts.ExpectedStatus, *opts.Status); err != nil {
+			return err
+		}
+		opts.Status = nil
+		opts.ExpectedStatus = nil
+		if !hasUpdateOpts(opts) {
+			return nil
+		}
+	}
+	return s.updateWithoutExpectedStatus(id, opts)
+}
+
+func (s *BdStore) updateWithoutExpectedStatus(id string, opts UpdateOpts) error {
 	args := []string{"update", "--json", id}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
@@ -1045,6 +1059,87 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 		return fmt.Errorf("updating bead %q: %w", id, err)
 	}
 	return nil
+}
+
+func (s *BdStore) updateStatusIfCurrent(id, expectedStatus, nextStatus string) error {
+	current, err := s.Get(id)
+	if err != nil {
+		if isBdNotFound(err) {
+			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("updating bead %q: %w", id, err)
+	}
+	if current.Status == nextStatus {
+		if current.Status == expectedStatus {
+			return nil
+		}
+		return statusConflictError(id, expectedStatus, current.Status)
+	}
+	if current.Status != expectedStatus {
+		return statusConflictError(id, expectedStatus, current.Status)
+	}
+
+	table := "issues"
+	if current.Ephemeral {
+		table = "wisps"
+	}
+	query := "UPDATE " + table + " SET status = " + bdSQLStringLiteral(nextStatus) +
+		", updated_at = CURRENT_TIMESTAMP WHERE id = " + bdSQLStringLiteral(id) +
+		" AND status = " + bdSQLStringLiteral(expectedStatus)
+	out, err := s.runBDTransientWriteOutput("sql", "--json", query)
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if isBdSQLUnsupportedInEmbeddedMode(err) {
+			return s.updateStatusIfCurrentViaEmbeddedDoltSQL(id, table, expectedStatus, nextStatus)
+		}
+		if msg != "" {
+			return fmt.Errorf("bd status update: %w: %s", err, msg)
+		}
+		return fmt.Errorf("bd status update: %w", err)
+	}
+	var result struct {
+		RowsAffected int `json:"rows_affected"`
+	}
+	if err := json.Unmarshal(extractJSON(out), &result); err != nil {
+		return fmt.Errorf("bd status update: parsing JSON: %w", err)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	return statusConflictError(id, expectedStatus, current.Status)
+}
+
+func (s *BdStore) updateStatusIfCurrentViaEmbeddedDoltSQL(id, table, expectedStatus, nextStatus string) error {
+	doltDir, ok, err := s.embeddedDoltDir()
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("bd status update embedded fallback: %w", ErrConditionalReleaseUnsupported)
+	}
+	query := "UPDATE " + table + " SET status = " + bdSQLStringLiteral(nextStatus) +
+		", updated_at = CURRENT_TIMESTAMP WHERE id = " + bdSQLStringLiteral(id) +
+		" AND status = " + bdSQLStringLiteral(expectedStatus) +
+		"; SELECT ROW_COUNT() AS rows_affected"
+	out, err := s.runner(doltDir, "dolt", "sql", "-r", "json", "-q", query)
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: dolt sql: %w", err)
+	}
+	rowsAffected, err := parseDoltRowsAffected(out)
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: parsing SQL result: %w", err)
+	}
+	if rowsAffected > 0 {
+		return nil
+	}
+	current, getErr := s.Get(id)
+	if getErr != nil {
+		if isBdNotFound(getErr) {
+			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("updating bead %q: %w", id, getErr)
+	}
+	return statusConflictError(id, expectedStatus, current.Status)
 }
 
 // ReleaseIfCurrent clears an in-progress assignment only when the bead still
