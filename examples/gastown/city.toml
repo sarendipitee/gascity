@@ -31,7 +31,8 @@ global_fragments = ["command-glossary", "operational-awareness"]
 base = "builtin:claude"
 
 [defaults.rig.imports.gastown]
-source = "packs/gastown"
+source = "https://github.com/gastownhall/gascity-packs/tree/main/gastown"
+version = "sha:d3617d1319a1206ac85f69ba024ec395c49c6f4b"
 
 [daemon]
 patrol_interval = "30s"

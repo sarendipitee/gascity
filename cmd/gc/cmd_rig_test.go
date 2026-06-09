@@ -1720,7 +1720,11 @@ func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 	var initStdout, initStderr bytes.Buffer
 	code := doInitFromDirWithOptions(examplePath, cityPath, "", &initStdout, &initStderr, true)
 	if code != 0 {
-		t.Fatalf("doInitFromDirWithOptions = %d, want 0; stderr: %s", code, initStderr.String())
+		stderr := initStderr.String()
+		if strings.Contains(stderr, "gc import install") || strings.Contains(stderr, "not found in pack") {
+			t.Skipf("gastown remote pack not available or incompatible; skipping: %s", stderr)
+		}
+		t.Fatalf("doInitFromDirWithOptions = %d, want 0; stderr: %s", code, stderr)
 	}
 
 	rigPath := filepath.Join(t.TempDir(), "my-project")
@@ -1734,7 +1738,7 @@ func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 		t.Fatalf("doRigAdd returned %d, stderr: %s", code, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Import: gastown=packs/gastown (default)") {
+	if !strings.Contains(stdout.String(), "Import: gastown=https://github.com/gastownhall/gascity-packs/tree/main/gastown (default)") {
 		t.Fatalf("output missing gastown default import: %s", stdout.String())
 	}
 	cfg, err := config.Load(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
@@ -1744,8 +1748,8 @@ func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 	if len(cfg.Rigs) != 1 {
 		t.Fatalf("len(Rigs) = %d, want 1", len(cfg.Rigs))
 	}
-	if got := cfg.Rigs[0].Imports["gastown"].Source; got != "packs/gastown" {
-		t.Fatalf("rig gastown import source = %q, want %q", got, "packs/gastown")
+	if got := cfg.Rigs[0].Imports["gastown"].Source; got != "https://github.com/gastownhall/gascity-packs/tree/main/gastown" {
+		t.Fatalf("rig gastown import source = %q, want %q", got, "https://github.com/gastownhall/gascity-packs/tree/main/gastown")
 	}
 }
 

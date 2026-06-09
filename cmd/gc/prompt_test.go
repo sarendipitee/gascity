@@ -812,7 +812,6 @@ func TestFormulaFilesystemSearchGuidanceCoversPromptSources(t *testing.T) {
 	}
 
 	paths := []string{
-		"examples/gastown/packs/gastown/template-fragments/following-mol.template.md",
 		"examples/gastown/packs/maintenance/template-fragments/following-mol.template.md",
 		"internal/bootstrap/packs/core/assets/prompts/pool-worker.md",
 		"internal/bootstrap/packs/core/assets/prompts/graph-worker.md",
@@ -878,7 +877,6 @@ func TestCoreWorkerPromptsUseHookClaimProtocol(t *testing.T) {
 	for _, rel := range []string{
 		"internal/bootstrap/packs/core/overlay/per-provider/kiro/AGENTS.md",
 		"internal/bootstrap/packs/core/skills/gc-work/SKILL.md",
-		"examples/gastown/packs/gastown/agents/mayor/prompt.template.md",
 		"examples/hyperscale/packs/hyperscale/agents/worker/prompt.template.md",
 		"examples/swarm/packs/swarm/agents/coder/prompt.template.md",
 	} {
