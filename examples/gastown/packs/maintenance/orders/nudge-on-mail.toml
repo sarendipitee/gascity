@@ -1,0 +1,12 @@
+# nudge-on-mail wakes a session the moment a mail bead is delivered to it.
+# Mail beads (issue_type=message) don't set gc.routed_to, so nudge-on-route
+# never fires for them. Without this order, semi-autonomous agents like the
+# mayor only see new mail when a human types or a turn cycle fires.
+#
+# Event-driven and idempotent; a given bead_id is nudged at most once.
+# See assets/scripts/nudge-on-mail.sh.
+[order]
+description = "Nudge the recipient session when a mail bead is delivered"
+trigger = "event"
+on = "bead.created"
+exec = "$PACK_DIR/assets/scripts/nudge-on-mail.sh"
