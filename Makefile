@@ -38,11 +38,41 @@ export CGO_LDFLAGS
 endif
 endif
 
+# Nix/Flox: when the C compiler resolves (via readlink -f) to a path under
+# /nix/store, the build is Nix-hosted. System ICU headers in /usr/include may
+# exist but link to the wrong libicuuc version, causing a __vdso_gettimeofday
+# dlopen error at test/run time. Detect the ICU version the installed gc binary
+# actually links, find the matching Nix-store dev package, and disable the
+# /usr/include fallback below to prevent version mixing.
+#
+# The CC-realpath gate keeps this block inert in hermetic test environments
+# (where CC is a temp-dir fake binary, not a Nix-store path).
+ifeq ($(shell uname),Linux)
+_NIX_CC_REAL := $(shell command -v $(CC) 2>/dev/null | xargs readlink -f 2>/dev/null)
+ifneq ($(filter /nix/store/%,$(_NIX_CC_REAL)),)
+_GC_BIN         := $(shell command -v gc 2>/dev/null)
+_NIX_ICU_RT     := $(shell ldd $(_GC_BIN) 2>/dev/null | grep -m1 'libicuuc' | awk '{print $$3}')
+ifneq ($(_NIX_ICU_RT),)
+_NIX_ICU_HASH   := $(shell printf '%s' "$(_NIX_ICU_RT)" | sed 's|/nix/store/\([^-]*\)-.*|\1|')
+_NIX_ICU_LIBDIR := $(dir $(_NIX_ICU_RT))
+_NIX_ICU_DEV    := $(shell for d in /nix/store/*-icu4c-*-dev; do grep -q "$(_NIX_ICU_HASH)" "$$d/nix-support/propagated-build-inputs" 2>/dev/null && printf '%s' "$$d" && break; done)
+ifneq ($(_NIX_ICU_DEV),)
+CGO_CPPFLAGS += -I$(_NIX_ICU_DEV)/include
+CGO_LDFLAGS  += -L$(_NIX_ICU_LIBDIR)
+export CGO_CPPFLAGS
+export CGO_LDFLAGS
+SYS_USR_CGO_FALLBACK := 0
+$(info Nix ICU detected: -I$(_NIX_ICU_DEV)/include -L$(_NIX_ICU_LIBDIR); SYS_USR_CGO_FALLBACK disabled)
+endif
+endif
+endif
+endif
+
 # Linux: some non-system compilers (Nix, Flox, etc.) don't search /usr/include
 # or /usr/lib by default. If system ICU headers exist but the compiler doesn't
 # see them, intentionally let system paths participate in the whole CGO build.
 # Set SYS_USR_CGO_FALLBACK=0 to disable this fallback for hermetic or cross-CGO
-# builds.
+# builds. (Nix block above sets SYS_USR_CGO_FALLBACK=0 when Nix ICU is found.)
 ifeq ($(shell uname),Linux)
 SYS_USR_CGO_FALLBACK ?= 1
 ifneq ($(SYS_USR_CGO_FALLBACK),0)
