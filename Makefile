@@ -68,13 +68,11 @@ $(info Nix/Flox ICU detected: -I$(_NIX_ICU_DEV)/include -L$(_NIX_ICU_LIBDIR) -rp
 endif
 endif
 endif
-
-
 # Linux: some non-system compilers (Nix, Flox, etc.) don't search /usr/include
 # or /usr/lib by default. If system ICU headers exist but the compiler doesn't
 # see them, intentionally let system paths participate in the whole CGO build.
 # Set SYS_USR_CGO_FALLBACK=0 to disable this fallback for hermetic or cross-CGO
-# builds.
+# builds. (Nix block above sets SYS_USR_CGO_FALLBACK=0 when Nix ICU is found.)
 ifeq ($(shell uname),Linux)
 SYS_USR_CGO_FALLBACK ?= 1
 ifneq ($(SYS_USR_CGO_FALLBACK),0)
