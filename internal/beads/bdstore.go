@@ -958,23 +958,6 @@ func (s *BdStore) Get(id string) (Bead, error) {
 	return bead, nil
 }
 
-// guardExactID checks whether the given id would collide with a different bead
-// via bd's fuzzy/substring resolver. It calls Get and inspects the result:
-//   - ErrIDCollision → returns ErrIDCollision so the caller can abort the mutation.
-//   - ErrNotFound or any other error (store unavailable, projection lag) → returns nil
-//     so the mutation is allowed to proceed (bd will produce its own error if needed).
-//   - Success (bead.ID == id) → returns nil.
-//
-// This intentionally does NOT block on ErrNotFound so that callers handling
-// ephemeral/wisp beads, projection-lagged rows, or store-unavailable paths are
-// not regressed. Only a genuine substring collision is fatal.
-func (s *BdStore) guardExactID(id string) error {
-	if _, err := s.Get(id); errors.Is(err, ErrIDCollision) {
-		return err
-	}
-	return nil
-}
-
 // Update modifies fields of an existing bead via bd update.
 func (s *BdStore) Update(id string, opts UpdateOpts) error {
 	args := []string{"update", "--json", id}
