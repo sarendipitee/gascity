@@ -1091,6 +1091,11 @@ const sessionStartCurrentFormBody = `GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAM
 
 const sessionStartPreviousManagedFormBody = `GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook`
 
+// preCompactCurrentFormBody is the canonical current-form managed PreCompact
+// command body (post-canonical-PATH-prefix). If gc ever extends this command
+// with additional arguments, update this constant alongside the emission site.
+const preCompactCurrentFormBody = `gc handoff --auto --hook-format codex "context cycle"`
+
 // equalsLegacyCommandBody reports whether the command body is exactly the
 // legacy token. gc historically emitted these tokens as the complete
 // command body (possibly with the canonical PATH-export prefix), never
@@ -1121,19 +1126,23 @@ func upgradeClaudeHookCommand(event, command string) (string, bool) {
 	switch event {
 	case "PreCompact":
 		// Older legacy: PreCompact used `gc prime --hook` before
-		// `gc handoff` was introduced. Upgrade to the current
-		// `gc handoff --auto "context cycle"` form. Tested first
-		// because it changes the same trailing token the bare-handoff
-		// form would otherwise patch.
+		// `gc handoff` was introduced. Upgrade to the current form.
+		// Tested first because it changes the same trailing token the
+		// bare-handoff form would otherwise patch.
 		if equalsLegacyCommandBody(body, `gc prime --hook`) {
-			return strings.Replace(command, `gc prime --hook`, `gc handoff --auto "context cycle"`, 1), true
+			return strings.Replace(command, `gc prime --hook`, preCompactCurrentFormBody, 1), true
 		}
 		// Legacy: bare `gc handoff "context cycle"` (no --auto)
 		// requests a controller restart on every Claude Code
 		// compaction event, killing the session (gc-flp1). Upstream
 		// fix landed in commit 7b3b913a; this patches existing cities.
 		if equalsLegacyCommandBody(body, `gc handoff "context cycle"`) {
-			return strings.Replace(command, `gc handoff "context cycle"`, `gc handoff --auto "context cycle"`, 1), true
+			return strings.Replace(command, `gc handoff "context cycle"`, preCompactCurrentFormBody, 1), true
+		}
+		// Legacy: `gc handoff --auto "context cycle"` (pre --hook-format).
+		// Upgrade to the current form that includes --hook-format codex.
+		if equalsLegacyCommandBody(body, `gc handoff --auto "context cycle"`) {
+			return strings.Replace(command, `gc handoff --auto "context cycle"`, preCompactCurrentFormBody, 1), true
 		}
 	case "SessionStart":
 		// Legacy: bare `gc prime --hook` without the
