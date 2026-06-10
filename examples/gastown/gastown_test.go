@@ -4128,20 +4128,24 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			cleanEnv := append(os.Environ(), "ZDOTDIR="+t.TempDir())
 
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			var stderrBuf bytes.Buffer
 			cmd.Env = cleanEnv
-			out, err := cmd.CombinedOutput()
+			cmd.Stderr = &stderrBuf
+			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got, want := strings.TrimSpace(string(out)), "<--rig=gascity>"; got != want {
 				t.Fatalf("%s non-empty expansion = %q, want %q", shell, got, want)
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			stderrBuf.Reset()
 			cmd.Env = cleanEnv
-			out, err = cmd.CombinedOutput()
+			cmd.Stderr = &stderrBuf
+			out, err = cmd.Output()
 			if err != nil {
-				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s empty expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != "" {
 				t.Fatalf("%s empty expansion = %q, want empty", shell, got)
