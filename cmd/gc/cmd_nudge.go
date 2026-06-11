@@ -581,13 +581,15 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 			return 0
 		}
 		missingSince = time.Time{}
-		delivered, pollErr := tryDeliverQueuedNudgesByPoller(target, store, sp, quiescence, obs)
+		_, pollErr := tryDeliverQueuedNudgesByPoller(target, store, sp, quiescence, obs)
 		if pollErr != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", pollErr) //nolint:errcheck
 		}
-		if delivered {
-			continue
-		}
+		// Always back off at least `interval` between iterations, including on
+		// the delivered path. Without this, a delivery that keeps reporting
+		// success (e.g. the ack/clear failed and the same nudge stays PENDING
+		// and re-delivers) tight-spins, opening a fresh Dolt connection every
+		// iteration and saturating the handshake path (gcy-5b1).
 		time.Sleep(interval)
 	}
 }
