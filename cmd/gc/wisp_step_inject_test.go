@@ -243,7 +243,6 @@ func TestResolveActiveWispStep_WispTypeMolecule(t *testing.T) {
 		t.Errorf("got bead ID %q, want wisp step %q", b.ID, step.ID)
 	}
 }
-
 func TestFormatWispStepReminder_ContainsKeyContent(t *testing.T) {
 	b := &beads.Bead{
 		ID:          "gcy-abc",
