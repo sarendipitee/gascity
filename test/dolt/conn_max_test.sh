@@ -8,7 +8,7 @@
 # Run: sh test/dolt/conn_max_test.sh
 set -u
 HERE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-DOCTOR_SCRIPT="${DOCTOR_SCRIPT:-$HERE/../../examples/dolt/assets/scripts/mol-dog-doctor.sh}"
+DOCTOR_SCRIPT="${DOCTOR_SCRIPT:-$HERE/../../examples/bd/dolt/assets/scripts/mol-dog-doctor.sh}"
 
 if [ ! -f "$DOCTOR_SCRIPT" ]; then
   echo "FAIL: doctor script not found at $DOCTOR_SCRIPT"
