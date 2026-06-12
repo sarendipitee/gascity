@@ -1167,7 +1167,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 			}
-			preserveNamed := preserveConfiguredNamedSessionBead(*session, cfg, cityName)
+			preserveNamed := preserveConfiguredNamedSessionBeadAtPath(*session, cfg, cityName, cityPath)
 			var (
 				preservedTP  TemplateParams
 				preserveErr  error
