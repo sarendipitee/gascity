@@ -3126,6 +3126,72 @@ func TestBdStoreSetMetadataBatchRetriesDoltSerializationFailure(t *testing.T) {
 	}
 }
 
+func TestBdStoreSetMetadataBatchRetriesDatabaseLocked(t *testing.T) {
+	calls := 0
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("exit status 1: insert issue into wisps: database is locked")
+		}
+		return []byte(`{"id":"bd-42"}`), nil
+	}
+	s := beads.NewBdStore(doltliteBdStoreTestDir(t), runner)
+	err := s.SetMetadataBatch("bd-42", map[string]string{"state": "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestBdStoreSetMetadataBatchSerializesDoltliteWrites(t *testing.T) {
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return []byte(`{"id":"bd-42"}`), nil
+	}
+	s := beads.NewBdStore(doltliteBdStoreTestDir(t), runner)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			<-start
+			errs <- s.SetMetadataBatch("bd-42", map[string]string{
+				fmt.Sprintf("state-%d", i): "active",
+			})
+		}()
+	}
+	close(start)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mu.Lock()
+	got := maxActive
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("max concurrent writes = %d, want serialized writes", got)
+	}
+}
+
 func TestBdStoreSetMetadataCLINotFound(t *testing.T) {
 	runner := func(_, _ string, _ ...string) ([]byte, error) {
 		return nil, fmt.Errorf("exit status 1: Error updating x: issue not found: bd-42")
