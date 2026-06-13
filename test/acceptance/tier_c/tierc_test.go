@@ -267,8 +267,8 @@ func TestGastown_PolecatImplementsRefineryMerges(t *testing.T) {
 	require.NoError(t, err, "bd ready")
 	var ready []beadJSON
 	require.NoError(t, json.Unmarshal([]byte(readyOut), &ready), "unmarshal ready queue")
-	require.Len(t, ready, 1, "expected only the outer bead in the routed ready queue")
-	require.NotContains(t, ready[0].ID, ".", "expected outer bead id, not a step id")
+	require.Len(t, ready, 1, "expected only the routed source/workflow root in the ready queue")
+	require.NotContains(t, ready[0].ID, ".", "expected source/workflow root id, not a step id")
 
 	outerID := ready[0].ID
 	outerOut, err := bdCmd(testEnvC, rigDir, "show", outerID, "--json")
@@ -276,8 +276,8 @@ func TestGastown_PolecatImplementsRefineryMerges(t *testing.T) {
 	var outer []beadJSON
 	require.NoError(t, json.Unmarshal([]byte(outerOut), &outer), "unmarshal outer bead")
 	require.Len(t, outer, 1, "expected one outer bead")
-	moleculeID := metaString(outer[0].Metadata, "molecule_id")
-	require.NotEmpty(t, moleculeID, "outer bead should carry molecule_id metadata")
+	moleculeID := attachedRootID(outer[0])
+	require.NotEmpty(t, moleculeID, "routed bead should carry or be the attached workflow/molecule root")
 
 	rootOut, err := bdCmd(testEnvC, rigDir, "show", moleculeID, "--json")
 	require.NoError(t, err, "bd show molecule root")
@@ -408,8 +408,8 @@ func TestGastown_MayorDispatchPipeline(t *testing.T) {
 	c.StartWithSupervisor()
 	time.Sleep(15 * time.Second)
 
-	// Send mail to mayor asking to implement a feature.
-	out, err := c.GC("mail", "send", "mayor", "Please add a greet() function to app.py that prints 'hello'")
+	// Send durable mail, then notify the mayor so an idle session processes it.
+	out, err := c.GC("mail", "send", "--notify", "mayor", "Please add a greet() function to app.py that prints 'hello'")
 	if err != nil {
 		t.Fatalf("gc mail send: %v\n%s", err, out)
 	}
@@ -588,6 +588,19 @@ func metaString(meta map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+func attachedRootID(bead beadJSON) string {
+	if id := metaString(bead.Metadata, "molecule_id"); id != "" {
+		return id
+	}
+	if id := metaString(bead.Metadata, "workflow_id"); id != "" {
+		return id
+	}
+	if metaString(bead.Metadata, "gc.kind") == "workflow" || metaString(bead.Metadata, "gc.formula_contract") == "graph.v2" {
+		return bead.ID
+	}
+	return ""
 }
 
 func bdCmd(env *helpers.Env, dir string, args ...string) (string, error) {
