@@ -1072,6 +1072,20 @@ func collectAssignedWorkBeadsWithStores(
 					appendOpenRoutedWorkUnique(&result, &resultStores, &resultStoreRefs, openRouted, seen, source.store, source.ref)
 				}
 			}
+			// Deferred pool-routed beads. An agent may defer a work bead that
+			// belongs in the polecat pool (e.g. after a refinery rejection left
+			// gc.routed_to pointing at the wrong target), stranding it outside
+			// the open/in_progress queries above. Include deferred pool-routed
+			// beads so releaseOrphanedPoolAssignments can clear their defer_until
+			// and restore them to the ready pool.
+			if deferredRouted, err := listBothTiersForControllerDemand(source.store, beads.ListQuery{Status: "deferred"}); err == nil {
+				appendDeferredRoutedWorkUnique(&result, &resultStores, &resultStoreRefs, deferredRouted, seen, source.store, source.ref)
+			} else {
+				errs = append(errs, fmt.Errorf("List(deferred): %w", err))
+				if beads.IsPartialResult(err) && len(deferredRouted) > 0 {
+					appendDeferredRoutedWorkUnique(&result, &resultStores, &resultStoreRefs, deferredRouted, seen, source.store, source.ref)
+				}
+			}
 			results[idx] = storeAssignedWorkResult{beads: result, stores: resultStores, storeRefs: resultStoreRefs, errs: errs}
 		}()
 	}
@@ -1673,6 +1687,20 @@ func appendOpenRoutedWorkUnique(dst *[]beads.Bead, stores *[]beads.Store, storeR
 		if strings.TrimSpace(b.Assignee) == "" {
 			continue
 		}
+		if routedToOrLegacyWorkflowTarget(b) == "" {
+			continue
+		}
+		appendWorkUnique(dst, stores, storeRefs, b, seen, store, storeRef)
+	}
+}
+
+// appendDeferredRoutedWorkUnique includes deferred pool-routed beads so the
+// orphan-release loop can clear their defer_until and restore them to the
+// ready pool. Unlike open pool-routed beads, these may have no assignee — an
+// agent may defer a bead that should remain in the pool after a refinery
+// rejection left gc.routed_to pointing at the wrong target.
+func appendDeferredRoutedWorkUnique(dst *[]beads.Bead, stores *[]beads.Store, storeRefs *[]string, beadList []beads.Bead, seen map[string]struct{}, store beads.Store, storeRef string) {
+	for _, b := range beadList {
 		if routedToOrLegacyWorkflowTarget(b) == "" {
 			continue
 		}

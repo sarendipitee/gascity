@@ -662,7 +662,7 @@ func unclaimWorkAssignedToRetiredSessionBead(
 	identifiers := sessionAssignmentIdentifiers(sessionBead)
 	seen := make(map[string]struct{})
 	for storeIndex, ownerStore := range workAssignmentStores(store, rigStores) {
-		for _, status := range []string{"open", "in_progress"} {
+		for _, status := range []string{"open", "in_progress", "deferred"} {
 			for _, assignee := range identifiers {
 				work, err := ownerStore.List(beads.ListQuery{Assignee: assignee, Status: status, Live: true, TierMode: beads.TierBoth})
 				if err != nil {
@@ -679,12 +679,14 @@ func unclaimWorkAssignedToRetiredSessionBead(
 					}
 					seen[key] = struct{}{}
 					update := beads.UpdateOpts{Assignee: &empty}
-					// Clearing assignee on an in_progress bead leaves it invisible to
-					// the work_query: Tier 1 needs an assignee match, Tiers 2/3 only
-					// match "ready" status. Reset to "open" so a fresh worker can
-					// re-claim via the routed queue.
-					if item.Status == "in_progress" {
+					// Clearing assignee on an in_progress or deferred bead leaves it
+					// invisible to the work_query. Reset to "open" so a fresh worker
+					// can re-claim via the routed queue.
+					if item.Status == "in_progress" || item.Status == "deferred" {
 						update.Status = &open
+					}
+					if item.Status == "deferred" {
+						update.ClearDefer = true
 					}
 					if fallbackRoute != "" &&
 						strings.TrimSpace(item.Metadata["gc.run_target"]) == "" &&
@@ -2359,7 +2361,7 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 	empty := ""
 	openStatus := "open"
 	for assignee := range seenAssignees {
-		for _, status := range []string{"in_progress", "open"} {
+		for _, status := range []string{"in_progress", "open", "deferred"} {
 			work, err := store.List(beads.ListQuery{Assignee: assignee, Status: status})
 			if err != nil {
 				fmt.Fprintf(stderr, "session beads: listing work assigned to closing session %s (%s): %v\n", sessionBead.ID, assignee, err) //nolint:errcheck
@@ -2374,8 +2376,11 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 				}
 				seenWork[item.ID] = struct{}{}
 				update := beads.UpdateOpts{Assignee: &empty}
-				if item.Status == "in_progress" {
+				if item.Status == "in_progress" || item.Status == "deferred" {
 					update.Status = &openStatus
+				}
+				if item.Status == "deferred" {
+					update.ClearDefer = true
 				}
 				if err := store.Update(item.ID, update); err != nil {
 					fmt.Fprintf(stderr, "session beads: releasing work %s from closing session %s: %v\n", item.ID, sessionBead.ID, err) //nolint:errcheck
