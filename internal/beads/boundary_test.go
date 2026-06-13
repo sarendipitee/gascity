@@ -53,7 +53,7 @@ func TestNoBdExecOutsideBeads(t *testing.T) {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == ".git" || base == "vendor" || base == ".claude" || base == ".gc" || strings.HasPrefix(base, ".beads-src") {
+			if base == ".git" || base == ".jj" || base == "vendor" || base == ".claude" || base == ".cache" || base == ".gc" || strings.HasPrefix(base, ".beads-src") {
 				return filepath.SkipDir
 			}
 			// Skip git worktrees embedded in the repo (have a .git file, not dir).
