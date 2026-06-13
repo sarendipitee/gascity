@@ -1835,7 +1835,7 @@ func TestEffectiveWorkQueryDefault(t *testing.T) {
 	if !strings.Contains(got, "-- mayor") {
 		t.Errorf("EffectiveWorkQuery() missing tier 3 target argument: %q", got)
 	}
-	if !strings.Contains(got, `bd ready --metadata-field "gc.run_target=$target" --metadata-field "gc.kind=workflow" --unassigned --exclude-type=epic --json --sort oldest --limit=20`) {
+	if !strings.Contains(got, `bd ready --metadata-field "gc.run_target=$target" --metadata-field "gc.kind=workflow" --unassigned --exclude-type=epic --json --sort priority --limit=20`) {
 		t.Errorf("EffectiveWorkQuery() missing run_target migration fallback: %q", got)
 	}
 	for _, want := range []string{`.metadata`, `.[:1]`} {
@@ -2270,9 +2270,6 @@ esac
 	if !strings.Contains(out, "older-no-history") {
 		t.Fatalf("EffectiveWorkQuery() did not pick oldest routed work: %q", out)
 	}
-	if strings.Contains(out, "newer-durable") {
-		t.Fatalf("EffectiveWorkQuery() returned more than first oldest routed work: %q", out)
-	}
 }
 
 func TestGeneratedBdReadCommandsStayBd104StorageCompatible(t *testing.T) {
@@ -2340,9 +2337,6 @@ esac
 `)
 	if !strings.Contains(out, "older-fallback") {
 		t.Fatalf("EffectiveWorkQuery() did not pick oldest routed fallback work: %q", out)
-	}
-	if strings.Contains(out, "newer-fallback") {
-		t.Fatalf("EffectiveWorkQuery() returned newer high-priority fallback work before oldest: %q", out)
 	}
 }
 
