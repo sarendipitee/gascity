@@ -27,7 +27,7 @@ func (f *recordingFS) WriteFile(name string, data []byte, perm os.FileMode) erro
 
 func (f *recordingFS) Rename(oldpath, newpath string) error {
 	f.Calls = append(f.Calls, fsys.Call{Method: "Rename", Path: oldpath})
-	if !f.failedRename && f.failRenameTarget != "" && filepath.Clean(newpath) == filepath.Clean(f.failRenameTarget) {
+	if !f.failedRename && f.failRenameTarget != "" && canonicalTestPath(newpath) == canonicalTestPath(f.failRenameTarget) {
 		f.failedRename = true
 		return errors.New("injected site binding failure")
 	}
@@ -41,7 +41,7 @@ type failSiteBindingRenameFS struct {
 }
 
 func (f *failSiteBindingRenameFS) Rename(oldpath, newpath string) error {
-	if !f.failed && filepath.Clean(newpath) == filepath.Clean(f.target) {
+	if !f.failed && canonicalTestPath(newpath) == canonicalTestPath(f.target) {
 		f.failed = true
 		return errors.New("injected site binding failure")
 	}
@@ -49,6 +49,8 @@ func (f *failSiteBindingRenameFS) Rename(oldpath, newpath string) error {
 }
 
 func TestDoInitRestoresLegacyIdentityWhenSiteBindingWriteFails(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+
 	cityPath := filepath.Join(t.TempDir(), "target-city")
 	fs := &failSiteBindingRenameFS{target: filepath.Join(cityPath, ".gc", "site.toml")}
 
@@ -77,6 +79,8 @@ func TestDoInitRestoresLegacyIdentityWhenSiteBindingWriteFails(t *testing.T) {
 }
 
 func TestDoInitFromFileRestoresLegacyIdentityWhenSiteBindingWriteFails(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+
 	srcDir := t.TempDir()
 	srcCfg := config.DefaultCity("declared-city")
 	srcCfg.Workspace.Prefix = "dc"
@@ -114,6 +118,8 @@ func TestDoInitFromFileRestoresLegacyIdentityWhenSiteBindingWriteFails(t *testin
 }
 
 func TestDoInitFromDirRestoresLegacyIdentityWhenSiteBindingWriteFails(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+
 	srcDir := t.TempDir()
 	srcData := []byte("[workspace]\nname = \"declared-city\"\nprefix = \"dc\"\n")
 	if err := os.WriteFile(filepath.Join(srcDir, "city.toml"), srcData, 0o644); err != nil {
@@ -192,6 +198,8 @@ path = "/srv/frontend"
 }
 
 func TestDoInitFromFileWritesCityBeforeRigSiteBindings(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+
 	srcDir := t.TempDir()
 	rigPath := filepath.Join(srcDir, "frontend")
 	if err := os.MkdirAll(rigPath, 0o755); err != nil {
@@ -234,6 +242,8 @@ path = %q
 }
 
 func TestDoInitFromFileRestoresCityWhenRigSiteBindingWriteFails(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+
 	srcDir := t.TempDir()
 	rigPath := filepath.Join(srcDir, "frontend")
 	if err := os.MkdirAll(rigPath, 0o755); err != nil {

@@ -33,7 +33,7 @@ type corruptCityAfterRemoveFS struct {
 
 func (f *corruptCityAfterRemoveFS) Remove(name string) error {
 	err := f.OSFS.Remove(name)
-	if err == nil && !f.fired && filepath.Clean(name) == filepath.Clean(f.triggerPath) {
+	if err == nil && !f.fired && canonicalTestPath(name) == canonicalTestPath(f.triggerPath) {
 		f.fired = true
 		if writeErr := os.WriteFile(f.cityToml, []byte("["), 0o644); writeErr != nil {
 			return writeErr
@@ -51,7 +51,7 @@ type corruptCityAfterRenameFS struct {
 
 func (f *corruptCityAfterRenameFS) Rename(oldpath, newpath string) error {
 	err := f.OSFS.Rename(oldpath, newpath)
-	if err == nil && !f.fired && filepath.Clean(newpath) == filepath.Clean(f.triggerPath) {
+	if err == nil && !f.fired && canonicalTestPath(newpath) == canonicalTestPath(f.triggerPath) {
 		f.fired = true
 		if writeErr := os.WriteFile(f.cityToml, []byte("["), 0o644); writeErr != nil {
 			return writeErr
@@ -114,7 +114,7 @@ type failAgentTomlRenameOSFS struct {
 }
 
 func (f *failAgentTomlRenameOSFS) Rename(oldpath, newpath string) error {
-	if filepath.Clean(newpath) == filepath.Clean(f.target) {
+	if canonicalTestPath(newpath) == canonicalTestPath(f.target) {
 		return errors.New("injected agent.toml write failure")
 	}
 	return f.OSFS.Rename(oldpath, newpath)
