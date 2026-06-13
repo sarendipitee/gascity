@@ -418,22 +418,21 @@ func firstCallIndex(calls []fsys.Call, match func(fsys.Call) bool) int {
 }
 
 func isSiteBindingWriteCallFor(cityPath string) func(fsys.Call) bool {
-	siteTempPrefix := filepath.Join(cityPath, ".gc", "site.toml.")
-	return func(call fsys.Call) bool {
-		if call.Method != "WriteFile" {
-			return false
-		}
-		return strings.HasPrefix(call.Path, siteTempPrefix)
-	}
+	return isPathOrTempWriteCallFor(filepath.Join(cityPath, ".gc", "site.toml"))
 }
 
 func isCityConfigWriteCallFor(cityPath string) func(fsys.Call) bool {
-	cityTempPrefix := filepath.Join(cityPath, "city.toml.")
-	cityPath = filepath.Join(cityPath, "city.toml")
+	return isPathOrTempWriteCallFor(filepath.Join(cityPath, "city.toml"))
+}
+
+func isPathOrTempWriteCallFor(path string) func(fsys.Call) bool {
+	path = canonicalTestPath(path)
+	tempPrefix := canonicalTestPath(path + ".")
 	return func(call fsys.Call) bool {
 		if call.Method != "WriteFile" {
 			return false
 		}
-		return call.Path == cityPath || strings.HasPrefix(call.Path, cityTempPrefix)
+		callPath := canonicalTestPath(call.Path)
+		return callPath == path || strings.HasPrefix(callPath, tempPrefix)
 	}
 }
