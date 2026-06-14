@@ -1,5 +1,5 @@
 ---
-title: Gas City 1.0 Pack System (PackV2)
+title: Gas City Pack Specification
 description: Authoritative specification for Gas City pack format and loading semantics.
 ---
 
@@ -11,9 +11,9 @@ description: Authoritative specification for Gas City pack format and loading se
 | Primary implementation | `internal/config/pack.go`, `internal/config/config.go`, `internal/config/compose.go` |
 | User-facing guide | `docs/guides/shareable-packs.md` |
 
-This document specifies the Gas City 1.0 pack system as a data model, file
-format, and loading process. **PackV2** is a shorthand name for the Gas City Pack
-Specification (2.0), but this document uses "pack" for the authoring surface.
+This document specifies the Gas City pack system as a data model, file format,
+and loading process. The current pack schema is `2`; this document uses "pack"
+for the authoring surface.
 
 The key words "must", "must not", "required", "shall", "shall not", "should",
 "should not", and "may" are to be interpreted as normative requirements unless
@@ -246,6 +246,11 @@ The binding name is local to the importing file. Current loader behavior uses
 binding names for deterministic ordering of imports and stamps the binding on
 every agent the import contributes, qualifying runtime agent identities
 (section 2.5).
+
+The imported pack's declared name and any registry display name are advisory:
+they can suggest a binding or provide UI copy, but they are not durable pack
+identity. Durable identity comes from `source` plus the optional `version`
+constraint or pin.
 
 A `source` string is a pack resolver coordinate. For GitHub-hosted packs, a
 browser-dereferenceable `tree/<ref>/<path>` URL is the preferred authored form.
@@ -753,7 +758,7 @@ top-level `[imports.<binding>]` in `pack.toml`.
 
 > **Compatibility:** Legacy `includes` lists in `pack.toml` may also feed the
 > pack loader. New packs should use `[imports.<binding>]`. Schema-2 root
-> `city.toml` files and schema-2 config fragments reject legacy PackV1 surfaces
+> `city.toml` files and schema-2 config fragments reject legacy pack surfaces
 > such as `workspace.includes`, `workspace.default_rig_includes`, `[packs.*]`,
 > `rigs.includes`, and inline agent definitions.
 

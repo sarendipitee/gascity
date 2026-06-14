@@ -639,22 +639,6 @@
         "version": {
           "type": "string",
           "description": "Version is an optional semver constraint for git-backed imports (e.g.,\n\"^1.2\"). Empty for local paths. \"sha:\u003chex\u003e\" pins a specific commit."
-        },
-        "export": {
-          "type": "boolean",
-          "description": "Export re-exports this import's contents into the parent pack's\nnamespace. Consumers of the parent get this import's agents\nflattened under the parent's binding name."
-        },
-        "transitive": {
-          "type": "boolean",
-          "description": "Transitive controls whether this import's own imports are visible\nto the consumer. Defaults to true (transitive). Set to false to\nsuppress transitive resolution for this specific import."
-        },
-        "shadow": {
-          "type": "string",
-          "enum": [
-            "warn",
-            "silent"
-          ],
-          "description": "Shadow controls shadow warnings when the importer defines an agent\nwith the same name as one from this import. \"warn\" (default) emits\na warning; \"silent\" suppresses it."
         }
       },
       "additionalProperties": false,
@@ -701,7 +685,7 @@
         },
         "template": {
           "type": "string",
-          "description": "Template is the referenced agent template name. Root declarations may\ntarget imported PackV2 agents via \"binding.agent\"."
+          "description": "Template is the referenced agent template name. Root declarations may\ntarget imported agents via \"binding.agent\"."
         },
         "scope": {
           "type": "string",
@@ -814,7 +798,7 @@
             "$ref": "#/$defs/Agent"
           },
           "type": "array",
-          "description": "Agents holds legacy inline agent templates accepted by the current\nloader. New PackV2 packs should define agents under\nagents/\u003cname\u003e/agent.toml instead."
+          "description": "Agents holds legacy inline agent templates accepted by the current\nloader. New packs should define agents under\nagents/\u003cname\u003e/agent.toml instead."
         },
         "named_session": {
           "items": {
@@ -1349,5 +1333,5 @@
     }
   },
   "title": "Gas City Pack Manifest",
-  "description": "Schema for pack.toml — the PackV2 manifest that declares a pack's metadata, providers, services, commands, and import surface. PackV2 agent authoring uses agents/\u003cname\u003e/agent.toml; inline [[agent]] tables remain schema-visible for migration compatibility. Cities and rigs compose packs via [imports.*]."
+  "description": "Schema for pack.toml — the manifest that declares a pack's metadata, providers, services, commands, and import surface. Current agent authoring uses agents/\u003cname\u003e/agent.toml; inline [[agent]] tables remain schema-visible for migration compatibility. Cities and rigs compose packs via [imports.*]."
 }

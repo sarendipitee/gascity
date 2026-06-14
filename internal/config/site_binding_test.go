@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
 type failSiteRenameFS struct {
@@ -18,7 +19,7 @@ type failSiteRenameFS struct {
 }
 
 func (f *failSiteRenameFS) Rename(oldpath, newpath string) error {
-	if !f.failed && filepath.Clean(newpath) == filepath.Clean(f.target) {
+	if !f.failed && pathutil.SamePath(newpath, f.target) {
 		f.failed = true
 		return errors.New("injected site binding failure")
 	}

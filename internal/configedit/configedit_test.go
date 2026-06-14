@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/configedit"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/suspensionstate"
 )
 
@@ -20,7 +21,7 @@ type failRenameFS struct {
 }
 
 func (f *failRenameFS) Rename(oldpath, newpath string) error {
-	if !f.failed && filepath.Clean(newpath) == filepath.Clean(f.target) {
+	if !f.failed && pathutil.SamePath(newpath, f.target) {
 		f.failed = true
 		return errors.New("injected rename failure")
 	}
