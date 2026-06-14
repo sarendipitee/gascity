@@ -23,7 +23,7 @@ func TestNoDolt3307InFormulaVarsAndTemplates(t *testing.T) {
 		message string
 	}{
 		{
-			dir:     filepath.Join(root, "examples", "dolt", "formulas"),
+			dir:     filepath.Join(root, "examples", "bd", "dolt"),
 			re:      regexp.MustCompile(`default\s*=\s*"3307"`),
 			message: "formula var has default = \"3307\"; gcy-h0s: use $GC_DOLT_PORT, never a hardcoded port default",
 		},
