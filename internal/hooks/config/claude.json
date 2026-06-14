@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc handoff --auto \"context cycle\""
+            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc handoff --auto --hook-format codex \"context cycle\""
           }
         ]
       }
@@ -31,11 +31,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc nudge drain --inject"
+            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc nudge drain --inject --hook-format codex"
           },
           {
             "type": "command",
-            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc mail check --inject"
+            "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc mail check --inject --hook-format codex"
           }
         ]
       }

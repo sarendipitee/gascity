@@ -811,7 +811,7 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	assertContainsInOrder(t, fallback,
 		`if [ -n "" ]; then`,
 		`else`,
-		`make test`,
+		`timeout 30m make test`,
 	)
 
 	configured := cookPolecatSelfReviewDescription(t, map[string]string{
@@ -824,9 +824,9 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	}
 	assertContainsInOrder(t, configured,
 		`if [ -n "scripts/affected-tests.sh" ]; then`,
-		`scripts/affected-tests.sh`,
+		`timeout 30m scripts/affected-tests.sh`,
 		`else`,
-		`make test`,
+		`timeout 30m make test`,
 	)
 }
 
@@ -3943,18 +3943,22 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			}
 
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			out, err := cmd.CombinedOutput()
+			var stderrBuf bytes.Buffer
+			cmd.Stderr = &stderrBuf
+			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got, want := strings.TrimSpace(string(out)), "<--rig=gascity>"; got != want {
 				t.Fatalf("%s non-empty expansion = %q, want %q", shell, got, want)
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			out, err = cmd.CombinedOutput()
+			stderrBuf.Reset()
+			cmd.Stderr = &stderrBuf
+			out, err = cmd.Output()
 			if err != nil {
-				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s empty expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != "" {
 				t.Fatalf("%s empty expansion = %q, want empty", shell, got)
