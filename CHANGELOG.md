@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading Notes
+
+- **Run `gc doctor --fix` once per existing city after upgrading.** The 1.3
+  doctor owns the breaking migrations for explicit provider catalogs and
+  explicit pack imports/locks. The relevant checks are `provider-catalog`,
+  `builtin-pack-imports`, and `packv2-import-state`.
+- **Provider references must be declared in `[providers]`.** Cities that set
+  `workspace.provider` or agent-level `provider` values now need matching
+  `[providers.<name>]` entries. `gc doctor --fix` appends missing built-in
+  aliases such as `[providers.claude] base = "builtin:claude"`; custom
+  providers still require hand-authored provider tables.
+- **Built-in and gastown pack composition changed.** Gas City no longer
+  relies on implicit built-ins or per-city `.gc/system/packs` materialization.
+  Existing `workspace.includes = [".gc/system/packs/..."]`, legacy public
+  `gastown`/`maintenance` import sources, superseded bundled pins, and stale
+  locks are migrated to explicit pinned imports in `pack.toml` plus
+  `packs.lock`.
+- **The `gastown` pack is now consumed from
+  `github.com/gastownhall/gascity-packs`.** The old checked-in
+  `examples/gastown/packs/gastown` tree is gone. Move local customizations
+  into an explicitly imported pack instead of editing `.gc/system/packs` or
+  the retired vendored example path.
+- **Fallback agents were removed.** Packs that previously depended on a
+  fallback dog/worker must ship their own worker pool and formulas. Cross-pack
+  agent name collisions are now hard errors.
+- **Public imports are intentionally small.** Authored `[imports.<binding>]`
+  tables expose `source` and optional `version`; older `export`,
+  `transitive`, and `shadow` keys remain compatibility-only loader behavior,
+  not public schema.
+
 ### Changed
 
 - **Version pins on builtin packs are honored: the binary only pre-seeds
@@ -509,5 +539,8 @@ community contributors. See the GitHub release page for the full narrative.
   semantics, watchdog reconciliation cadence, dirty-cache fallback reads.
 - Long tail of session lifecycle, wake-budget, and pool identity fixes.
 
-[Unreleased]: https://github.com/gastownhall/gascity/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/gastownhall/gascity/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/gastownhall/gascity/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/gastownhall/gascity/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/gastownhall/gascity/releases/tag/v1.2.0
 [1.0.0]: https://github.com/gastownhall/gascity/releases/tag/v1.0.0
