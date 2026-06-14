@@ -244,6 +244,14 @@ func configureFreshInitClaudePool(t *testing.T, c *helpers.City) {
 		`min_active_sessions = 0`,
 		`max_active_sessions = 1`,
 	)
+	prompt := `# claude
+
+You are the claude test agent.
+
+When you are reminded to check assigned work, inspect your assigned bead, do the requested task in this city directory, and close the bead when the task is complete. For file-writing tasks, create or update the requested file with the requested content.
+`
+	err := os.WriteFile(filepath.Join(c.Dir, "agents", "claude", "prompt.template.md"), []byte(prompt), 0o644)
+	require.NoError(t, err, "write claude test prompt")
 }
 
 func runGCWithTimeout(timeout time.Duration, env *helpers.Env, dir string, args ...string) (string, error) {
