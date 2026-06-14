@@ -2964,6 +2964,7 @@ esac
 	}
 }
 
+<<<<<<< HEAD
 // TestEffectivePoolDemandQueryExcludesClosedReworkBeads guards against upstream
 // Dolt status-index drift that causes bd list --status=open to return closed
 // beads (gcy-1on). The rework jq filter must explicitly exclude beads with
