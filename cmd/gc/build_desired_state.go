@@ -76,6 +76,13 @@ type DesiredStateResult struct {
 	// per-bead readiness slice for buildAwakeInputFromReconciler's
 	// AwakeWorkBead.Ready flag.
 	ReadyAssigned map[storeScopedBeadKey]bool
+	// StrandedNamedSessionRoutingBeads holds IDs of open, unassigned work beads
+	// whose gc.routed_to targets a known named session. These beads satisfy the
+	// named-session demand probe (causing repeated wake-ups) but cannot be found
+	// by the named session's standard assignee-based work-discovery query,
+	// causing silent town idle (gcy-esq). The reconciler logs a warning when
+	// this field is non-empty.
+	StrandedNamedSessionRoutingBeads []string
 	// StoreQueryPartial is true when one or more bead store work queries
 	// failed. When set, the reconciler must NOT drain sessions based on the
 	// incomplete desired state — a transient failure would cause running
@@ -578,7 +585,6 @@ func buildDesiredStateWithSessionBeads(
 		runningSessions := 0
 		for _, sb := range allOpenSessionBeads {
 			if isPoolManagedSessionBead(sb) && poolSessionIsLive(sb) {
-			if isPoolManagedSessionBead(sb) && poolSessionIsLive(sb) {
 				// Match the qualified template by identity equivalence.
 				// allOpenSessionBeads is aggregated across the city + every rig
 				// store, and pool session beads store the qualified name
@@ -725,6 +731,7 @@ func buildDesiredStateWithSessionBeads(
 	var namedScaleCheckPartialTemplates map[string]bool
 	var scaleCheckPartialTemplates map[string]bool
 	var namedDefaultDemand map[string]bool
+	var strandedNamedSessionRoutingBeads []string
 	if store != nil {
 		subPhaseStart = time.Now()
 		assignedWorkBeads, assignedWorkStores, assignedWorkStoreRefs, readyAssigned, storePartial = collectAssignedWorkBeadsWithStores(cfg, store, rigStores, suspendedRigPaths, sessionBeads)
@@ -827,8 +834,10 @@ func buildDesiredStateWithSessionBeads(
 		if len(defaultNamedScaleTargets) > 0 {
 			var namedErrs []error
 			var partialTemplates map[string]bool
+			var strandedIDs []string
 			subPhaseStart = time.Now()
-			namedDefaultDemand, partialTemplates, namedErrs = defaultNamedSessionDemand(defaultNamedScaleTargets, cfg, cityName)
+			namedDefaultDemand, strandedIDs, partialTemplates, namedErrs = defaultNamedSessionDemand(defaultNamedScaleTargets, cfg, cityName)
+			strandedNamedSessionRoutingBeads = append(strandedNamedSessionRoutingBeads, strandedIDs...)
 			recordDemandSubPhase(trace, "demand_snapshot.named_session_demand", subPhaseStart, map[string]any{
 				"targets": len(defaultNamedScaleTargets),
 			})
@@ -1010,19 +1019,20 @@ func buildDesiredStateWithSessionBeads(
 	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
 
 	return DesiredStateResult{
-		State:                           desired,
-		BaseState:                       baseDesired,
-		ScaleCheckCounts:                scaleCheckCounts,
-		ScaleCheckPartialTemplates:      scaleCheckPartialTemplates,
-		PoolScaleCheckPartialTemplates:  poolScaleCheckPartialTemplates,
-		NamedScaleCheckPartialTemplates: namedScaleCheckPartialTemplates,
-		AssignedWorkBeads:               assignedWorkBeads,
-		AssignedWorkStores:              assignedWorkStores,
-		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
-		ReadyAssigned:                   readyAssigned,
-		NamedSessionDemand:              namedWorkReady,
-		StoreQueryPartial:               storePartial,
-		BeaconTime:                      beaconTime,
+		State:                            desired,
+		BaseState:                        baseDesired,
+		ScaleCheckCounts:                 scaleCheckCounts,
+		ScaleCheckPartialTemplates:       scaleCheckPartialTemplates,
+		PoolScaleCheckPartialTemplates:   poolScaleCheckPartialTemplates,
+		NamedScaleCheckPartialTemplates:  namedScaleCheckPartialTemplates,
+		AssignedWorkBeads:                assignedWorkBeads,
+		AssignedWorkStores:               assignedWorkStores,
+		AssignedWorkStoreRefs:            assignedWorkStoreRefs,
+		ReadyAssigned:                    readyAssigned,
+		NamedSessionDemand:               namedWorkReady,
+		StoreQueryPartial:                storePartial,
+		BeaconTime:                       beaconTime,
+		StrandedNamedSessionRoutingBeads: strandedNamedSessionRoutingBeads,
 	}
 }
 
@@ -1644,10 +1654,16 @@ func mergeScaleCheckDemand(existing, incoming scaleCheckDemand, count int) scale
 	return existing
 }
 
-func defaultNamedSessionDemand(targets []defaultScaleCheckTarget, _ *config.City, _ string) (map[string]bool, map[string]bool, []error) {
+// defaultNamedSessionDemand reports which named-session identities have active
+// unassigned routed demand. It also returns the IDs of open, unassigned beads
+// whose gc.routed_to targets a known named session (strandedBeadIDs): these
+// beads satisfy the demand probe and trigger wake-ups, but cannot be found by
+// the named session's standard assignee-based work-discovery query — creating
+// repeated wake/idle cycles with no progress (gcy-esq silent-idle failure).
+func defaultNamedSessionDemand(targets []defaultScaleCheckTarget, cfg *config.City, cityName string) (map[string]bool, []string, map[string]bool, []error) {
 	demand := make(map[string]bool)
-	if len(targets) == 0 {
-		return demand, nil, nil
+	if len(targets) == 0 || cfg == nil {
+		return demand, nil, nil, nil
 	}
 
 	type scaleStoreGroup struct {
@@ -1685,20 +1701,63 @@ func defaultNamedSessionDemand(targets []defaultScaleCheckTarget, _ *config.City
 		group.templates[template] = struct{}{}
 	}
 
-	// Named sessions are not inferred from gc.routed_to/gc.run_target.
-	// A work item targets a named session by Assignee=<session id/name/alias>.
-	// This probe remains only to mark named-session backing templates partial
-	// when a default demand query is inconclusive, so existing named-session
-	// beads are retained instead of swept on a store/query failure.
-	for key, group := range groups {
-		_, err := readyForControllerDemand(group.store)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), err))
-			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
+	namedByIdentity := make(map[string]namedSessionSpec)
+	identitiesByTemplate := make(map[string][]string)
+	for i := range cfg.NamedSessions {
+		identity := cfg.NamedSessions[i].QualifiedName()
+		spec, ok := findNamedSessionSpec(cfg, cityName, identity)
+		if !ok || spec.Mode == "always" {
 			continue
 		}
+		template := strings.TrimSpace(namedSessionBackingTemplate(spec))
+		if template == "" {
+			continue
+		}
+		namedByIdentity[spec.Identity] = spec
+		identitiesByTemplate[template] = append(identitiesByTemplate[template], spec.Identity)
 	}
-	return demand, partialTemplates, errs
+
+	// NOTE: this loop intentionally only consults Ready(). Formula
+	// orders that should wake named on_demand sessions must create an
+	// actionable root, just like pool-targeted formula orders.
+	var strandedBeadIDs []string
+	for key, group := range groups {
+		ready, readyErr := readyForControllerDemand(group.store)
+		if readyErr != nil {
+			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), readyErr))
+			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
+			if !beads.IsPartialResult(readyErr) || len(ready) == 0 {
+				continue
+			}
+		}
+		for _, b := range ready {
+			if strings.TrimSpace(b.Assignee) != "" {
+				continue
+			}
+			routedTo := strings.TrimSpace(b.Metadata[beadmeta.RoutedToMetadataKey])
+			if spec, ok := namedByIdentity[routedTo]; ok {
+				template := strings.TrimSpace(namedSessionBackingTemplate(spec))
+				if _, targetTemplate := group.templates[template]; targetTemplate {
+					demand[spec.Identity] = true
+					// An open, unassigned bead creates demand for a named session but
+					// the session discovers work via assignee lookup (not gc.routed_to).
+					// This bead wakes the session repeatedly without ever being
+					// processed — silently idling the town (gcy-esq).
+					strandedBeadIDs = append(strandedBeadIDs, b.ID)
+				}
+				continue
+			}
+			template := legacyWorkflowRunTarget(b)
+			if _, targetTemplate := group.templates[template]; !targetTemplate {
+				continue
+			}
+			identities := identitiesByTemplate[template]
+			if len(identities) == 1 {
+				demand[identities[0]] = true
+			}
+		}
+	}
+	return demand, strandedBeadIDs, partialTemplates, errs
 }
 
 func controllerDemandRouteTarget(b beads.Bead, templates map[string]struct{}) string {
