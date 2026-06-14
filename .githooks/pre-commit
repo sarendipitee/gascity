@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# On Nix/Flox machines, pkg-config surfaces the right ICU include/lib paths.
+# The Makefile's Linux system-CGO fallback would otherwise append system ICU
+# headers (e.g. ICU 74 from /usr/include), causing a symbol-version mismatch
+# when linking against the Nix-store ICU 76 that gc itself uses. Export clean
+# CGO env up front so all subsequent make/go invocations use the right ICU.
+if _ICU_INC=$(pkg-config --cflags-only-I icu-uc 2>/dev/null | sed 's/-I//g') && \
+   _ICU_LIB=$(pkg-config --libs-only-L icu-uc 2>/dev/null | sed 's/-L//g') && \
+   [ -n "$_ICU_INC" ] && [ -n "$_ICU_LIB" ]; then
+  export CGO_CPPFLAGS="-I${_ICU_INC}"
+  export CGO_LDFLAGS="-L${_ICU_LIB} -Wl,-rpath,${_ICU_LIB}"
+  export SYS_USR_CGO_FALLBACK=0
+fi
+
 staged_go_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' || true)
 staged_web_src=$(git diff --cached --name-only --diff-filter=ACM -- 'cmd/gc/dashboard/web/src/' 'cmd/gc/dashboard/web/index.html' 'cmd/gc/dashboard/web/public/' 'cmd/gc/dashboard/web/package.json' 'cmd/gc/dashboard/web/openapi-ts.config.ts' 'cmd/gc/dashboard/web/vite.config.ts' 'cmd/gc/dashboard/web/tsconfig.json' || true)
 staged_docs=$(git diff --cached --name-only --diff-filter=ACM -- '*.md' 'docs/**' 'engdocs/**' 'plans/**' 'specs/**' 'AGENTS.md' 'CONTRIBUTING.md' 'README.md' 'TESTING.md' || true)
