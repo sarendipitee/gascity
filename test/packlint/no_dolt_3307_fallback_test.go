@@ -36,6 +36,13 @@ func TestNoDolt3307InFormulaVarsAndTemplates(t *testing.T) {
 
 	var hits []string
 	for _, target := range targets {
+		// On the deploy (`live`) layout the gastown pack template fragments
+		// are sourced from the gascity-packs Go module, not this repo, so the
+		// template-fragments dir may not exist here. A missing target dir is
+		// not a regression — skip it rather than failing the lint.
+		if _, statErr := os.Stat(target.dir); os.IsNotExist(statErr) {
+			continue
+		}
 		err := filepath.WalkDir(target.dir, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
