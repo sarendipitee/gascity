@@ -2083,6 +2083,16 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		}
 		assignedWorkBeads, assignedWorkStoreRefs = filterReleasedAssignedWorkSnapshot(assignedWorkBeads, assignedWorkStoreRefs, released)
 	}
+	// Warn on stranded named-session routing: open, unassigned beads whose
+	// gc.routed_to targets a known named session satisfy the demand probe
+	// (waking the session) but are invisible to the session's assignee-based
+	// work-discovery query. The session wakes and idles repeatedly while the
+	// polecat pool sees zero demand — silently idling the town (gcy-esq).
+	// The witness should detect this via gc bd list --status open --no-assignee
+	// --metadata-field gc.routed_to=<named-session> and re-route the bead.
+	if len(result.StrandedNamedSessionRoutingBeads) > 0 {
+		fmt.Fprintf(cr.stderr, "%s: WARNING: stranded named-session routing detected for beads %s — open+unassigned beads with gc.routed_to targeting a named session will cause silent idle; re-route to pool target or clear gc.routed_to\n", cr.logPrefix, strings.Join(result.StrandedNamedSessionRoutingBeads, ",")) //nolint:errcheck
+	}
 	// Squatter guard (gastownhall/gascity#2930): a foreign Dolt that has bound
 	// this city's managed port returns zero demand, indistinguishable from a
 	// genuinely-idle fleet — and would drain every running pool. This runs on
