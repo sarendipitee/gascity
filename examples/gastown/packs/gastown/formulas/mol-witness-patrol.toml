@@ -2,7 +2,7 @@ description = """
 Witness patrol loop. Poured as a root-only wisp on startup:
 
   gc bd mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}'
-  gc bd update $WISP --assignee=$GC_AGENT
+  gc bd update $WISP --set-metadata gc.routed_to=$GC_ALIAS
 
 Each wisp is ONE iteration: check for work, patrol, pour the next
 iteration. On crash, re-read the formula steps and determine where
@@ -84,8 +84,8 @@ gc runtime request-restart
 ```
 This sets `GC_RESTART_REQUESTED` metadata on the session and blocks
 forever. The controller will kill and restart the session on the next
-reconcile tick. The current wisp stays assigned and the new session
-the new session re-reads formula steps and resumes from context.
+reconcile tick. The current wisp has `gc.routed_to` set to this template
+so the new session finds it via pool demand and resumes from context.
 
 **2. Check mail:**
 ```bash
@@ -507,7 +507,8 @@ If context feels heavy or RSS is high:
 gc runtime request-restart
 ```
 This blocks forever. The controller restarts you. The next wisp
-is already assigned — the new session resumes from context.
+has `gc.routed_to` set to this template — the new session finds it
+via pool demand and resumes from context.
 
 **2. Pour next iteration BEFORE burning (reconcile to exactly one):**
 
@@ -516,15 +517,21 @@ may have poured a next wisp without burning, or a restart may have raced —
 keep one open patrol wisp and burn any surplus, so wisps never accumulate.
 Wisp roots are `issue_type=molecule` (never `--type=wisp`, which is not a
 valid bd type and matches nothing).
+
+Use `gc.routed_to=$GC_ALIAS` (the stable template name) rather than
+`--assignee=$GC_AGENT` (the session-specific name). The pool demand check
+discovers unassigned beads by `gc.routed_to`; assigning by session name
+leaves the wisp stranded when the session exits, because the new session has
+a different name and pool demand counts zero (all assigned beads are skipped).
 ```bash
-OPEN_WISPS=$(gc bd list --assignee="$GC_AGENT" --status=open --type=molecule --limit=0 --json | jq -r '.[].id')
+OPEN_WISPS=$(gc bd list --status=open --type=molecule --metadata gc.routed_to="$GC_ALIAS" --limit=0 --json | jq -r '.[].id')
 NEXT=$(printf '%s\n' $OPEN_WISPS | sed -n '1p')
 for extra in $(printf '%s\n' $OPEN_WISPS | sed '1d'); do
   gc bd mol burn "$extra" --force
 done
 if [ -z "$NEXT" ]; then
   NEXT=$(gc bd mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id')
-  gc bd update "$NEXT" --assignee="$GC_AGENT"
+  gc bd update "$NEXT" --set-metadata gc.routed_to="$GC_ALIAS"
 fi
 ```
 
@@ -540,6 +547,7 @@ IDLE: no work, exiting turn.
 ```
 Then stop immediately. Do NOT sleep, call ScheduleWakeup, or use Monitor.
 The session_sleep policy will restart this session after the configured idle interval;
-the next wisp is already assigned and the restarted session resumes from it.
+the next wisp has `gc.routed_to` set to this template and the restarted session
+finds it via pool demand.
 
 **Exit criteria:** Next wisp poured, this wisp burned, turn ended with IDLE signal."""
