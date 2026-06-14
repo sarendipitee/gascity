@@ -303,10 +303,10 @@ func TestGastown_PolecatImplementsRefineryMerges(t *testing.T) {
 	c.StartForeground()
 
 	// Poll for outcome: refinery must eventually merge the work to origin/main.
-	// 18 minutes: Synthetic-backed workers can take longer to start and
+	// 25 minutes: Synthetic-backed workers can take longer to start and
 	// complete the polecat -> witness -> refinery chain than the original
 	// Anthropic-backed budget this test was written around.
-	deadline := 18 * time.Minute
+	deadline := 25 * time.Minute
 	merged := pollForCondition(t, deadline, 15*time.Second, func() bool {
 		_ = gitCmd(t, rigDir, "fetch", "origin")
 		content := gitCmd(t, rigDir, "show", "origin/main:feature.txt")
