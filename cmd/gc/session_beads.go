@@ -2357,12 +2357,23 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 		addAssignee(id)
 	}
 
+	// Pool demand relies on gc.routed_to to discover unassigned ephemeral
+	// work after a session exits. Recover it from the closing session's
+	// template so the reconciler can spawn a replacement on the next tick.
+	sessionRouteTarget := retiredSessionFallbackRoute(sessionBead)
+
 	seenWork := make(map[string]struct{})
 	empty := ""
 	openStatus := "open"
 	for assignee := range seenAssignees {
 		for _, status := range []string{"in_progress", "open", "deferred"} {
-			work, err := store.List(beads.ListQuery{Assignee: assignee, Status: status})
+			// TierBoth includes ephemeral wisps alongside durable work beads.
+			// Patrol formulas that assign the next wisp by session name (instead
+			// of setting gc.routed_to) leave ephemeral wisps stranded when the
+			// session exits. We release them here and restore gc.routed_to from
+			// the closing session's template so pool demand can find the wisp on
+			// the next reconcile tick.
+			work, err := store.List(beads.ListQuery{Assignee: assignee, Status: status, TierMode: beads.TierBoth})
 			if err != nil {
 				fmt.Fprintf(stderr, "session beads: listing work assigned to closing session %s (%s): %v\n", sessionBead.ID, assignee, err) //nolint:errcheck
 				continue
@@ -2381,6 +2392,14 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 				}
 				if item.Status == "deferred" {
 					update.ClearDefer = true
+				}
+				// Ephemeral pool work (patrol wisps) has no gc.routed_to when
+				// the formula assigns it by session name instead of template alias.
+				// Without gc.routed_to the pool demand check cannot count it after
+				// release, so the reconciler never spawns a replacement. Set it
+				// now while the closing session bead is still in scope.
+				if item.Ephemeral && strings.TrimSpace(item.Metadata["gc.routed_to"]) == "" && sessionRouteTarget != "" {
+					update.Metadata = map[string]string{"gc.routed_to": sessionRouteTarget}
 				}
 				if err := store.Update(item.ID, update); err != nil {
 					fmt.Fprintf(stderr, "session beads: releasing work %s from closing session %s: %v\n", item.ID, sessionBead.ID, err) //nolint:errcheck

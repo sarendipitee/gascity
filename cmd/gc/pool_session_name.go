@@ -199,7 +199,158 @@ func releaseOrphanedPoolAssignments(
 		}
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
+
+	// Second pass: recover stranded ephemeral wisps assigned to dead sessions
+	// that have no gc.routed_to (e.g. patrol formulas that used --assignee=$GC_AGENT
+	// instead of setting gc.routed_to). Without gc.routed_to these beads are
+	// invisible to both the main pass above (which requires a route target) and
+	// the pool demand check (which skips assigned beads). Recover the route target
+	// from the dead session's template metadata so the next reconcile tick can
+	// count them as demand and spawn a replacement session.
+	released = releaseStrandedEphemeralWisps(store, cfg, cityPath, openIdentifiers, legacyOpenIdentifiers, storeRefAware, assignedWorkBeads, assignedWorkStores, assignedWorkStoreRefs, storeAware, rigStores, released)
+
 	return released
+}
+
+// releaseStrandedEphemeralWisps recovers ephemeral work beads that are assigned
+// to a dead pool session but have no gc.routed_to metadata. Such beads are
+// invisible to the main orphan-release pass (which requires gc.routed_to to
+// identify the target template) and to the pool demand check (which skips
+// assigned beads entirely). This happens when a patrol formula assigns the
+// next iteration wisp by session name ($GC_AGENT) instead of setting
+// gc.routed_to to the stable template alias.
+//
+// For each stranded ephemeral bead, we look up the dead session's bead to
+// recover the template, then set gc.routed_to and release the bead so the
+// next pool demand check can find it and spawn a replacement session.
+func releaseStrandedEphemeralWisps(
+	store beads.Store,
+	cfg *config.City,
+	cityPath string,
+	openIdentifiers map[string]map[string]struct{},
+	legacyOpenIdentifiers map[string]struct{},
+	storeRefAware bool,
+	assignedWorkBeads []beads.Bead,
+	assignedWorkStores []beads.Store,
+	assignedWorkStoreRefs []string,
+	storeAware bool,
+	rigStores map[string]beads.Store,
+	alreadyReleased []releasedPoolAssignment,
+) []releasedPoolAssignment {
+	// Build a set of already-released IDs to avoid double-release.
+	alreadyReleasedIDs := make(map[string]struct{}, len(alreadyReleased))
+	for _, r := range alreadyReleased {
+		alreadyReleasedIDs[r.ID] = struct{}{}
+	}
+
+	// Lazy cache: dead-assignee → template, populated on first stranded bead.
+	// Nil means not yet built; empty string means "not found" for a given assignee.
+	var deadSessionTemplateCache map[string]string
+
+	storeRefAwareForStranded := storeRefAware && len(assignedWorkStoreRefs) == len(assignedWorkBeads)
+
+	released := alreadyReleased
+	for i, wb := range assignedWorkBeads {
+		if !wb.Ephemeral {
+			continue
+		}
+		if strings.TrimSpace(wb.Metadata["gc.routed_to"]) != "" {
+			continue // handled by main pass
+		}
+		assignee := strings.TrimSpace(wb.Assignee)
+		if assignee == "" {
+			continue // unassigned — not our concern here
+		}
+		if wb.Status != "open" && wb.Status != "in_progress" {
+			continue
+		}
+		if _, done := alreadyReleasedIDs[wb.ID]; done {
+			continue
+		}
+		// Check if the assignee is still live.
+		workStoreRef := ""
+		if storeRefAwareForStranded {
+			workStoreRef = assignedWorkStoreRefs[i]
+		}
+		if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAwareForStranded) {
+			continue
+		}
+		if liveOpenSessionAssignmentExists(store, assignee) {
+			continue
+		}
+
+		// Build the dead-session template cache lazily.
+		if deadSessionTemplateCache == nil {
+			deadSessionTemplateCache = buildDeadSessionTemplateCache(store)
+		}
+		template, ok := deadSessionTemplateCache[assignee]
+		if !ok || template == "" {
+			continue
+		}
+		agentCfg := findAgentByTemplate(cfg, template)
+		if agentCfg == nil || !agentCfg.SupportsGenericEphemeralSessions() {
+			continue
+		}
+
+		var ownerStore beads.Store
+		if storeAware {
+			if i >= len(assignedWorkStores) || assignedWorkStores[i] == nil {
+				log.Printf("releaseStrandedEphemeralWisps: missing owner store for %q at index %d", wb.ID, i)
+				continue
+			}
+			ownerStore = assignedWorkStores[i]
+		} else {
+			// We don't have gc.routed_to yet, so storeForPoolAssignment won't find
+			// a rig store by route. Use the city store as the fallback; the bead
+			// likely lives in the city store if it was created by a city agent.
+			ownerStore = store
+		}
+
+		// Set gc.routed_to so pool demand check can discover the released bead.
+		if err := ownerStore.SetMetadata(wb.ID, "gc.routed_to", template); err != nil {
+			log.Printf("releaseStrandedEphemeralWisps: setting gc.routed_to on %s: %v", wb.ID, err)
+			continue
+		}
+		if !releaseOrphanedPoolAssignment(ownerStore, wb.ID, false) {
+			continue
+		}
+		log.Printf("releaseStrandedEphemeralWisps: recovered stranded ephemeral wisp %s (assignee=%s template=%s)", wb.ID, assignee, template)
+		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
+		alreadyReleasedIDs[wb.ID] = struct{}{}
+	}
+	return released
+}
+
+// buildDeadSessionTemplateCache queries all session beads (including closed)
+// and returns a map from each session identity to its template name. Used to
+// recover the route target for stranded ephemeral wisps assigned by session
+// name to a now-dead session.
+func buildDeadSessionTemplateCache(store beads.Store) map[string]string {
+	if store == nil {
+		return nil
+	}
+	sessionBeadsAll, err := store.List(beads.ListQuery{
+		Label:         sessionBeadLabel,
+		IncludeClosed: true,
+		Limit:         500,
+	})
+	if err != nil {
+		log.Printf("releaseStrandedEphemeralWisps: listing session beads: %v", err)
+		return nil
+	}
+	cache := make(map[string]string, len(sessionBeadsAll)*4)
+	for _, sb := range sessionBeadsAll {
+		template := retiredSessionFallbackRoute(sb)
+		if template == "" {
+			continue
+		}
+		for _, id := range sessionBeadAssigneeIdentities(sb) {
+			if id != "" {
+				cache[id] = template
+			}
+		}
+	}
+	return cache
 }
 
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {

@@ -8138,3 +8138,82 @@ func TestPendingPoolSessionName_SanitizesDottedTemplate(t *testing.T) {
 		})
 	}
 }
+
+// TestReleaseWorkFromClosedSessionBead_SetsRoutedToOnEphemeralWisp verifies that
+// when releasing an ephemeral wisp with no gc.routed_to from a closing session,
+// the function sets gc.routed_to from the session's template metadata. This ensures
+// pool demand can discover the wisp after release and spawn a replacement session.
+func TestReleaseWorkFromClosedSessionBead_SetsRoutedToOnEphemeralWisp(t *testing.T) {
+	store := beads.NewMemStore()
+
+	sessionBead := beads.Bead{
+		ID: "sess-abc",
+		Metadata: map[string]string{
+			"session_name": "gc-abc",
+			"template":     "gascity-source/gastown.witness",
+		},
+	}
+
+	// Ephemeral wisp with no gc.routed_to, assigned to the closing session.
+	wisp, err := store.Create(beads.Bead{
+		Title:     "patrol wisp",
+		Assignee:  "gc-abc",
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("Create wisp: %v", err)
+	}
+
+	var buf bytes.Buffer
+	releaseWorkFromClosedSessionBead(store, sessionBead, &buf)
+	if buf.Len() > 0 {
+		t.Logf("stderr: %s", buf.String())
+	}
+
+	got, err := store.Get(wisp.ID)
+	if err != nil {
+		t.Fatalf("Get wisp: %v", err)
+	}
+	if got.Assignee != "" {
+		t.Errorf("assignee = %q, want empty", got.Assignee)
+	}
+	if got.Metadata["gc.routed_to"] != "gascity-source/gastown.witness" {
+		t.Errorf("gc.routed_to = %q, want %q", got.Metadata["gc.routed_to"], "gascity-source/gastown.witness")
+	}
+}
+
+// TestReleaseWorkFromClosedSessionBead_PreservesExistingRoutedTo verifies that
+// an ephemeral wisp that already has gc.routed_to set is not overwritten.
+func TestReleaseWorkFromClosedSessionBead_PreservesExistingRoutedTo(t *testing.T) {
+	store := beads.NewMemStore()
+
+	sessionBead := beads.Bead{
+		ID: "sess-xyz",
+		Metadata: map[string]string{
+			"session_name": "gc-xyz",
+			"template":     "gascity-source/gastown.witness",
+		},
+	}
+
+	wisp, err := store.Create(beads.Bead{
+		Title:     "patrol wisp with existing route",
+		Assignee:  "gc-xyz",
+		Ephemeral: true,
+		Metadata:  map[string]string{"gc.routed_to": "other-rig/some.pool"},
+	})
+	if err != nil {
+		t.Fatalf("Create wisp: %v", err)
+	}
+
+	var buf bytes.Buffer
+	releaseWorkFromClosedSessionBead(store, sessionBead, &buf)
+
+	got, err := store.Get(wisp.ID)
+	if err != nil {
+		t.Fatalf("Get wisp: %v", err)
+	}
+	// Existing gc.routed_to should be unchanged.
+	if got.Metadata["gc.routed_to"] != "other-rig/some.pool" {
+		t.Errorf("gc.routed_to = %q, want %q", got.Metadata["gc.routed_to"], "other-rig/some.pool")
+	}
+}

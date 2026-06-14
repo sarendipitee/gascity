@@ -1958,3 +1958,135 @@ func TestReleaseOrphanedPoolAssignments_PreservesNamedIdentityForSameStore(t *te
 		t.Fatalf("assignee = %q, want reviewer", got.Assignee)
 	}
 }
+
+// TestReleaseOrphanedPoolAssignments_RecoverStrandedEphemeralWisp verifies that
+// ephemeral wisps assigned to a dead session by session name (with no gc.routed_to)
+// are recovered: gc.routed_to is set from the dead session's template and the bead
+// is released so pool demand can find it on the next reconcile tick.
+func TestReleaseOrphanedPoolAssignments_RecoverStrandedEphemeralWisp(t *testing.T) {
+	store := beads.NewMemStore()
+
+	// Create and close a session bead for the dead session.
+	sessionBead, err := store.Create(beads.Bead{
+		Title:  "dead witness session",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name": "gc-dead",
+			"template":     "gascity-source/gastown.witness",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session bead: %v", err)
+	}
+	if err := store.Close(sessionBead.ID); err != nil {
+		t.Fatalf("Close session bead: %v", err)
+	}
+
+	// Create an ephemeral wisp assigned by session name with no gc.routed_to.
+	// This simulates a wisp poured before the fix (using --assignee=$GC_AGENT).
+	work, err := store.Create(beads.Bead{
+		Title:     "stranded patrol wisp",
+		Assignee:  "gc-dead",
+		Ephemeral: true,
+		Status:    "open",
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:              "gascity-source/gastown.witness",
+		MaxActiveSessions: intPtr(1),
+	}}}
+	released := releaseOrphanedPoolAssignments(
+		store,
+		cfg,
+		"",
+		nil,
+		[]beads.Bead{work},
+		nil,
+		nil,
+		nil,
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("released = %v, want [%s]", released, work.ID)
+	}
+
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get work bead: %v", err)
+	}
+	if got.Status != "open" {
+		t.Fatalf("status = %q, want open", got.Status)
+	}
+	if got.Assignee != "" {
+		t.Fatalf("assignee = %q, want empty", got.Assignee)
+	}
+	if got.Metadata["gc.routed_to"] != "gascity-source/gastown.witness" {
+		t.Fatalf("gc.routed_to = %q, want %q", got.Metadata["gc.routed_to"], "gascity-source/gastown.witness")
+	}
+}
+
+// TestReleaseOrphanedPoolAssignments_StrandedEphemeralWispSkipsLiveSession verifies
+// that an ephemeral wisp with no gc.routed_to assigned to a LIVE session is not released.
+func TestReleaseOrphanedPoolAssignments_StrandedEphemeralWispSkipsLiveSession(t *testing.T) {
+	store := beads.NewMemStore()
+
+	// Create an open session bead (live).
+	_, err := store.Create(beads.Bead{
+		Title:  "live witness session",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name": "gc-live",
+			"template":     "gascity-source/gastown.witness",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session bead: %v", err)
+	}
+
+	// Create an ephemeral wisp assigned to the live session with no gc.routed_to.
+	work, err := store.Create(beads.Bead{
+		Title:     "active patrol wisp",
+		Assignee:  "gc-live",
+		Ephemeral: true,
+		Status:    "open",
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+
+	// Open session bead simulates a live session for legacyOpenIdentifiers.
+	liveSession := beads.Bead{
+		Metadata: map[string]string{
+			"session_name": "gc-live",
+			"template":     "gascity-source/gastown.witness",
+		},
+	}
+
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:              "gascity-source/gastown.witness",
+		MaxActiveSessions: intPtr(1),
+	}}}
+	released := releaseOrphanedPoolAssignments(
+		store,
+		cfg,
+		"",
+		[]beads.Bead{liveSession},
+		[]beads.Bead{work},
+		nil,
+		nil,
+		nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none (live session owns work)", released)
+	}
+
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get work bead: %v", err)
+	}
+	if got.Assignee != "gc-live" {
+		t.Fatalf("assignee = %q, want gc-live", got.Assignee)
+	}
+}
