@@ -118,6 +118,13 @@ Do not write registry handles such as `main:gastown` into `pack.toml`. Registry
 handles are command-time lookup shortcuts; authored pack TOML stores the
 resolved durable `source` and, when needed, `version`.
 
+Packs own their agents. Collision detection keys on the binding-qualified
+name, so two imports that each define a `polecat` agent coexist as
+`gastown.polecat` and `review.polecat`. Composition fails with a
+duplicate-agent error only when two source directories produce the same
+qualified name on the same surface — for example, two unbound legacy includes
+that both define `polecat` — and there is no fallback-agent resolution.
+
 ## Registry Discovery
 
 Registries help you find packs, but they do not change the authored import
@@ -199,9 +206,12 @@ source = "./assets/code-review"
 Rig-level imports create rig-scoped identities such as
 `backend/gastown.polecat` and `backend/review.reviewer`.
 
-Gas City's built-in `core` and `maintenance` packs stay implicit in this wave.
-Do not add `[imports.maintenance]` just to get the standard maintenance
-behavior from `gc`.
+Gas City's built-in packs are not implicit. `gc init` writes explicit
+workspace includes into `city.toml` (`.gc/system/packs/core`, plus
+`.gc/system/packs/bd` for bd-provider cities), and `gc doctor --fix` repairs
+missing or stale entries. The former `maintenance` pack no longer exists; its
+housekeeping orders ship in the bundled `core` pack. See
+[System Packs](/reference/system-packs) for details.
 
 ## Named Sessions
 
@@ -273,9 +283,18 @@ The loader still exposes some V1 fields for migration and old city support:
 - `workspace.includes`
 - `[[rigs]].includes`
 - `[packs.*]`
-- `[formulas].dir`
 
-Treat those as migration surfaces. `gc doctor --fix` can migrate root
+`[formulas].dir` is not among them: it does not load at all. A
+`[formulas].dir` declaration is a hard parse error in `city.toml`, in every
+config fragment, and in `pack.toml` (`[formulas].dir is no longer supported;
+use the well-known formulas/ directory`), and `gc doctor` reports any
+remaining declaration through the fixable `v2-formulas-dir` check. Put
+formulas in the well-known `formulas/` directory.
+
+Treat the listed fields as migration surfaces for your own packs, with one exception:
+the built-in system packs compose through explicit `workspace.includes`
+entries in `city.toml` (`gc init` writes them; `gc doctor --fix` repairs
+them). `gc doctor --fix` can migrate root
 `pack.toml` legacy inline agent definitions into `agents/<name>/agent.toml`;
 legacy agent definitions inside config fragments still need a hand edit. New
 shareable packs should use `schema = 2`, `[imports.*]`,

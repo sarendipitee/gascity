@@ -101,7 +101,7 @@ generate:
 
 ## check-schema: verify generated docs are up to date
 check-schema: generate
-	@git diff --exit-code docs/schema/ docs/reference/ || \
+	@git diff --exit-code docs/reference/ || \
 		(echo "Error: generated docs stale. Run 'make generate'" && exit 1)
 
 ## clean: remove build artifacts
@@ -235,6 +235,14 @@ vet:
 ## tests and corrupt live cities. Only the allowlist below survives. To opt
 ## extra vars through, set EXTRA_TEST_ENV='FOO=bar BAZ=qux' on the make line.
 ## See PR #746.
+##
+## Load-bearing: GC_DOLT_PORT and BEADS_DOLT_SERVER_PORT are deliberately NOT in
+## the allowlist below. They point bd at the live shared city Dolt server, so
+## letting them reach `go test` makes every bd-forking test write to PRODUCTION
+## Dolt — 18+ parallel workers pegged the shared server and stalled bd writes
+## city-wide (ga-w2kh1r). Do not add them. For a bare `go test` that bypasses
+## this wrapper, internal/testenv scrubs these vars at test-binary init in every
+## covered package (enforced by TestRequiresDedicatedTestenvImportFile).
 GOPATH_VAL    := $(shell go env GOPATH)
 GOCACHE_VAL   := $(shell go env GOCACHE)
 GOMODCACHE_VAL := $(shell go env GOMODCACHE)
@@ -250,6 +258,7 @@ TEST_ENV = env -i \
 	TMPDIR="$${TMPDIR:-/tmp}" \
 	OBSERVABLE_TEST_LOG="$${OBSERVABLE_TEST_LOG-}" \
 	OBSERVABLE_FAILURE_LINES="$${OBSERVABLE_FAILURE_LINES-}" \
+	GC_TEST_NO_SLICE="$${GC_TEST_NO_SLICE-}" \
 	XDG_RUNTIME_DIR="$$XDG_RUNTIME_DIR" \
 	GOPATH="$(GOPATH_VAL)" \
 	GOCACHE="$(GOCACHE_VAL)" \
@@ -317,6 +326,10 @@ test-pack-registry-live:
 	@# have the optional ICU C headers needed by the default CGO build path.
 	$(TEST_ENV) CGO_ENABLED=0 GC_TEST_GASCITY_PACKS_REGISTRY="$${GC_TEST_GASCITY_PACKS_REGISTRY}" go test ./cmd/gc -run '^TestPackRegistryLiveGascityPacksCatalog$$' -count=1
 	$(TEST_ENV) CGO_ENABLED=0 GC_TEST_GASCITY_PACKS_REGISTRY="$${GC_TEST_GASCITY_PACKS_REGISTRY}" go test -tags acceptance_a -timeout 10m ./test/acceptance -run '^TestPackRegistryLiveImportsEveryCatalogPack$$' -count=1
+
+## update-bundled-gastown-pack: pin the gastown module/constants/example to the latest registry release
+update-bundled-gastown-pack:
+	scripts/update-bundled-gastown-pack
 
 ## test-native-doltlite-beads: compile and run the native DoltLite read-store suite
 test-native-doltlite-beads:
@@ -619,7 +632,7 @@ diagrams-excalidraw:
 		out="$$out_dir/$$base.svg"; \
 		if [ ! -e "$$out" ] || [ "$$f" -nt "$$out" ]; then \
 			echo "excalidraw -> $$out"; \
-			npx -y @swiftlysingh/excalidraw-cli convert "$$f" --format svg --output "$$out"; \
+			npx -y @swiftlysingh/excalidraw-cli convert "$$f" --format svg --padding 16 --output "$$out"; \
 			rendered=$$((rendered+1)); \
 		fi; \
 	done; \
@@ -668,15 +681,15 @@ dashboard-ci: dashboard-check
 	fi
 
 ## spec-ci: regenerate the OpenAPI spec + generated Go client, fail on drift.
-## Used by CI to enforce that internal/api/openapi.json, docs/schema JSON
+## Used by CI to enforce that internal/api/openapi.json, docs/reference/schema JSON
 ## artifacts, compatibility .txt mirrors, and internal/api/genclient/client_gen.go
 ## are all in lock-step with Huma.
 spec-ci: install-oapi-codegen
 	go run ./cmd/genspec
 	go generate ./internal/api/genclient
-	@if ! git diff --quiet -- internal/api/openapi.json docs/schema/openapi.json docs/schema/openapi.txt docs/schema/events.json docs/schema/events.txt internal/api/genclient/client_gen.go; then \
+	@if ! git diff --quiet -- internal/api/openapi.json docs/reference/schema/openapi.json docs/reference/schema/openapi.txt docs/reference/schema/events.json docs/reference/schema/events.txt internal/api/genclient/client_gen.go; then \
 		echo "ERROR: spec/client artifacts drifted — run 'make spec-ci' locally and commit." >&2; \
-		git --no-pager diff --stat -- internal/api/openapi.json docs/schema/openapi.json docs/schema/openapi.txt docs/schema/events.json docs/schema/events.txt internal/api/genclient/client_gen.go; \
+		git --no-pager diff --stat -- internal/api/openapi.json docs/reference/schema/openapi.json docs/reference/schema/openapi.txt docs/reference/schema/events.json docs/reference/schema/events.txt internal/api/genclient/client_gen.go; \
 		exit 1; \
 	fi
 

@@ -21,6 +21,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/hooks"
 	"github.com/gastownhall/gascity/internal/overlay"
+	"github.com/gastownhall/gascity/internal/pricing"
 	"github.com/spf13/cobra"
 )
 
@@ -66,6 +67,7 @@ type initPackConfig struct {
 	Doctor         []config.PackDoctorEntry       `toml:"doctor,omitempty"`
 	Commands       []config.PackCommandEntry      `toml:"commands,omitempty"`
 	Global         config.PackGlobal              `toml:"global,omitempty"`
+	Pricing        []pricing.ModelPricing         `toml:"pricing,omitempty"`
 }
 
 var initConventionDirs = cityinit.InitConventionDirs()
@@ -802,6 +804,7 @@ func marshalInitPackConfig(cfg initPackConfig) ([]byte, error) {
 		Doctor        []config.PackDoctorEntry       `toml:"doctor,omitempty"`
 		Commands      []config.PackCommandEntry      `toml:"commands,omitempty"`
 		Global        *config.PackGlobal             `toml:"global,omitempty"`
+		Pricing       []pricing.ModelPricing         `toml:"pricing,omitempty"`
 	}
 
 	encCfg := encodedInitPackConfig{
@@ -821,6 +824,7 @@ func marshalInitPackConfig(cfg initPackConfig) ([]byte, error) {
 		Providers:     cfg.Providers,
 		Doctor:        cfg.Doctor,
 		Commands:      cfg.Commands,
+		Pricing:       cfg.Pricing,
 	}
 	if !isZeroValue(cfg.AgentDefaults) {
 		encCfg.AgentDefaults = &cfg.AgentDefaults
@@ -1094,6 +1098,13 @@ func cmdInitFromTOMLFileWithOptions(fs fsys.FS, tomlSrc, cityPath, nameOverride 
 	rewriteInitPromptTemplates(cfg)
 	packCfg, cityCfg := splitInitConfig(cityName, cfg)
 	applyInitPackTemplateExtras(&packCfg, templatePack)
+	// Builtin packs compose only through explicit includes: write the
+	// canonical city-relative paths for this city's providers into
+	// city.toml (mirrors doInit; gc doctor --fix repairs them later).
+	cityCfg.Workspace.SetLegacyIncludes(appendUniqueStrings(
+		cityCfg.Workspace.LegacyIncludes(),
+		builtinIncludesForInit(cityCfg.Beads.Provider)...,
+	))
 	var rigSiteBindings []config.Rig
 	if hasInitRigSiteBindings(cityCfg.Rigs) {
 		rigSiteBindings = append([]config.Rig(nil), cityCfg.Rigs...)
@@ -1284,6 +1295,15 @@ func doInit(fs fsys.FS, cityPath string, wiz wizardConfig, nameOverride string, 
 	// pack.toml. The built-in templates currently only need the prompt
 	// scaffold plus the pack-owned named session.
 	packCfg.Agents = nil
+	// Builtin packs compose only through explicit includes: write the
+	// canonical city-relative paths for this city's providers into
+	// city.toml. gc doctor --fix repairs them if they go missing. These are
+	// deployment-local (.gc paths), so they belong in city.toml, not in the
+	// portable pack.toml.
+	cityCfg.Workspace.SetLegacyIncludes(appendUniqueStrings(
+		cityCfg.Workspace.LegacyIncludes(),
+		builtinIncludesForInit(cityCfg.Beads.Provider)...,
+	))
 	content, err := cityCfg.Marshal()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc init: %v\n", err) //nolint:errcheck // best-effort stderr

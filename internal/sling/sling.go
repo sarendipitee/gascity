@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/agentutil"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/graphv2"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/pathutil"
@@ -132,6 +134,18 @@ type SlingDeps struct {
 	// DirectSessionResolver optionally materializes direct graph assignee
 	// targets to concrete session bead IDs.
 	DirectSessionResolver func(store beads.Store, cityName, cityPath string, cfg *config.City, target, rigContext string) (string, bool, error)
+}
+
+// graphrouteDeps projects the graph-routing subset of SlingDeps into
+// graphroute.Deps. Store, city name, and config travel as explicit
+// parameters on every graphroute entry point, so only these three
+// fields cross the boundary.
+func (deps SlingDeps) graphrouteDeps() graphroute.Deps {
+	return graphroute.Deps{
+		CityPath:              deps.CityPath,
+		Resolver:              deps.Resolver,
+		DirectSessionResolver: deps.DirectSessionResolver,
+	}
 }
 
 // SlingResult holds the structured output of a sling operation.
@@ -1144,7 +1158,7 @@ func resolveMoleculeArtifactDir(deps SlingDeps, bead beads.Bead) string {
 	if strings.TrimSpace(bead.ID) == "" || strings.TrimSpace(deps.CityPath) == "" {
 		return ""
 	}
-	rootID := strings.TrimSpace(bead.Metadata["gc.root_bead_id"])
+	rootID := strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
 	if rootID == "" {
 		return ""
 	}
@@ -1172,8 +1186,8 @@ func WorkflowStoreRefForDir(storeDir, cityPath, cityName string, cfg *config.Cit
 	if strings.TrimSpace(storeDir) == "" || strings.TrimSpace(cityPath) == "" {
 		return ""
 	}
-	storeDir = NormalizePathForCompare(storeDir)
-	cityPath = NormalizePathForCompare(cityPath)
+	storeDir = pathutil.NormalizePathForCompare(storeDir)
+	cityPath = pathutil.NormalizePathForCompare(cityPath)
 	if storeDir == cityPath {
 		cityName = strings.TrimSpace(cityName)
 		if cityName == "" {
@@ -1189,7 +1203,7 @@ func WorkflowStoreRefForDir(storeDir, cityPath, cityName string, cfg *config.Cit
 		if !filepath.IsAbs(rigPath) {
 			rigPath = filepath.Join(cityPath, rigPath)
 		}
-		if SamePath(rigPath, storeDir) {
+		if pathutil.SamePath(rigPath, storeDir) {
 			return "rig:" + rig.Name
 		}
 	}
@@ -1205,7 +1219,7 @@ func IsGraphWorkflowAttachment(store beads.Store, rootID string) bool {
 	if err != nil {
 		return false
 	}
-	return b.Metadata["gc.kind"] == "workflow" && b.Metadata["gc.formula_contract"] == "graph.v2"
+	return b.Metadata[beadmeta.KindMetadataKey] == "workflow" && b.Metadata[beadmeta.FormulaContractMetadataKey] == "graph.v2"
 }
 
 // InstantiateSlingFormula compiles and instantiates a formula, applying
@@ -1225,17 +1239,17 @@ func InstantiateSlingFormula(ctx context.Context, formulaName string, searchPath
 		SlingTracef("instantiate validate-error formula=%s err=%v", formulaName, err)
 		return nil, err
 	}
-	graphWorkflow := IsCompiledGraphWorkflow(recipe)
+	graphWorkflow := graphroute.IsCompiledGraphWorkflow(recipe)
 	if graphWorkflow {
 		stampGraphV2RootMetadata(recipe, formulaName, opts.Vars, scopeKind, scopeRef)
 		sourceBeadID = ""
-		if key := strings.TrimSpace(recipe.Steps[0].Metadata["gc.graphv2_root_key"]); key != "" {
+		if key := strings.TrimSpace(recipe.Steps[0].Metadata[beadmeta.Graphv2RootKeyMetadataKey]); key != "" {
 			unlock := lockGraphV2Root(key)
 			defer unlock()
 		}
 	}
 	SlingTracef("instantiate compiled formula=%s dur=%s steps=%d", formulaName, time.Since(compileStart), len(recipe.Steps))
-	if err := ApplyGraphRouting(recipe, &a, a.QualifiedName(), opts.Vars, sourceBeadID, scopeKind, scopeRef, deps.StoreRef, deps.Store, deps.CityName, deps.Cfg, deps); err != nil {
+	if err := graphroute.ApplyGraphRouting(recipe, &a, a.QualifiedName(), opts.Vars, sourceBeadID, scopeKind, scopeRef, deps.StoreRef, deps.Store, deps.CityName, deps.Cfg, deps.graphrouteDeps()); err != nil {
 		SlingTracef("instantiate decorate-error formula=%s err=%v", formulaName, err)
 		return nil, err
 	}
@@ -1274,7 +1288,7 @@ func InstantiateSlingFormula(ctx context.Context, formulaName string, searchPath
 				rollbackErr = errors.Join(rollbackErr, cleanupErr)
 			}
 			if restoreErr := sourceworkflow.RestoreWorkflowBeads(deps.Store, replacedSnapshots); restoreErr != nil {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore replaced graph.v2 root %s: %w", replacedRootID, restoreErr))
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore replaced formulas v2 root %s: %w", replacedRootID, restoreErr))
 			}
 			if rollbackErr != nil {
 				return nil, errors.Join(err, rollbackErr)
@@ -1297,27 +1311,27 @@ func lockGraphV2Root(key string) func() {
 func closeReplacedGraphV2Root(store beads.Store, rootID string) ([]sourceworkflow.WorkflowBeadSnapshot, error) {
 	root, err := store.Get(rootID)
 	if err != nil {
-		return nil, fmt.Errorf("loading replaced graph.v2 root %s: %w", rootID, err)
+		return nil, fmt.Errorf("loading replaced formulas v2 root %s: %w", rootID, err)
 	}
 	if root.Status == "closed" {
 		return nil, nil
 	}
 	snapshots, err := sourceworkflow.SnapshotOpenWorkflowBeads(store, rootID)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot replaced graph.v2 root %s: %w", rootID, err)
+		return nil, fmt.Errorf("snapshot replaced formulas v2 root %s: %w", rootID, err)
 	}
 	if _, err := sourceworkflow.CloseWorkflowSubtree(store, rootID); err != nil {
 		restoreErr := sourceworkflow.RestoreWorkflowBeads(store, snapshots)
 		return nil, errors.Join(
-			fmt.Errorf("closing replaced graph.v2 subtree %s: %w", rootID, err),
+			fmt.Errorf("closing replaced formulas v2 subtree %s: %w", rootID, err),
 			restoreErr,
 		)
 	}
-	if err := store.SetMetadata(rootID, "gc.failure_reason", "graphv2_force_replaced"); err != nil {
+	if err := store.SetMetadata(rootID, beadmeta.FailureReasonMetadataKey, "graphv2_force_replaced"); err != nil {
 		if restoreErr := sourceworkflow.RestoreWorkflowBeads(store, snapshots); restoreErr != nil {
-			return nil, errors.Join(fmt.Errorf("marking replaced graph.v2 root %s: %w", rootID, err), restoreErr)
+			return nil, errors.Join(fmt.Errorf("marking replaced formulas v2 root %s: %w", rootID, err), restoreErr)
 		}
-		return nil, fmt.Errorf("marking replaced graph.v2 root %s: %w", rootID, err)
+		return nil, fmt.Errorf("marking replaced formulas v2 root %s: %w", rootID, err)
 	}
 	return snapshots, nil
 }
@@ -1342,19 +1356,19 @@ func snapshotGraphV2ReplacementRoot(store beads.Store, formulaName string, vars 
 	if err := closeFailedGraphV2RootsByKey(store, key); err != nil {
 		return graphV2ReplacementSnapshot{}, err
 	}
-	matches, err := store.ListByMetadata(map[string]string{"gc.graphv2_root_key": key}, 2, beads.WithBothTiers)
+	matches, err := store.ListByMetadata(map[string]string{beadmeta.Graphv2RootKeyMetadataKey: key}, 2, beads.WithBothTiers)
 	if err != nil {
-		return graphV2ReplacementSnapshot{}, fmt.Errorf("looking up graph.v2 root key %s: %w", key, err)
+		return graphV2ReplacementSnapshot{}, fmt.Errorf("looking up formulas v2 root key %s: %w", key, err)
 	}
 	if len(matches) == 0 {
 		return graphV2ReplacementSnapshot{}, nil
 	}
 	if len(matches) > 1 {
-		return graphV2ReplacementSnapshot{}, fmt.Errorf("graph.v2 root key %s has multiple live roots: %s, %s", key, matches[0].ID, matches[1].ID)
+		return graphV2ReplacementSnapshot{}, fmt.Errorf("formulas v2 root key %s has multiple live roots: %s, %s", key, matches[0].ID, matches[1].ID)
 	}
 	snapshots, err := sourceworkflow.SnapshotOpenWorkflowBeads(store, matches[0].ID)
 	if err != nil {
-		return graphV2ReplacementSnapshot{}, fmt.Errorf("snapshot replaced graph.v2 root %s: %w", matches[0].ID, err)
+		return graphV2ReplacementSnapshot{}, fmt.Errorf("snapshot replaced formulas v2 root %s: %w", matches[0].ID, err)
 	}
 	if len(snapshots) == 0 {
 		return graphV2ReplacementSnapshot{}, nil
@@ -1373,11 +1387,11 @@ func rollbackGraphV2ReplacementLaunch(store beads.Store, replacementRootID strin
 	replacementRootID = strings.TrimSpace(replacementRootID)
 	if replacementRootID != "" && replacementRootID != snapshot.rootID {
 		if _, err := sourceworkflow.CloseWorkflowSubtree(store, replacementRootID); err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("close replacement graph.v2 root %s: %w", replacementRootID, err))
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("close replacement formulas v2 root %s: %w", replacementRootID, err))
 		}
 	}
 	if err := sourceworkflow.RestoreWorkflowBeads(store, snapshot.snapshots); err != nil {
-		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore replaced graph.v2 root %s: %w", snapshot.rootID, err))
+		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore replaced formulas v2 root %s: %w", snapshot.rootID, err))
 	}
 	return rollbackErr
 }
@@ -1386,7 +1400,7 @@ func closeFailedGraphV2Roots(store beads.Store, recipe *formula.Recipe) error {
 	if store == nil || recipe == nil || len(recipe.Steps) == 0 {
 		return nil
 	}
-	key := strings.TrimSpace(recipe.Steps[0].Metadata["gc.graphv2_root_key"])
+	key := strings.TrimSpace(recipe.Steps[0].Metadata[beadmeta.Graphv2RootKeyMetadataKey])
 	if key == "" {
 		return nil
 	}
@@ -1394,16 +1408,16 @@ func closeFailedGraphV2Roots(store beads.Store, recipe *formula.Recipe) error {
 }
 
 func closeFailedGraphV2RootsByKey(store beads.Store, key string) error {
-	matches, err := store.ListByMetadata(map[string]string{"gc.graphv2_root_key": key}, 0, beads.WithBothTiers)
+	matches, err := store.ListByMetadata(map[string]string{beadmeta.Graphv2RootKeyMetadataKey: key}, 0, beads.WithBothTiers)
 	if err != nil {
-		return fmt.Errorf("looking up failed graph.v2 roots for key %s: %w", key, err)
+		return fmt.Errorf("looking up failed formulas v2 roots for key %s: %w", key, err)
 	}
 	for _, root := range matches {
 		if root.Status == "closed" || root.Metadata["molecule_failed"] != "true" {
 			continue
 		}
 		if _, err := sourceworkflow.CloseWorkflowSubtree(store, root.ID); err != nil {
-			return fmt.Errorf("closing failed graph.v2 root %s: %w", root.ID, err)
+			return fmt.Errorf("closing failed formulas v2 root %s: %w", root.ID, err)
 		}
 	}
 	return nil
@@ -1421,15 +1435,15 @@ func stampGraphV2RootMetadata(recipe *formula.Recipe, formulaName string, vars m
 	if root.Metadata == nil {
 		root.Metadata = make(map[string]string)
 	}
-	root.Metadata["gc.input_convoy_id"] = inputConvoyID
-	root.Metadata["gc.graphv2_root_key"] = graphv2.RootKey(inputConvoyID, formulaName, vars, scopeKind, scopeRef)
+	root.Metadata[beadmeta.InputConvoyIDMetadataKey] = inputConvoyID
+	root.Metadata[beadmeta.Graphv2RootKeyMetadataKey] = graphv2.RootKey(inputConvoyID, formulaName, vars, scopeKind, scopeRef)
 	runtimeVars := graphv2.RuntimeVarsMetadata(vars)
 	if runtimeVars == "" {
 		return
 	}
 	root.Metadata[graphv2.RuntimeVarsMetadataKey] = runtimeVars
 	for i := range recipe.Steps {
-		if recipe.Steps[i].Metadata["gc.kind"] != "drain" {
+		if recipe.Steps[i].Metadata[beadmeta.KindMetadataKey] != "drain" {
 			continue
 		}
 		if recipe.Steps[i].Metadata == nil {
@@ -1443,19 +1457,19 @@ func existingGraphV2Root(store beads.Store, recipe *formula.Recipe) (*molecule.R
 	if store == nil || recipe == nil || len(recipe.Steps) == 0 {
 		return nil, nil
 	}
-	key := strings.TrimSpace(recipe.Steps[0].Metadata["gc.graphv2_root_key"])
+	key := strings.TrimSpace(recipe.Steps[0].Metadata[beadmeta.Graphv2RootKeyMetadataKey])
 	if key == "" {
 		return nil, nil
 	}
-	matches, err := store.ListByMetadata(map[string]string{"gc.graphv2_root_key": key}, 2, beads.WithBothTiers)
+	matches, err := store.ListByMetadata(map[string]string{beadmeta.Graphv2RootKeyMetadataKey: key}, 2, beads.WithBothTiers)
 	if err != nil {
-		return nil, fmt.Errorf("looking up graph.v2 root key %s: %w", key, err)
+		return nil, fmt.Errorf("looking up formulas v2 root key %s: %w", key, err)
 	}
 	if len(matches) == 0 {
 		return nil, nil
 	}
 	if len(matches) > 1 {
-		return nil, fmt.Errorf("graph.v2 root key %s has multiple live roots: %s, %s", key, matches[0].ID, matches[1].ID)
+		return nil, fmt.Errorf("formulas v2 root key %s has multiple live roots: %s, %s", key, matches[0].ID, matches[1].ID)
 	}
 	return &molecule.Result{
 		RootID:        matches[0].ID,
@@ -1469,11 +1483,11 @@ func privatizeAttachedRootOnlyWisp(recipe *formula.Recipe, sourceBeadID string) 
 		return
 	}
 	root := &recipe.Steps[0]
-	if root.Metadata["gc.kind"] != "wisp" {
+	if root.Metadata[beadmeta.KindMetadataKey] != "wisp" {
 		return
 	}
 	root.Type = "molecule"
-	root.Metadata = mapsCloneWithout(root.Metadata, "gc.kind")
+	root.Metadata = mapsCloneWithout(root.Metadata, beadmeta.KindMetadataKey)
 }
 
 func mapsCloneWithout(in map[string]string, drop string) map[string]string {

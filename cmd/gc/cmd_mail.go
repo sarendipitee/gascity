@@ -859,7 +859,7 @@ func defaultMailIdentity() string {
 const controllerMailIdentity = "controller"
 
 func reservedMailSenderIdentity(identifier string) (string, bool) {
-	switch strings.TrimSpace(identifier) {
+	switch normalizeNamedSessionTarget(identifier) {
 	case "", "human":
 		return "human", true
 	case controllerMailIdentity:
@@ -1002,7 +1002,7 @@ func resolveMailRecipientIdentity(cityPath string, cfg *config.City, store beads
 }
 
 func resolveMailRecipientIdentityCached(cityPath string, cfg *config.City, store beads.Store, identifier string, cache *mailIdentitySessionCache) (string, error) {
-	if identifier == "" || identifier == "human" {
+	if normalized := normalizeNamedSessionTarget(identifier); normalized == "" || normalized == "human" {
 		return "human", nil
 	}
 	if target, matched, targetErr := resolveLiveConfiguredNamedMailTargetCached(store, identifier, cache); targetErr != nil {
@@ -1201,7 +1201,7 @@ func resolveMailTargets(store beads.Store, identifier string) (resolvedMailTarge
 }
 
 func resolveMailTargetsCached(store beads.Store, identifier string, cache *mailIdentitySessionCache) (resolvedMailTarget, error) {
-	if identifier == "" || identifier == "human" {
+	if normalized := normalizeNamedSessionTarget(identifier); normalized == "" || normalized == "human" {
 		return resolvedMailTarget{display: "human", recipients: []string{"human"}}, nil
 	}
 	sessionID, err := resolveSessionID(store, identifier)
@@ -1233,7 +1233,7 @@ func resolveMailTargetsCached(store beads.Store, identifier string, cache *mailI
 }
 
 func resolveMailTargetsForCommand(identifier string, stderr io.Writer, cmdName string) (resolvedMailTarget, bool) {
-	if identifier == "" || identifier == "human" {
+	if normalized := normalizeNamedSessionTarget(identifier); normalized == "" || normalized == "human" {
 		return resolvedMailTarget{display: "human", recipients: []string{"human"}}, true
 	}
 	if isStorelessMailProvider() {
@@ -1744,13 +1744,21 @@ func cmdMailSendJSON(args []string, notify bool, all bool, from string, to strin
 	// When -s/-m flags provide subject/body, use them.
 	if subject != "" || message != "" {
 		if all {
-			args = []string{subject, message}
+			allBody := message
+			if allBody == "" && len(args) > 0 {
+				allBody = args[0]
+			}
+			args = []string{subject, allBody}
 		} else {
 			if len(args) < 1 {
 				fmt.Fprintln(stderr, "gc mail send: missing recipient") //nolint:errcheck // best-effort stderr
 				return 1
 			}
-			args = []string{args[0], subject, message}
+			body := message
+			if body == "" && len(args) > 1 {
+				body = strings.Join(args[1:], " ")
+			}
+			args = []string{args[0], subject, body}
 		}
 	}
 	if !all && len(args) > 0 && store != nil {

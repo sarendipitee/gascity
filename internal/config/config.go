@@ -205,11 +205,14 @@ type City struct {
 	Events EventsConfig `toml:"events,omitempty"`
 	// Dolt configures optional dolt server connection overrides.
 	Dolt DoltConfig `toml:"dolt,omitempty"`
-	// Formulas configures formula directory settings.
+	// Formulas is the legacy [formulas] table; authored [formulas].dir is
+	// rejected at config load. Formulas live in the well-known formulas/
+	// directory.
 	Formulas FormulasConfig `toml:"formulas,omitempty"`
 	// Daemon configures controller daemon settings.
 	Daemon DaemonConfig `toml:"daemon,omitempty"`
-	// Orders configures order settings (skip list).
+	// Orders configures order settings: skip list, max_timeout cap, and
+	// per-order overrides.
 	Orders OrdersConfig `toml:"orders,omitempty"`
 	// API configures the optional HTTP API server.
 	API APIConfig `toml:"api,omitempty"`
@@ -523,8 +526,10 @@ type Rig struct {
 	// suspended. Once the user has explicitly suspended or resumed the
 	// rig via `gc rig suspend/resume`, the runtime state wins.
 	SuspendedOnStart bool `toml:"suspended_on_start,omitempty"`
-	// FormulasDir is a rig-local formula directory (Layer 4). Overrides
-	// pack formulas for this rig by filename.
+	// FormulasDir is a rig-local formula directory — the highest-priority
+	// formula layer, above city pack formulas, the city formulas/
+	// directory, and rig pack formulas. Overrides pack formulas for this
+	// rig by filename.
 	// Relative paths resolve against the city directory.
 	FormulasDir string `toml:"formulas_dir,omitempty"`
 	// Includes lists pack directories or URLs for this rig (V1 mechanism).
@@ -1166,8 +1171,8 @@ type Workspace struct {
 	// InstallAgentHooks lists provider names whose hooks should be installed
 	// into agent working directories. Agent-level overrides workspace-level
 	// (replace, not additive). Supported: "claude", "codex", "gemini",
-	// "antigravity", "kiro", "opencode", "groq", "cerebras", "copilot",
-	// "cursor", "pi", "omp", "kimi".
+	// "antigravity", "kiro", "opencode", "mimocode", "groq", "cerebras",
+	// "copilot", "cursor", "pi", "omp", "kimi".
 	InstallAgentHooks []string `toml:"install_agent_hooks,omitempty"`
 	// GlobalFragments lists named template fragments injected into every
 	// agent's rendered prompt. Applied before per-agent InjectFragments.
@@ -1248,30 +1253,6 @@ type BeadsConfig struct {
 	// and avoids bd ready/list flags that are unavailable or incomplete in bd
 	// 1.0.4.
 	BDCompatibility string `toml:"bd_compatibility,omitempty" jsonschema:"enum=bd-1.0.4,enum=bd-1.0.5"`
-	// Proxied routes bd through the pooling db-proxy (ProxiedServerMode,
-	// external backend) instead of direct ServerMode, eliminating the per-call
-	// bd→dolt connection churn (#1978: ~71 new connections/sec to the managed
-	// dolt server). Defaults to false = current direct ServerMode, byte-for-byte
-	// identical, so existing cities are unaffected. Requires a bd build that
-	// supports `bd init --proxied-server` (external); when the resolved bd lacks
-	// it, gascity falls back to server mode and a doctor check flags it, so a
-	// city paired with a standard bd never breaks.
-	Proxied *bool `toml:"proxied,omitempty" jsonschema:"default=false"`
-	// ProxyPoolSize is the warm backend-connection pool size the db-proxy keeps
-	// per (capabilities, database) key when Proxied is true. Defaults to 4.
-	// The proxy is shared per workspace root, so all agents of a scope share one
-	// warm pool; the size is frozen by the first bd invocation that spawns the
-	// proxy (changing it requires restarting the db-proxy-child).
-	ProxyPoolSize *int `toml:"proxy_pool_size,omitempty" jsonschema:"default=4"`
-	// ProxyIdleTimeout is how long a db-proxy-child stays alive with no active
-	// client before it shuts down. The bd default (30s) is tuned for one busy
-	// workspace; gascity touches many scopes sparsely (controller patrol probes
-	// every rig once per interval), starving each proxy below 30s so it spawns,
-	// serves one op, idle-dies, and respawns on the next touch — pure churn that
-	// never reaches the warm-pool steady state. A longer timeout keeps proxies
-	// warm across sparse bursts. Go duration string; defaults to "10m". Read by
-	// bd as BEADS_PROXY_IDLE_TIMEOUT.
-	ProxyIdleTimeout *string `toml:"proxy_idle_timeout,omitempty" jsonschema:"default=10m"`
 	// Policies defines per-bead-use storage and garbage-collection defaults.
 	// Policy names are interpreted by higher-level systems; unknown names are
 	// preserved so packs can stage future policy classes without breaking load.
@@ -1282,41 +1263,6 @@ type BeadsConfig struct {
 // Unset preserves the current default of enabled hooks.
 func (b BeadsConfig) EventHooksEnabled() bool {
 	return b.EventHooks == nil || *b.EventHooks
-}
-
-// ProxiedEnabled reports whether bd should run in pooling ProxiedServerMode.
-// Unset preserves the current default of direct ServerMode (false).
-func (b BeadsConfig) ProxiedEnabled() bool {
-	return b.Proxied != nil && *b.Proxied
-}
-
-// defaultBeadsProxyPoolSize is the warm pool size used when Proxied is on and
-// ProxyPoolSize is unset or non-positive.
-const defaultBeadsProxyPoolSize = 4
-
-// ProxyPoolSizeOrDefault returns the configured pool size, or the default when
-// unset/non-positive.
-func (b BeadsConfig) ProxyPoolSizeOrDefault() int {
-	if b.ProxyPoolSize != nil && *b.ProxyPoolSize > 0 {
-		return *b.ProxyPoolSize
-	}
-	return defaultBeadsProxyPoolSize
-}
-
-// defaultBeadsProxyIdleTimeout is the proxy idle-shutdown timeout used when
-// Proxied is on and ProxyIdleTimeout is unset/blank. Chosen well above the
-// controller patrol interval so warm proxies survive between sparse probes.
-const defaultBeadsProxyIdleTimeout = "10m"
-
-// ProxyIdleTimeoutOrDefault returns the configured proxy idle timeout, or the
-// default when unset/blank.
-func (b BeadsConfig) ProxyIdleTimeoutOrDefault() string {
-	if b.ProxyIdleTimeout != nil {
-		if v := strings.TrimSpace(*b.ProxyIdleTimeout); v != "" {
-			return v
-		}
-	}
-	return defaultBeadsProxyIdleTimeout
 }
 
 const (
@@ -1360,8 +1306,10 @@ type BeadPolicyConfig struct {
 	Storage string `toml:"storage,omitempty" jsonschema:"enum=history,enum=no_history,enum=ephemeral"`
 	// DeleteAfterClose deletes matching GC-owned beads after they have been
 	// closed for this duration. Accepts Go duration syntax plus whole-day "d"
-	// units, e.g. "7d" or "1d12h". Empty defers to any controller-managed
-	// default for the policy type (e.g. order_tracking defaults to 7d).
+	// units, e.g. "7d" or "1d12h". ApplyBeadPolicyDefaults fills in a
+	// non-empty default for recognized policy types (order_tracking: "7d"),
+	// so this field is populated after config load even when the city.toml
+	// omits it.
 	DeleteAfterClose string `toml:"delete_after_close,omitempty"`
 }
 
@@ -1779,6 +1727,11 @@ type DoltConfig struct {
 	// 1 enables archive compaction (higher CPU on startup).
 	// nil (omitted) defaults to 0.
 	ArchiveLevel *int `toml:"archive_level,omitempty" jsonschema:"default=0"`
+	// AutoGCEnabled toggles Dolt's incremental auto-GC on the managed
+	// sql-server. Auto-GC bounds the noms journal so it never reaches
+	// GB scale, which shrinks both the unclean-stop corruption window
+	// and the recovery blast radius. nil (omitted) defaults to true.
+	AutoGCEnabled *bool `toml:"auto_gc_enabled,omitempty" jsonschema:"default=true"`
 	// MaxConnections overrides the managed Dolt listener max_connections.
 	// 0 means use the managed default.
 	MaxConnections int `toml:"max_connections,omitempty" jsonschema:"default=256"`
@@ -1788,6 +1741,24 @@ type DoltConfig struct {
 	// WriteTimeoutMillis overrides the managed Dolt listener write_timeout_millis.
 	// 0 means use the managed default.
 	WriteTimeoutMillis int `toml:"write_timeout_millis,omitempty" jsonschema:"default=300000"`
+	// DoltLockReleaseTimeout is how long managed-dolt lifecycle operations
+	// wait for dolt's on-disk exclusive store locks (the root-level
+	// `<data_dir>/.dolt/noms/LOCK` and per-database
+	// `<data_dir>/<db>/.dolt/noms/LOCK` forms) to be released by a prior
+	// server process before failing closed. The start path refuses to launch a
+	// second `dolt sql-server` against a data_dir whose lock is still held —
+	// a prior instance that is shutting down holds the lock until its chunk
+	// journal is flushed, and binding before release corrupts the journal
+	// (see gastownhall/gascity#3174). The stop path uses the same window to
+	// wait for lock release after process exit before reporting success.
+	// Duration string (e.g., "1m", "90s"). Defaults to "1m", which covers
+	// the flush window of multi-GB journals on commodity SSDs. Set to "0s"
+	// to probe once with no wait (still fail-closed when held). Negative
+	// values are rejected at config load. The managed lifecycle also
+	// projects this value into the gc-beads-bd.sh shell fallback as
+	// GC_DOLT_LOCK_RELEASE_TIMEOUT_MS (milliseconds), so both paths honor
+	// the configured window.
+	DoltLockReleaseTimeout string `toml:"dolt_lock_release_timeout,omitempty" jsonschema:"default=1m"`
 }
 
 // EffectiveArchiveLevel returns the configured Dolt archive level, defaulting
@@ -1797,6 +1768,25 @@ func (d DoltConfig) EffectiveArchiveLevel() int {
 		return *d.ArchiveLevel
 	}
 	return 0
+}
+
+// EffectiveAutoGCEnabled returns whether Dolt incremental auto-GC is enabled
+// for the managed sql-server, defaulting omitted values to true.
+func (d DoltConfig) EffectiveAutoGCEnabled() bool {
+	if d.AutoGCEnabled != nil {
+		return *d.AutoGCEnabled
+	}
+	return true
+}
+
+// AutoGCSysVar returns the dolt_auto_gc_enabled system-variable value
+// ("ON"/"OFF") matching EffectiveAutoGCEnabled, so the config writer and the
+// doctor contract derive it from one place.
+func (d DoltConfig) AutoGCSysVar() string {
+	if d.EffectiveAutoGCEnabled() {
+		return "ON"
+	}
+	return "OFF"
 }
 
 // EffectiveMaxConnections returns the managed Dolt listener max_connections.
@@ -1823,15 +1813,45 @@ func (d DoltConfig) EffectiveWriteTimeoutMillis() int {
 	return DefaultDoltWriteTimeoutMillis
 }
 
-// FormulasConfig holds legacy formula directory settings.
+// DefaultDoltLockReleaseTimeout is the wait window for dolt's on-disk
+// exclusive store lock to be released when no value is configured. 1m covers
+// the longest observed clean-shutdown flush of a multi-GB chunk journal on
+// commodity SSDs (gastownhall/gascity#3174) while still bounding how long a
+// start or stop can stall on a wedged holder before failing closed.
+const DefaultDoltLockReleaseTimeout = time.Minute
+
+// DoltLockReleaseTimeoutDuration returns the configured wait window for
+// dolt's on-disk exclusive lock as a time.Duration. Defaults to
+// DefaultDoltLockReleaseTimeout (1m) when empty or unparseable. Zero means a
+// single probe with no wait — the operation still fails closed when the lock
+// is held. Negative values pass through unchanged: callers that route
+// through loadCityConfig already reject them via
+// ValidateNonNegativeDurations. Mirrors DoltStopTimeoutDuration's policy.
+func (d *DoltConfig) DoltLockReleaseTimeoutDuration() time.Duration {
+	if d.DoltLockReleaseTimeout == "" {
+		return DefaultDoltLockReleaseTimeout
+	}
+	dur, err := time.ParseDuration(d.DoltLockReleaseTimeout)
+	if err != nil {
+		return DefaultDoltLockReleaseTimeout
+	}
+	return dur
+}
+
+// FormulasConfig is the legacy [formulas] table with no supported fields:
+// authored [formulas].dir is rejected at config load (use the well-known
+// formulas/ directory instead), and gc doctor flags any declaration as a
+// fixable v2-formulas-dir error.
 type FormulasConfig struct {
-	// Dir is the legacy path to the formulas directory. PackV2 cities and
-	// packs use the well-known formulas/ directory; authored [formulas].dir
-	// is rejected for schema 2 configs.
+	// Dir is the legacy path to the formulas directory. Authored
+	// [formulas].dir is rejected at config load; PackV2 cities and packs
+	// use the well-known formulas/ directory.
 	Dir string `toml:"dir,omitempty" jsonschema:"-"`
 }
 
-// OrdersConfig holds order settings.
+// OrdersConfig holds order settings for orders discovered from flat TOML
+// files (one file per order) in the orders/ directory beside each formula
+// layer (packs, the city directory, and rig-local layers).
 type OrdersConfig struct {
 	// Skip lists order names to exclude from scanning.
 	Skip []string `toml:"skip,omitempty"`
@@ -2807,18 +2827,28 @@ func mergeAgentDefaultsAliasPreferCanonical(dst *AgentDefaults, src AgentDefault
 	}
 }
 
-func normalizeAgentDefaultsAlias(cfg *City, meta toml.MetaData) {
+// FoldAgentDefaultsAlias folds a legacy [agents] alias table into the canonical
+// [agent_defaults] target so a struct round-trip that emits only
+// [agent_defaults] does not silently drop the alias. When both tables are
+// present the canonical values win on overlapping keys and the alias only fills
+// gaps; when only the alias is present its values become the canonical defaults.
+// meta must be the toml.MetaData from decoding the same document. Callers are
+// responsible for clearing their own alias field afterward.
+func FoldAgentDefaultsAlias(canonical *AgentDefaults, alias AgentDefaults, meta toml.MetaData) {
 	if meta.IsDefined("agent_defaults") {
 		if meta.IsDefined("agents") {
-			mergeAgentDefaultsAliasPreferCanonical(&cfg.AgentDefaults, cfg.AgentsDefaults, meta)
+			mergeAgentDefaultsAliasPreferCanonical(canonical, alias, meta)
 		}
-		cfg.AgentsDefaults = AgentDefaults{}
 		return
 	}
 	if meta.IsDefined("agents") {
-		cfg.AgentDefaults = cfg.AgentsDefaults
-		cfg.AgentsDefaults = AgentDefaults{}
+		*canonical = alias
 	}
+}
+
+func normalizeAgentDefaultsAlias(cfg *City, meta toml.MetaData) {
+	FoldAgentDefaultsAlias(&cfg.AgentDefaults, cfg.AgentsDefaults, meta)
+	cfg.AgentsDefaults = AgentDefaults{}
 }
 
 const (
@@ -2863,6 +2893,9 @@ type Agent struct {
 	// PreStart is a list of shell commands run before session creation.
 	// Commands run on the target filesystem: locally for tmux, inside the
 	// pod/container for exec providers. Template variables same as session_setup.
+	// On failure, the last 4 KiB of the command's stdout/stderr is included
+	// in the error and may appear in controller and reconciler logs; avoid
+	// set -x or echoing secrets in setup commands.
 	PreStart []string `toml:"pre_start,omitempty"`
 	// PromptTemplate is the path to this agent's prompt template file.
 	// Relative paths resolve against the city directory.
@@ -3022,18 +3055,26 @@ type Agent struct {
 	// {{.Session}}, {{.Agent}}, {{.AgentBase}}, {{.Rig}}, {{.RigRoot}},
 	// {{.CityRoot}}, {{.CityName}}, {{.WorkDir}}.
 	// Commands run in gc's process (not inside the agent session) via sh -c.
+	// On failure, the last 4 KiB of the command's stdout/stderr is included
+	// in the error and may appear in controller and reconciler logs; avoid
+	// set -x or echoing secrets in setup commands.
 	SessionSetup []string `toml:"session_setup,omitempty"`
 	// SessionSetupScript is the path to a script run after session_setup commands.
 	// Relative paths resolve against the declaring config file's directory
 	// (pack-safe). Paths prefixed with "//" resolve against the city root.
 	// The script receives context via environment variables (GC_SESSION plus
-	// existing GC_* vars).
+	// existing GC_* vars). On failure, the last 4 KiB of the script's
+	// stdout/stderr is included in the error and may appear in controller
+	// and reconciler logs; avoid set -x or echoing secrets in setup scripts.
 	SessionSetupScript string `toml:"session_setup_script,omitempty"`
 	// SessionLive is a list of shell commands that are safe to re-apply
 	// without restarting the agent. Run at startup (after session_setup)
 	// and re-applied on config change without triggering a restart.
 	// Must be idempotent. Typical use: tmux theming, keybindings, status bars.
 	// Same template placeholders as session_setup.
+	// On failure, the last 4 KiB of the command's stdout/stderr is included
+	// in the error and may appear in controller and reconciler logs; avoid
+	// set -x or echoing secrets in setup commands.
 	SessionLive []string `toml:"session_live,omitempty"`
 	// OverlayDir is a directory whose contents are recursively copied (additive)
 	// into the agent's working directory at startup. Existing files are not
@@ -3097,11 +3138,6 @@ type Agent struct {
 	// attachment (e.g., tmux attach). When false, the agent can use a
 	// lighter runtime (subprocess instead of tmux). Defaults to true.
 	Attach *bool `toml:"attach,omitempty"`
-	// Fallback marks this agent as a fallback definition. During pack
-	// composition, a non-fallback agent with the same name wins silently.
-	// When two fallbacks collide, the first loaded (depth-first) wins.
-	// See docs/guides/shareable-packs.md for pack layout guidance.
-	Fallback bool `toml:"fallback,omitempty"`
 	// DependsOn lists agent names that must be awake before this agent wakes.
 	// Used for dependency-ordered startup and shutdown. Validated for cycles
 	// at config load time.
@@ -4083,6 +4119,32 @@ func ApplyAgentDefaults(cfg *City) {
 	}
 }
 
+// DefaultOrderTrackingDeleteAfterClose is the canonical default closed-bead
+// TTL for the order_tracking policy. Applied by ApplyBeadPolicyDefaults when
+// [beads.policies.order_tracking].delete_after_close is unset in city.toml.
+// cmd/gc/order_dispatch.go derives its runtime fallback from this constant so
+// both values stay in sync.
+const DefaultOrderTrackingDeleteAfterClose = "7d"
+
+// ApplyBeadPolicyDefaults fills in controller-managed defaults for bead
+// policies that have sane non-empty defaults. Call after all config
+// composition layers have been merged so user-supplied values take
+// precedence. Currently:
+//   - [beads.policies.order_tracking].delete_after_close defaults to "7d".
+func ApplyBeadPolicyDefaults(cfg *City) {
+	if cfg == nil {
+		return
+	}
+	if cfg.Beads.Policies == nil {
+		cfg.Beads.Policies = make(map[string]BeadPolicyConfig)
+	}
+	p := cfg.Beads.Policies["order_tracking"]
+	if p.DeleteAfterClose == "" {
+		p.DeleteAfterClose = DefaultOrderTrackingDeleteAfterClose
+		cfg.Beads.Policies["order_tracking"] = p
+	}
+}
+
 // applyAgentSharedAttachmentDefaults preserves legacy derived attachment-list
 // state in SharedSkills/SharedMCP for compatibility checks. The active skill
 // and MCP materializers do not consume these fields.
@@ -4291,12 +4353,17 @@ func configuredProviderOrder(providers map[string]ProviderSpec) []string {
 	return order
 }
 
+// validationAgentKey identifies the canonical route template for an agent.
+type validationAgentKey struct{ dir, binding, name string }
+
 // ValidateAgents checks agent configurations for errors. It returns an error
-// if any agent is missing required fields, has duplicate identities, or has
-// invalid pool bounds. Uniqueness is keyed on (dir, name) — the same name
-// in different dirs is allowed.
+// if any agent is missing required fields, has duplicate canonical identities,
+// or has invalid pool bounds. Uniqueness is keyed on (dir, binding, name), so
+// the same bare name may exist in the same scope when imports qualify it under
+// different bindings.
 func ValidateAgents(agents []Agent) error {
-	seen := make(map[agentKey]int, len(agents))
+	seen := make(map[validationAgentKey]int, len(agents))
+	layoutSeen := make(map[agentKey][]int, len(agents))
 	for i, a := range agents {
 		if a.Name == "" {
 			return fmt.Errorf("agent[%d]: name is required", i)
@@ -4304,7 +4371,15 @@ func ValidateAgents(agents []Agent) error {
 		if !validAgentName.MatchString(a.Name) {
 			return fmt.Errorf("agent %q: name must match [a-zA-Z0-9][a-zA-Z0-9_-]* (no spaces, slashes, or dots)", a.Name)
 		}
-		key := agentKey{dir: a.Dir, name: a.Name}
+		layoutKey := agentKey{dir: a.Dir, name: a.Name}
+		for _, priorIdx := range layoutSeen[layoutKey] {
+			if _, _, ok := orderV1V2(agents[priorIdx], a); ok {
+				return formatDuplicateAgentError(agents[priorIdx], a)
+			}
+		}
+		layoutSeen[layoutKey] = append(layoutSeen[layoutKey], i)
+
+		key := validationAgentKey{dir: a.Dir, binding: a.BindingName, name: a.Name}
 		if priorIdx, dup := seen[key]; dup {
 			return formatDuplicateAgentError(agents[priorIdx], a)
 		}
@@ -4610,7 +4685,7 @@ func DefaultCity(name string) City {
 
 func defaultInstallAgentHooksForProvider(provider string) []string {
 	switch strings.TrimSpace(provider) {
-	case "kiro", "opencode", "groq", "kimi":
+	case "kiro", "opencode", "mimocode", "groq", "kimi":
 		return []string{strings.TrimSpace(provider)}
 	default:
 		return nil

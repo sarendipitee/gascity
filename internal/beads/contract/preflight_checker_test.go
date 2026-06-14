@@ -358,3 +358,36 @@ func assertPreflightReadOnly(t *testing.T, fs *fsys.Fake) {
 		}
 	}
 }
+
+// TestCheckVersionCompatSourceBuild verifies that a source (local-path/replace)
+// build of the linked beads library — which reports "(devel)" as its module
+// version — does not take the native store offline. The schema version is the
+// real compatibility signal; only a *confirmed* version mismatch should fail.
+func TestCheckVersionCompatSourceBuild(t *testing.T) {
+	validCtx := func(bdVersion string) PreflightBDContext {
+		return PreflightBDContext{Backend: "dolt", DoltMode: "server", BDVersion: bdVersion, SchemaVersion: 50}
+	}
+	tests := []struct {
+		name       string
+		libVersion string
+		ctx        PreflightBDContext
+		want       PreflightCheckState
+	}{
+		{"source build reports (devel) — schema is the signal, pass", "(devel)", validCtx("1.0.5"), PreflightCheckPass},
+		{"confirmed version mismatch still fails", "1.0.5", validCtx("1.0.4"), PreflightCheckFail},
+		{"matching versions pass", "1.0.5", validCtx("1.0.5"), PreflightCheckPass},
+		{"missing bd version is unconfirmable — warn", "1.0.5", validCtx(""), PreflightCheckWarn},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := PreflightChecker{BeadsLibraryVersion: tt.libVersion}
+			got := c.checkVersionCompat(tt.ctx, nil)
+			if got.ID != PreflightCheckVersionCompat {
+				t.Fatalf("ID = %q, want %q", got.ID, PreflightCheckVersionCompat)
+			}
+			if got.State != tt.want {
+				t.Fatalf("state = %q, want %q (summary: %q)", got.State, tt.want, got.Summary)
+			}
+		})
+	}
+}

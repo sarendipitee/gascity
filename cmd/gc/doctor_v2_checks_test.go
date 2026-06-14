@@ -1449,6 +1449,86 @@ prefix = "lc"
 	}
 }
 
+// Regression test for ga-lurp5d: the workspace-identity fix rewrites
+// city.toml; when city.toml is a symlink (e.g., into a checked-out repo)
+// the rewrite must write through the link instead of replacing it with a
+// regular file.
+func TestV2WorkspaceNameFixWritesThroughCityTomlSymlink(t *testing.T) {
+	t.Parallel()
+
+	cityDir := t.TempDir()
+	checkoutDir := filepath.Join(cityDir, "checkout")
+	if err := os.MkdirAll(checkoutDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(checkoutDir, "city.toml")
+	if err := os.WriteFile(target, []byte("[workspace]\nname = \"legacy-city\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(cityDir, "city.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	d := &doctor.Doctor{}
+	registerV2DeprecationChecks(d)
+	d.Run(&doctor.CheckContext{CityPath: cityDir, Verbose: true}, &buf, true)
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("city.toml symlink was replaced by a %v entry; fix must write through the link", info.Mode())
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile target: %v", err)
+	}
+	if strings.Contains(string(data), "legacy-city") {
+		t.Fatalf("workspace identity should be migrated out of the symlink target:\n%s", data)
+	}
+}
+
+func TestV2FormulasDirFixWritesThroughCityTomlSymlink(t *testing.T) {
+	t.Parallel()
+
+	cityDir := t.TempDir()
+	checkoutDir := filepath.Join(cityDir, "checkout")
+	if err := os.MkdirAll(checkoutDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(checkoutDir, "city.toml")
+	if err := os.WriteFile(target, []byte("[formulas]\ndir = \"formulas\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(cityDir, "city.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	d := &doctor.Doctor{}
+	registerV2DeprecationChecks(d)
+	d.Run(&doctor.CheckContext{CityPath: cityDir, Verbose: true}, &buf, true)
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("city.toml symlink was replaced by a %v entry; fix must write through the link", info.Mode())
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile target: %v", err)
+	}
+	if strings.Contains(string(data), `dir = "formulas"`) {
+		t.Fatalf("default formulas dir declaration should be stripped from the symlink target:\n%s", data)
+	}
+}
+
 func TestV2DeprecationChecksWarnOnLegacyTemplateSuffix(t *testing.T) {
 	t.Parallel()
 
@@ -1548,10 +1628,10 @@ prompt_template = "prompts/mayor.md"
 
 // TestV2DeprecationFixSurfacesMigrateWarnings guards the codex review
 // finding on PR #1880: when migrate.Apply emits warnings about
-// behavior-affecting fields it had to drop (e.g. legacy [[agent]] entries
-// with fallback = true), doctor --fix must surface them. Without this,
-// the next gc doctor run sees a green check and the manual follow-up is
-// lost forever.
+// behavior-affecting fields it had to drop (e.g. a legacy [formulas].dir
+// override), doctor --fix must surface them. Without this, the next
+// gc doctor run sees a green check and the manual follow-up is lost
+// forever.
 func TestV2DeprecationFixSurfacesMigrateWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -1560,10 +1640,12 @@ func TestV2DeprecationFixSurfacesMigrateWarnings(t *testing.T) {
 [workspace]
 name = "legacy-city"
 
+[formulas]
+dir = "my-formulas"
+
 [[agent]]
 name = "mayor"
 prompt_template = "prompts/mayor.md"
-fallback = true
 `)
 	writeDoctorFile(t, cityDir, "prompts/mayor.md", "Hello {{.Agent}}\n")
 
@@ -1573,11 +1655,11 @@ fallback = true
 	}
 
 	got := sink.String()
-	if !strings.Contains(got, "fallback") {
-		t.Fatalf("expected migrate warnings about dropped fallback field to be surfaced; got:\n%s", got)
+	if !strings.Contains(got, "formulas.dir") {
+		t.Fatalf("expected migrate warnings about dropped formulas.dir to be surfaced; got:\n%s", got)
 	}
-	if !strings.Contains(got, "mayor") {
-		t.Fatalf("expected the agent name to appear in the warning; got:\n%s", got)
+	if !strings.Contains(got, "my-formulas") {
+		t.Fatalf("expected the dropped value to appear in the warning; got:\n%s", got)
 	}
 }
 
@@ -1589,10 +1671,12 @@ func TestV2DeprecationDoctorFixSurfacesMigrateWarningsInOutput(t *testing.T) {
 [workspace]
 name = "legacy-city"
 
+[formulas]
+dir = "my-formulas"
+
 [[agent]]
 name = "mayor"
 prompt_template = "prompts/mayor.md"
-fallback = true
 `)
 	writeDoctorFile(t, cityDir, "prompts/mayor.md", "Hello {{.Agent}}\n")
 
@@ -1602,7 +1686,7 @@ fallback = true
 	d.Run(&doctor.CheckContext{CityPath: cityDir, Verbose: true}, &buf, true)
 
 	got := buf.String()
-	if !strings.Contains(got, "fallback") {
+	if !strings.Contains(got, "formulas.dir") {
 		t.Fatalf("expected doctor --fix output to include migrate warning; got:\n%s", got)
 	}
 	if !strings.Contains(got, "✓ v2-agent-format") {

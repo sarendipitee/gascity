@@ -672,6 +672,7 @@ func TestGcBdSuppressesBdAutoExportInChildEnv(t *testing.T) {
 	setCwd(t, cityDir)
 	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
 name = "demo"
+includes = [".gc/system/packs/core", ".gc/system/packs/bd"]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2293,7 +2294,7 @@ func TestBdMutationWriteID(t *testing.T) {
 			}
 		}
 	})
-	t.Run("returns false for read or unrecognised subcommands", func(t *testing.T) {
+	t.Run("returns false for read or unrecognized subcommands", func(t *testing.T) {
 		for _, args := range [][]string{
 			{"show", "gcy-dv7"},
 			{"list", "-s", "open"},

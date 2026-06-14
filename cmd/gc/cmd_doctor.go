@@ -36,10 +36,13 @@ func newDoctorCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Checks city structure, config validity, binary dependencies (tmux, git,
 bd, dolt), controller status, agent sessions, zombie/orphan sessions,
-bead stores, Dolt server health, event log integrity, and per-rig
-health. Use --fix for the canonical remediation path, including any
-safe mechanical PackV1-to-PackV2 rewrites that are available on this
-branch.`,
+bead stores, Dolt server health, event log integrity, formula compiler
+requirements (deprecated contract = "graph.v2" opt-ins, missing
+[requires] formula_compiler = ">=2.0.0" declarations, and requirements
+the host's [daemon] formula_v2 setting cannot satisfy), v2 config
+deprecations such as legacy [formulas].dir, and per-rig health. Use
+--fix for the canonical remediation path, including any safe mechanical
+PackV1-to-PackV2 rewrites that are available on this branch.`,
 		Example: `  gc doctor
   gc doctor --fix
   gc doctor --verbose
@@ -223,15 +226,16 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		register(doctor.NewFormulaRequirementsCheck(cfg, cityPath))
 		register(doctor.NewNamedAlwaysMinConflictCheck(cfg))
 		register(doctor.NewInstructionsFileCheck(cfg, cityPath))
+		register(doctor.NewServiceSecretsPermsCheck(cfg, cityPath))
 		register(doctor.NewSkillCollisionCheck(cfg, cityPath))
 		register(doctor.NewOrderFiringCurrentCheck(cfg, cityPath, doctor.WithOrderFiringCurrentLastRunFunc(doctorOrderFiringCurrentLastRunFunc(cityPath, cfg, opts.Stderr))))
 		register(newCodexHooksDriftCheck(codexHookWorkDirs(cityPath, cfg)))
-		register(newBeadsProxiedCapabilityCheck(cfg))
 		register(doctor.NewRigPackCoverageCheck(cfg, cityPath))
 		register(newMCPConfigDoctorCheck(cityPath, cfg, exec.LookPath))
 		register(newMCPSharedTargetDoctorCheck(cityPath, cfg, exec.LookPath))
 	}
 	if _, rawCfgErr := loadCityConfigForEditFS(fsys.OSFS{}, filepath.Join(cityPath, "city.toml")); rawCfgErr == nil {
+		register(newBuiltinIncludeDoctorCheck(cityPath))
 		register(newImportStateDoctorCheck(cityPath))
 		register(newJsonlArchiveDoctorCheck(cityPath))
 	}
@@ -310,6 +314,10 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	// invocation without retention. This check warns before the directory
 	// fills the disk and cascades into broken dolt writes.
 	register(doctor.NewBdBackupSizeCheckForConfig(cityPath, cfg, cfgErr))
+	// Stale bd backup state: corrupt-store quarantines that were never
+	// reclaimed and dolt-backup.json registrations pointing at deleted
+	// paths (ga-yfbs28).
+	register(doctor.NewBdBackupStateCheckForConfig(cityPath, cfg, cfgErr))
 	// Worktree checks deliberately run even when cfgErr != nil — they
 	// only need the city path, and a broken city.toml is exactly when
 	// silent disk-fill is most likely. The zero-value DoctorConfig

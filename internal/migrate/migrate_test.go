@@ -28,7 +28,6 @@ provider = "claude"
 prompt_template = "prompts/mayor.md"
 overlay_dir = "overlays/mayor"
 namepool = "namepools/mayor.txt"
-fallback = true
 
 [[agent]]
 name = "worker"
@@ -39,13 +38,8 @@ prompt_template = "prompts/worker.md"
 	writeFile(t, cityDir, "overlays/mayor/CLAUDE.md", "city overlay\n")
 	writeFile(t, cityDir, "namepools/mayor.txt", "Ada\nGrace\n")
 
-	report, err := Apply(cityDir, Options{})
-	if err != nil {
+	if _, err := Apply(cityDir, Options{}); err != nil {
 		t.Fatalf("Apply: %v", err)
-	}
-
-	if len(report.Warnings) == 0 {
-		t.Fatal("expected fallback warning, got none")
 	}
 
 	packToml := readFile(t, filepath.Join(cityDir, "pack.toml"))
@@ -306,6 +300,36 @@ legacy_unknown = "silently dropped before strict migration validation"
 	}
 	if got := readFile(t, filepath.Join(cityDir, "pack.toml")); got != beforePack {
 		t.Fatalf("pack.toml changed after validation failure:\n%s", got)
+	}
+}
+
+func TestMigrateRejectsUnknownCityTomlKeys(t *testing.T) {
+	t.Parallel()
+
+	cityDir := t.TempDir()
+	writeFile(t, cityDir, "city.toml", `
+[workspace]
+name = "legacy-city"
+includes = ["../packs/gastown"]
+
+[agent_defaults]
+future_unknown = "written by a newer gc, silently dropped by this rewrite"
+`)
+
+	beforeCity := readFile(t, filepath.Join(cityDir, "city.toml"))
+
+	_, err := Apply(cityDir, Options{})
+	if err == nil {
+		t.Fatal("expected Apply to refuse a city.toml with unknown keys")
+	}
+	if !strings.Contains(err.Error(), "agent_defaults.future_unknown") {
+		t.Fatalf("error = %v, want the unknown key named", err)
+	}
+	if !strings.Contains(err.Error(), "refusing to rewrite") {
+		t.Fatalf("error = %v, want key-loss refusal with remediation", err)
+	}
+	if got := readFile(t, filepath.Join(cityDir, "city.toml")); got != beforeCity {
+		t.Fatalf("city.toml changed after refusal:\n%s", got)
 	}
 }
 
@@ -917,7 +941,6 @@ func TestAgentConfigFromAgentCoversPersistedFields(t *testing.T) {
 		InjectFragments:        []string{"frag1"},
 		AppendFragments:        []string{"append1"},
 		Attach:                 &trueVal,
-		Fallback:               true,
 		DependsOn:              []string{"other-agent"},
 		ResumeCommand:          "claude --resume {{.SessionKey}} --dangerously",
 		WakeMode:               "fresh",
@@ -935,7 +958,6 @@ func TestAgentConfigFromAgentCoversPersistedFields(t *testing.T) {
 		"InheritedDefaultSlingFormula": true,
 		"InheritedAppendFragments":     true,
 		"Implicit":                     true,
-		"Fallback":                     true,
 		"SleepAfterIdleSource":         true,
 		"PoolName":                     true,
 		"BindingName":                  true,

@@ -7,8 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The bundled gastown pack is now a Go module dependency, not a checked-in
+  copy.** `examples/gastown/packs/gastown` is gone; the gc binary embeds the
+  pack from `github.com/gastownhall/gascity-packs` (pinned in go.mod to the
+  registry release commit), and the example city composes gastown through
+  the pinned public registry import plus a committed `packs.lock` — the same
+  shape `gc init` writes — resolved offline from the bundled synthetic
+  cache. `scripts/update-bundled-gastown-pack` no longer writes a vendored
+  tree; it bumps the go.mod pin, the `PublicGastownPack*` constants, and the
+  example pins from the latest registry release, and `--check` verifies the
+  pinned module content against the registry hash. The gastown integration
+  tests in `examples/gastown` now run against the module-embedded bytes, so
+  a runtime/pack mismatch fails in gascity CI.
+
+- **The bundled maintenance pack was folded into the core pack, and builtin
+  packs are no longer implicitly included.** There is now one builtin pack —
+  core — carrying everything any city needs: the gc-* skills, default worker
+  prompts, core formulas, the mechanical housekeeping orders that used to
+  ship in the maintenance pack (gate-sweep, orphan-sweep, cross-rig-deps,
+  order-tracking-sweep, spawn-storm-detect, prune-branches, wisp-compact,
+  nudge-mail-sweep, nudge-on-route, cascade-nudge-on-blocker-close), the
+  check-binaries doctor check, and the per-provider hook overlays. Config
+  load no longer splices builtin packs into composition: `gc init` writes
+  explicit includes into city.toml (`[workspace] includes =
+  [".gc/system/packs/core", ".gc/system/packs/bd"]`; the bd entry only for
+  bd-provider cities), and the new fixable `builtin-pack-includes` doctor
+  check repairs missing includes and removes stale
+  `.gc/system/packs/maintenance` references. Config load still self-heals
+  the materialized `.gc/system/packs` content and warns once per city when a
+  required builtin include is missing. **Migration:** run
+  `gc doctor --fix` once per existing city; stale materialized maintenance
+  directories are pruned automatically.
+- **The implicit fallback dog is gone, and the `fallback` agent field was
+  removed.** The gastown pack now owns its dog pool outright
+  (`agents/dog/`, themed, with `mol-shutdown-dance`), and the dolt pack
+  keeps its own dolt dog for Dolt maintenance formulas. The
+  fallback-agent resolution mechanism (`fallback = true`, non-fallback
+  wins, first-loaded wins) was removed: cross-pack agent name collisions
+  are now hard errors, and a stale `fallback` key in a V2
+  `agents/<name>/agent.toml` is ignored while a V1 inline `[[agent]]`
+  entry fails the pack's unknown-key gate. External packs that relied on
+  the bundled fallback dog must define their own worker pool (or route
+  work to a pool they ship themselves).
+
 ### Added
 
+- Proxy-process workspace services now receive `GC_SERVICE_SECRETS_DIR`
+  (`<GC_SERVICE_STATE_ROOT>/secrets`) in their environment, alongside the
+  existing `GC_SERVICE_*` variables. The directory is scaffolded at `0700`
+  by the service state-root setup and is the sanctioned home for
+  pack-managed credentials (bot tokens etc.), so pack services can rely on
+  the explicit contract instead of deriving the path from
+  `GC_SERVICE_STATE_ROOT`. See #3429.
 - `gc nudge drain --inject` now prepends a one-line current-time stamp
   (operator-local + UTC + epoch) to its `UserPromptSubmit` hook output, giving
   agents a live clock in context every turn. The local zone follows the host

@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
 )
 
 // Type categorizes formulas by their purpose.
@@ -1028,12 +1030,12 @@ func metadataRequiresGraphContract(metadata map[string]string) bool {
 		key := strings.TrimSpace(rawKey)
 		value := strings.TrimSpace(rawValue)
 		switch key {
-		case "gc.kind":
+		case beadmeta.KindMetadataKey:
 			switch value {
-			case "scope", "cleanup", "scope-check", "workflow-finalize", "retry", "retry-run", "retry-eval", "ralph", "run", "check", "drain":
+			case beadmeta.KindScope, beadmeta.KindCleanup, beadmeta.KindScopeCheck, beadmeta.KindWorkflowFinalize, beadmeta.KindRetry, beadmeta.KindRetryRun, beadmeta.KindRetryEval, beadmeta.KindRalph, beadmeta.KindRun, beadmeta.KindCheck, beadmeta.KindDrain:
 				return true
 			}
-		case "gc.scope_name", "gc.scope_role", "gc.scope_ref", "gc.continuation_group", "gc.on_fail":
+		case beadmeta.ScopeNameMetadataKey, beadmeta.ScopeRoleMetadataKey, beadmeta.ScopeRefMetadataKey, beadmeta.ContinuationGroupMetadataKey, beadmeta.OnFailMetadataKey:
 			return true
 		}
 	}
@@ -1510,7 +1512,7 @@ func validateRetry(spec *RetrySpec, errs *[]string, prefix string, step *Step) {
 
 func validateDrain(spec *DrainSpec, errs *[]string, prefix string, step *Step, graphV2 bool) {
 	if !graphV2 {
-		*errs = append(*errs, fmt.Sprintf("%s.drain: drain requires contract = \"graph.v2\"", prefix))
+		*errs = append(*errs, fmt.Sprintf("%s.drain: drain steps must declare the formulas v2 contract ([requires] formula_compiler = \">=2.0.0\")", prefix))
 	}
 	switch spec.Context {
 	case "", "separate":
@@ -1579,7 +1581,7 @@ func validateDrain(spec *DrainSpec, errs *[]string, prefix string, step *Step, g
 	if step.Timeout != "" {
 		*errs = append(*errs, fmt.Sprintf("%s: drain cannot be combined with timeout", prefix))
 	}
-	if step.Metadata["gc.kind"] != "" {
+	if step.Metadata[beadmeta.KindMetadataKey] != "" {
 		*errs = append(*errs, fmt.Sprintf("%s.metadata.gc.kind: drain controls own gc.kind metadata", prefix))
 	}
 }

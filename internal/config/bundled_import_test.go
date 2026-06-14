@@ -115,6 +115,16 @@ func TestResolveImportPackRefAcceptsPublicGastownSyntheticCache(t *testing.T) {
 	}
 }
 
+func TestPublicGastownPackSourceMapsToBundledGastownPack(t *testing.T) {
+	name, ok := builtinpacks.NameForSource(PublicGastownPackSource)
+	if !ok {
+		t.Fatalf("PublicGastownPackSource %q is not recognized as a bundled pack source", PublicGastownPackSource)
+	}
+	if name != "gastown" {
+		t.Fatalf("PublicGastownPackSource maps to bundled pack %q, want gastown", name)
+	}
+}
+
 func TestResolvePackRefServesLockedImportEvenWithGitRef(t *testing.T) {
 	// Regression test: a workspace.includes entry with an explicit "#ref"
 	// (e.g., "#main") previously bypassed the import lock and required the
@@ -230,7 +240,7 @@ content_hash = "sha256:deadbeef"
 		switch strings.Join(args, " ") {
 		case "rev-parse HEAD":
 			return commit, nil
-		case "status --porcelain --ignored":
+		case "status --porcelain":
 			return "", nil
 		default:
 			t.Fatalf("unexpected git args %q", strings.Join(args, " "))

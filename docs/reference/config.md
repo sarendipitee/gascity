@@ -1,8 +1,11 @@
-# Gas City Configuration
+---
+title: "Gas City Configuration"
+description: "Schema for city.toml — the PackV2 deployment file for a Gas City instance."
+---
 
 Schema for city.toml — the PackV2 deployment file for a Gas City instance. Pack definitions live in pack.toml and conventional pack directories such as agents/, formulas/, orders/, and commands/. Use [imports.*] for PackV2 composition; legacy includes and [[agent]] fields remain visible for migration compatibility. Legacy [packs.*] entries are still accepted by the runtime for migration/fetch compatibility but are intentionally omitted from this public schema.
 
-> **PackV2 format source of truth:** The public PackV2 format and loader semantics are specified in [Gas City Pack Specification (2.0)](/specs/pack-spec).
+> **PackV2 format source of truth:** The public PackV2 format and loader semantics are specified in [Gas City Pack Specification (2.0)](/reference/specs/pack-spec).
 
 > **Auto-generated** — do not edit. Run `go run ./cmd/genschema` to regenerate.
 
@@ -26,9 +29,9 @@ City is the top-level configuration for a Gas City instance.
 | `mail` | MailConfig |  |  | Mail configures the mail provider backend. |
 | `events` | EventsConfig |  |  | Events configures the events provider backend. |
 | `dolt` | DoltConfig |  |  | Dolt configures optional dolt server connection overrides. |
-| `formulas` | FormulasConfig |  |  | Formulas configures formula directory settings. |
+| `formulas` | FormulasConfig |  |  | Formulas is the legacy [formulas] table; authored [formulas].dir is rejected at config load. Formulas live in the well-known formulas/ directory. |
 | `daemon` | DaemonConfig |  |  | Daemon configures controller daemon settings. |
-| `orders` | OrdersConfig |  |  | Orders configures order settings (skip list). |
+| `orders` | OrdersConfig |  |  | Orders configures order settings: skip list, max_timeout cap, and per-order overrides. |
 | `api` | APIConfig |  |  | API configures the optional HTTP API server. |
 | `chat_sessions` | ChatSessionsConfig |  |  | ChatSessions configures chat session behavior (auto-suspend). |
 | `session_sleep` | SessionSleepConfig |  |  | SessionSleep configures idle sleep policy defaults for managed sessions. |
@@ -73,7 +76,7 @@ Agent defines a configured agent in the city.
 | `tmux_alias` | string |  |  | TmuxAlias overrides the tmux session_name for pool and factory-created manual sessions of this agent. When unset, sessions fall back to the universal derivation ("s-&lt;beadID&gt;" for ad-hoc sessions, "&lt;basename&gt;-&lt;beadID&gt;" for pool sessions). When set, it is expanded as a Go text/template using the same PathContext fields as work_dir / session_setup (Agent, AgentBase, Rig, RigRoot, CityRoot, CityName), sanitized for tmux, and validated as an explicit session name. For pool sessions, a live-name collision appends the bead ID as a deterministic suffix. For manual `gc session new` sessions, tmux_alias becomes the explicit session_name and takes precedence over --alias, which remains the command/mail alias; duplicate explicit names fail closed. Configured named sessions keep their named-session runtime name instead of using tmux_alias. When no --alias is supplied, work_dir templates that use &#123;&#123;.Agent&#125;&#125; see the resolved tmux_alias as the concrete session identity. |
 | `scope` | string |  |  | Scope defines where this agent is instantiated: "city" (one per city) or "rig" (one per rig, the default). Only meaningful for pack-defined agents; inline agents in city.toml use Dir directly. Enum: `city`, `rig` |
 | `suspended` | boolean |  |  | Suspended prevents the reconciler from spawning this agent. Toggle with gc agent suspend/resume. |
-| `pre_start` | []string |  |  | PreStart is a list of shell commands run before session creation. Commands run on the target filesystem: locally for tmux, inside the pod/container for exec providers. Template variables same as session_setup. |
+| `pre_start` | []string |  |  | PreStart is a list of shell commands run before session creation. Commands run on the target filesystem: locally for tmux, inside the pod/container for exec providers. Template variables same as session_setup. On failure, the last 4 KiB of the command's stdout/stderr is included in the error and may appear in controller and reconciler logs; avoid set -x or echoing secrets in setup commands. |
 | `prompt_template` | string |  |  | PromptTemplate is the path to this agent's prompt template file. Relative paths resolve against the city directory. |
 | `nudge` | string |  |  | Nudge is text typed into the agent's tmux session after startup. Used for CLI agents that don't accept command-line prompts. |
 | `session` | string |  |  | Session overrides the session transport for this agent. "" (default) uses the city-level session provider (typically tmux). "acp" uses the Agent Client Protocol (JSON-RPC over stdio). The agent's resolved provider must have supports_acp = true. Enum: `acp` |
@@ -106,16 +109,15 @@ Agent defines a configured agent in the city.
 | `skills` | []string |  |  | Skills is a tombstone field retained for v0.15.1 backwards compatibility. Accepted during parse for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
 | `mcp` | []string |  |  | MCP is a tombstone field retained for v0.15.1 backwards compatibility. Accepted during parse for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
 | `hooks_installed` | boolean |  |  | HooksInstalled overrides automatic hook detection. Set to true when hooks are manually installed (e.g., merged into the project's own hook config) and auto-installation via install_agent_hooks is not desired. When true, the agent is treated as hook-enabled for startup behavior: no prime instruction in beacon and no delayed nudge. Interacts with install_agent_hooks — set this instead when hooks are pre-installed. |
-| `session_setup` | []string |  |  | SessionSetup is a list of shell commands run after session creation. Each command is a template string supporting placeholders: &#123;&#123;.Session&#125;&#125;, &#123;&#123;.Agent&#125;&#125;, &#123;&#123;.AgentBase&#125;&#125;, &#123;&#123;.Rig&#125;&#125;, &#123;&#123;.RigRoot&#125;&#125;, &#123;&#123;.CityRoot&#125;&#125;, &#123;&#123;.CityName&#125;&#125;, &#123;&#123;.WorkDir&#125;&#125;. Commands run in gc's process (not inside the agent session) via sh -c. |
-| `session_setup_script` | string |  |  | SessionSetupScript is the path to a script run after session_setup commands. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. The script receives context via environment variables (GC_SESSION plus existing GC_* vars). |
-| `session_live` | []string |  |  | SessionLive is a list of shell commands that are safe to re-apply without restarting the agent. Run at startup (after session_setup) and re-applied on config change without triggering a restart. Must be idempotent. Typical use: tmux theming, keybindings, status bars. Same template placeholders as session_setup. |
+| `session_setup` | []string |  |  | SessionSetup is a list of shell commands run after session creation. Each command is a template string supporting placeholders: &#123;&#123;.Session&#125;&#125;, &#123;&#123;.Agent&#125;&#125;, &#123;&#123;.AgentBase&#125;&#125;, &#123;&#123;.Rig&#125;&#125;, &#123;&#123;.RigRoot&#125;&#125;, &#123;&#123;.CityRoot&#125;&#125;, &#123;&#123;.CityName&#125;&#125;, &#123;&#123;.WorkDir&#125;&#125;. Commands run in gc's process (not inside the agent session) via sh -c. On failure, the last 4 KiB of the command's stdout/stderr is included in the error and may appear in controller and reconciler logs; avoid set -x or echoing secrets in setup commands. |
+| `session_setup_script` | string |  |  | SessionSetupScript is the path to a script run after session_setup commands. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. The script receives context via environment variables (GC_SESSION plus existing GC_* vars). On failure, the last 4 KiB of the script's stdout/stderr is included in the error and may appear in controller and reconciler logs; avoid set -x or echoing secrets in setup scripts. |
+| `session_live` | []string |  |  | SessionLive is a list of shell commands that are safe to re-apply without restarting the agent. Run at startup (after session_setup) and re-applied on config change without triggering a restart. Must be idempotent. Typical use: tmux theming, keybindings, status bars. Same template placeholders as session_setup. On failure, the last 4 KiB of the command's stdout/stderr is included in the error and may appear in controller and reconciler logs; avoid set -x or echoing secrets in setup commands. |
 | `overlay_dir` | string |  |  | OverlayDir is a directory whose contents are recursively copied (additive) into the agent's working directory at startup. Existing files are not overwritten. Relative paths resolve against the declaring config file's directory (pack-safe). |
 | `default_sling_formula` | string |  |  | DefaultSlingFormula is the formula name automatically applied via --on when beads are slung to this agent, unless --no-formula is set. Example: "mol-polecat-work" |
 | `inject_fragments` | []string |  |  | InjectFragments lists named template fragments to append to this agent's rendered prompt. Fragments come from shared template directories across all loaded packs. Each name must match a &#123;&#123; define "name" &#125;&#125; block. |
 | `append_fragments` | []string |  |  | AppendFragments is the V2 per-agent alias for prompt fragment injection. It layers after InjectFragments and before inherited/default fragments. |
 | `inject_assigned_skills` | boolean |  |  | InjectAssignedSkills controls whether gc appends an "assigned skills" appendix to the agent's rendered prompt. The appendix lists every skill visible to this agent, partitioned into (assigned-to-you, shared-with-every-agent), so agents sharing a scope-root sink can tell which skills are their specialization vs which are the city-wide set.  Pointer tri-state:   nil   -&gt; inherit: inject when the agent has a vendor sink   *true -&gt; explicitly inject (equivalent to the default)   *false -&gt; disable; the template is responsible for rendering             any skill guidance itself |
 | `attach` | boolean |  |  | Attach controls whether the agent's session supports interactive attachment (e.g., tmux attach). When false, the agent can use a lighter runtime (subprocess instead of tmux). Defaults to true. |
-| `fallback` | boolean |  |  | Fallback marks this agent as a fallback definition. During pack composition, a non-fallback agent with the same name wins silently. When two fallbacks collide, the first loaded (depth-first) wins. See docs/guides/shareable-packs.md for pack layout guidance. |
 | `depends_on` | []string |  |  | DependsOn lists agent names that must be awake before this agent wakes. Used for dependency-ordered startup and shutdown. Validated for cycles at config load time. |
 | `resume_command` | string |  |  | ResumeCommand is the full shell command to run when resuming this agent. Supports &#123;&#123;.SessionKey&#125;&#125; template variable. When set, takes precedence over the provider's ResumeFlag/ResumeStyle. Example:   "claude --resume &#123;&#123;.SessionKey&#125;&#125; --dangerously-skip-permissions" |
 | `wake_mode` | string |  |  | WakeMode controls context freshness across sleep/wake cycles. "resume" (default): reuse provider session key for conversation continuity. "fresh": start a new provider session on every wake (polecat pattern). Enum: `resume`, `fresh` |
@@ -256,7 +258,7 @@ BeadPolicyConfig holds storage and retention defaults for a named bead use.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `storage` | string |  |  | Storage selects the intended persistence tier: "history", "no_history", or "ephemeral". Creation paths apply this incrementally as they opt in. Enum: `history`, `no_history`, `ephemeral` |
-| `delete_after_close` | string |  |  | DeleteAfterClose deletes matching GC-owned beads after they have been closed for this duration. Accepts Go duration syntax plus whole-day "d" units, e.g. "7d" or "1d12h". Empty defers to any controller-managed default for the policy type (e.g. order_tracking defaults to 7d). |
+| `delete_after_close` | string |  |  | DeleteAfterClose deletes matching GC-owned beads after they have been closed for this duration. Accepts Go duration syntax plus whole-day "d" units, e.g. "7d" or "1d12h". ApplyBeadPolicyDefaults fills in a non-empty default for recognized policy types (order_tracking: "7d"), so this field is populated after config load even when the city.toml omits it. |
 
 ## BeadsConfig
 
@@ -268,9 +270,6 @@ BeadsConfig holds bead store settings.
 | `backend` | string |  |  | Backend selects the bd storage engine when Provider is "bd". Empty defaults to "dolt"; T3Code uses "doltlite" for local dev stores. |
 | `event_hooks` | boolean |  | `true` | EventHooks controls installation of the bead event-forwarding hooks (.beads/hooks/on_create,on_update,on_close) that shell out to `gc event emit` on every bead write. Defaults to true. Set to false once the controller's native cache-events already observe bead changes (the bd_hooks doctor gate): the lifecycle then removes the event hooks (leaving git hooks untouched) and stops reinstalling them, clearing the per-write churn and the native-store gate. |
 | `bd_compatibility` | string |  |  | BDCompatibility selects the bd CLI semantics Gas City may rely on. Empty defaults to "bd-1.0.4", which keeps claimable work history-backed and avoids bd ready/list flags that are unavailable or incomplete in bd 1.0.4. Enum: `bd-1.0.4`, `bd-1.0.5` |
-| `proxied` | boolean |  | `false` | Proxied routes bd through the pooling db-proxy (ProxiedServerMode, external backend) instead of direct ServerMode, eliminating the per-call bd→dolt connection churn (#1978: ~71 new connections/sec to the managed dolt server). Defaults to false = current direct ServerMode, byte-for-byte identical, so existing cities are unaffected. Requires a bd build that supports `bd init --proxied-server` (external); when the resolved bd lacks it, gascity falls back to server mode and a doctor check flags it, so a city paired with a standard bd never breaks. |
-| `proxy_pool_size` | integer |  | `4` | ProxyPoolSize is the warm backend-connection pool size the db-proxy keeps per (capabilities, database) key when Proxied is true. Defaults to 4. The proxy is shared per workspace root, so all agents of a scope share one warm pool; the size is frozen by the first bd invocation that spawns the proxy (changing it requires restarting the db-proxy-child). |
-| `proxy_idle_timeout` | string |  | `10m` | ProxyIdleTimeout is how long a db-proxy-child stays alive with no active client before it shuts down. The bd default (30s) is tuned for one busy workspace; gascity touches many scopes sparsely (controller patrol probes every rig once per interval), starving each proxy below 30s so it spawns, serves one op, idle-dies, and respawns on the next touch — pure churn that never reaches the warm-pool steady state. A longer timeout keeps proxies warm across sparse bursts. Go duration string; defaults to "10m". Read by bd as BEADS_PROXY_IDLE_TIMEOUT. |
 | `policies` | map[string]BeadPolicyConfig |  |  | Policies defines per-bead-use storage and garbage-collection defaults. Policy names are interpreted by higher-level systems; unknown names are preserved so packs can stage future policy classes without breaking load. |
 
 ## ChatSessionsConfig
@@ -342,9 +341,11 @@ DoltConfig holds optional dolt server overrides.
 | `port` | integer |  | `0` | Port is the dolt server port. 0 means use ephemeral port allocation (hashed from city path). Set explicitly to override. |
 | `host` | string |  | `localhost` | Host is the dolt server hostname. Defaults to localhost. |
 | `archive_level` | integer |  | `0` | ArchiveLevel controls Dolt's auto_gc archive aggressiveness. 0 disables archive compaction (lower CPU on startup). 1 enables archive compaction (higher CPU on startup). nil (omitted) defaults to 0. |
+| `auto_gc_enabled` | boolean |  | `true` | AutoGCEnabled toggles Dolt's incremental auto-GC on the managed sql-server. Auto-GC bounds the noms journal so it never reaches GB scale, which shrinks both the unclean-stop corruption window and the recovery blast radius. nil (omitted) defaults to true. |
 | `max_connections` | integer |  | `256` | MaxConnections overrides the managed Dolt listener max_connections. 0 means use the managed default. |
 | `read_timeout_millis` | integer |  | `30000` | ReadTimeoutMillis overrides the managed Dolt listener read_timeout_millis. 0 means use the managed default. |
 | `write_timeout_millis` | integer |  | `300000` | WriteTimeoutMillis overrides the managed Dolt listener write_timeout_millis. 0 means use the managed default. |
+| `dolt_lock_release_timeout` | string |  | `1m` | DoltLockReleaseTimeout is how long managed-dolt lifecycle operations wait for dolt's on-disk exclusive store locks (the root-level `&lt;data_dir&gt;/.dolt/noms/LOCK` and per-database `&lt;data_dir&gt;/&lt;db&gt;/.dolt/noms/LOCK` forms) to be released by a prior server process before failing closed. The start path refuses to launch a second `dolt sql-server` against a data_dir whose lock is still held — a prior instance that is shutting down holds the lock until its chunk journal is flushed, and binding before release corrupts the journal (see gastownhall/gascity#3174). The stop path uses the same window to wait for lock release after process exit before reporting success. Duration string (e.g., "1m", "90s"). Defaults to "1m", which covers the flush window of multi-GB journals on commodity SSDs. Set to "0s" to probe once with no wait (still fail-closed when held). Negative values are rejected at config load. The managed lifecycle also projects this value into the gc-beads-bd.sh shell fallback as GC_DOLT_LOCK_RELEASE_TIMEOUT_MS (milliseconds), so both paths honor the configured window. |
 
 ## DoltMaintenance
 
@@ -380,10 +381,7 @@ EventsRotationConfig holds file-backed events rotation settings.
 
 ## FormulasConfig
 
-FormulasConfig holds legacy formula directory settings.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
+FormulasConfig is the legacy [formulas] table with no supported fields: authored [formulas].dir is rejected at config load (use the well-known formulas/ directory instead), and gc doctor flags any declaration as a fixable v2-formulas-dir error.
 
 ## GitHubConfig
 
@@ -552,7 +550,7 @@ OrderOverride modifies a scanned order's scheduling fields and exec env.
 
 ## OrdersConfig
 
-OrdersConfig holds order settings.
+OrdersConfig holds order settings for orders discovered from flat TOML files (one file per order) in the orders/ directory beside each formula layer (packs, the city directory, and rig-local layers).
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -684,7 +682,7 @@ Rig defines an external project registered in the city.
 | `default_branch` | string |  |  | DefaultBranch is the rig repository's mainline branch (e.g. "main", "master", "develop"). When set, routing formulas use this as the default merge target instead of probing origin/HEAD at sling time. Captured by `gc rig add` from the rig's git config; set manually for rigs whose mainline isn't reachable via origin/HEAD. |
 | `suspended` | boolean |  |  | Suspended is the deprecated pre-runtime-state suspension flag. Parsed for backwards compatibility and treated as an alias for SuspendedOnStart by [Rig.EffectiveSuspendedOnStart], so existing cities with `suspended = true` continue to start their rigs suspended after upgrade. Live suspend/resume commands no longer write this field. `gc doctor` flags it and offers `--fix` to rename to suspended_on_start. |
 | `suspended_on_start` | boolean |  |  | SuspendedOnStart is the rig's desired suspension state at city start. When true and no explicit entry exists for this rig in .gc/runtime/suspension-state.json, the rig is treated as suspended. Once the user has explicitly suspended or resumed the rig via `gc rig suspend/resume`, the runtime state wins. |
-| `formulas_dir` | string |  |  | FormulasDir is a rig-local formula directory (Layer 4). Overrides pack formulas for this rig by filename. Relative paths resolve against the city directory. |
+| `formulas_dir` | string |  |  | FormulasDir is a rig-local formula directory — the highest-priority formula layer, above city pack formulas, the city formulas/ directory, and rig pack formulas. Overrides pack formulas for this rig by filename. Relative paths resolve against the city directory. |
 | `includes` | []string |  |  | Includes lists pack directories or URLs for this rig (V1 mechanism). Each entry is a local path, a git source//sub#ref URL, or a GitHub tree URL. |
 | `imports` | map[string]Import |  |  | Imports defines named pack imports for this rig (V2 mechanism). Each key is a binding name; agents from these imports get qualified names like "rigName/bindingName.agentName". |
 | `max_active_sessions` | integer |  |  | MaxActiveSessions is the rig-level cap on total concurrent sessions across all agents in this rig. Nil means inherit from workspace (or unlimited). |
@@ -806,7 +804,7 @@ Workspace holds city-level metadata and optional defaults that apply to all agen
 | `suspended_on_start` | boolean |  |  | SuspendedOnStart is the city's desired suspension state at start. When true and no explicit entry exists in .gc/runtime/suspension-state.json, the city is treated as suspended. Once the user has explicitly suspended or resumed via `gc suspend/resume`, the runtime state wins. |
 | `max_active_sessions` | integer |  |  | MaxActiveSessions is the workspace-level cap on total concurrent sessions. Nil means unlimited. Agents and rigs inherit this if they don't set their own. |
 | `session_template` | string |  |  | SessionTemplate is a template string supporting placeholders: &#123;&#123;.City&#125;&#125;, &#123;&#123;.Agent&#125;&#125; (sanitized), &#123;&#123;.Dir&#125;&#125;, &#123;&#123;.Name&#125;&#125;. Controls tmux session naming. Default (empty): "&#123;&#123;.Agent&#125;&#125;" — just the sanitized agent name. Per-city tmux socket isolation makes a city prefix unnecessary. |
-| `install_agent_hooks` | []string |  |  | InstallAgentHooks lists provider names whose hooks should be installed into agent working directories. Agent-level overrides workspace-level (replace, not additive). Supported: "claude", "codex", "gemini", "antigravity", "kiro", "opencode", "groq", "cerebras", "copilot", "cursor", "pi", "omp", "kimi". |
+| `install_agent_hooks` | []string |  |  | InstallAgentHooks lists provider names whose hooks should be installed into agent working directories. Agent-level overrides workspace-level (replace, not additive). Supported: "claude", "codex", "gemini", "antigravity", "kiro", "opencode", "mimocode", "groq", "cerebras", "copilot", "cursor", "pi", "omp", "kimi". |
 | `global_fragments` | []string |  |  | GlobalFragments lists named template fragments injected into every agent's rendered prompt. Applied before per-agent InjectFragments. Each name must match a &#123;&#123; define "name" &#125;&#125; block from a pack's prompts/shared/ directory. |
 | `includes` | []string |  |  | Includes is the legacy city.toml pack-composition list.  Deprecated: use root pack.toml [imports.*] instead. Run gc doctor to inspect; gc doctor --fix handles the safe mechanical rewrites available in this release wave. Each entry is a local path, a git source//sub#ref URL, or a GitHub tree URL. |
 | `default_rig_includes` | []string |  |  | DefaultRigIncludes is the legacy city.toml default-rig pack list.  Deprecated: use city.toml [defaults.rig.imports.&lt;binding&gt;] instead. Run gc doctor to inspect; gc doctor --fix handles the safe mechanical rewrites available in this release wave. |

@@ -227,8 +227,17 @@ func (c PreflightChecker) checkVersionCompat(ctx PreflightBDContext, err error) 
 	if ctx.SchemaVersion <= 0 {
 		return NewPreflightCheckResult(PreflightCheckVersionCompat, PreflightCheckFail, "bd context did not report a schema version", details)
 	}
-	if ctx.BDVersion == "" || libraryVersion == "" || libraryVersion == "(devel)" {
+	if ctx.BDVersion == "" {
 		return NewPreflightCheckResult(PreflightCheckVersionCompat, PreflightCheckWarn, "bd/beads version compatibility could not be confirmed", details)
+	}
+	if libraryVersion == "" || libraryVersion == "(devel)" {
+		// A local-path/replace (source) build of the linked beads library
+		// reports no module version ("(devel)") even though gc and bd are
+		// built from the same source. The schema version is validated above
+		// and is the real compatibility signal, so an unconfirmable library
+		// version must not take the native store offline — only a *confirmed*
+		// mismatch (below) should.
+		return NewPreflightCheckResult(PreflightCheckVersionCompat, PreflightCheckPass, "bd/beads schema compatible; linked library version unconfirmed (source build)", details)
 	}
 	if strings.TrimPrefix(ctx.BDVersion, "v") != libraryVersion {
 		return NewPreflightCheckResult(PreflightCheckVersionCompat, PreflightCheckFail, "bd version differs from linked beads library version", details)

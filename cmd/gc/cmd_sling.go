@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/agentutil"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/formula"
+	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -82,13 +84,21 @@ When target is omitted, the bead's rig prefix is used to look up the rig's
 default_sling_target from config. Requires --formula to have an explicit target.
 Inline text also requires an explicit target.
 
-With --formula, a wisp (ephemeral molecule) is instantiated from the formula
-and its root bead is routed to the target.
+With --formula, the formula is instantiated and its root bead is routed to
+the target. v2 formulas — those declaring [requires]
+formula_compiler = ">=2.0.0" — start a workflow; v1 formulas
+instantiate a wisp (ephemeral molecule). A v2 formula that references
+{{convoy_id}} or contains a drain step requires a target convoy: route it
+with gc sling <target> <bead> --on <formula>, or attach it with gc formula
+cook --attach. Formula slings to a pool (multi-session) target are rejected
+unless the compiled root is Ready-visible — a v2 workflow root or a
+root-only wisp. See docs/reference/specs/formula-spec-v2.md for the formula
+format and contract details.
 
 Examples:
   gc sling my-rig/claude BL-42              # route existing bead
   gc sling my-rig/claude "write a README"   # create bead from text, then route
-  gc sling mayor code-review --formula      # instantiate formula, route wisp
+  gc sling mayor code-review --formula      # instantiate formula, route its root
   echo "fix login" | gc sling mayor --stdin # read bead text from stdin`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -129,7 +139,7 @@ Examples:
 	}
 	cmd.Flags().BoolVarP(&formula, "formula", "f", false, "treat argument as formula name")
 	cmd.Flags().BoolVar(&nudge, "nudge", false, "nudge target after routing")
-	cmd.Flags().BoolVar(&force, "force", false, "suppress warnings, allow cross-rig routing, allow graph workflow replacement, and for direct bead routes dispatch even if the bead does not resolve in the local store")
+	cmd.Flags().BoolVar(&force, "force", false, "suppress warnings, allow cross-rig routing, allow formulas v2 workflow replacement, and for direct bead routes dispatch even if the bead does not resolve in the local store")
 	cmd.Flags().StringVarP(&title, "title", "t", "", "wisp root bead title (with --formula or --on)")
 	cmd.Flags().StringArrayVar(&vars, "var", nil, "variable substitution for formula (key=value, repeatable)")
 	cmd.Flags().StringVar(&merge, "merge", "", "merge strategy: direct, mr, or local")
@@ -140,8 +150,8 @@ Examples:
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "show what would be done without executing")
 	cmd.Flags().BoolVar(&noFormula, "no-formula", false, "suppress default formula (route raw bead)")
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "read bead text from stdin (first line = title, rest = description)")
-	cmd.Flags().StringVar(&scopeKind, "scope-kind", "", "logical workflow scope kind for compiler-v2 launches")
-	cmd.Flags().StringVar(&scopeRef, "scope-ref", "", "logical workflow scope ref for compiler-v2 launches")
+	cmd.Flags().StringVar(&scopeKind, "scope-kind", "", "logical workflow scope kind for formulas v2 launches")
+	cmd.Flags().StringVar(&scopeRef, "scope-ref", "", "logical workflow scope ref for formulas v2 launches")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output dispatch result in JSON format")
 	cmd.MarkFlagsMutuallyExclusive("formula", "on")
 	cmd.MarkFlagsMutuallyExclusive("no-formula", "formula")
@@ -629,7 +639,7 @@ func (r cliBeadRouter) Route(_ context.Context, req sling.RouteRequest) error {
 	if r.deps.Cfg != nil {
 		routedTo = agentutil.NormalizePoolRouteTarget(r.deps.Cfg, req.Target)
 	}
-	if err := r.deps.Store.SetMetadata(req.BeadID, "gc.routed_to", routedTo); err != nil {
+	if err := r.deps.Store.SetMetadata(req.BeadID, beadmeta.RoutedToMetadataKey, routedTo); err != nil {
 		return fmt.Errorf("setting gc.routed_to on %s: %w", req.BeadID, err)
 	}
 	return nil
@@ -1134,89 +1144,6 @@ func printCrossRigSection(w func(string), beadID string, a config.Agent, cfg *co
 	}
 }
 
-func graphWorkflowRouteVars(recipe *formula.Recipe, provided map[string]string) map[string]string {
-	routeVars := make(map[string]string, len(provided))
-	if recipe != nil {
-		for name, def := range recipe.Vars {
-			if def != nil && def.Default != nil {
-				routeVars[name] = *def.Default
-			}
-		}
-	}
-	maps.Copy(routeVars, provided)
-	return routeVars
-}
-
-func decorateGraphWorkflowRecipe(recipe *formula.Recipe, routeVars map[string]string, routedTo, sessionName string, store beads.Store, cityName, cityPath string, cfg *config.City) error {
-	if recipe == nil {
-		return fmt.Errorf("workflow recipe is nil")
-	}
-	defaultRoute := graphRouteBinding{QualifiedName: routedTo}
-	if sessionName != "" {
-		defaultRoute.SessionName = sessionName
-	} else {
-		defaultRoute.MetadataOnly = true
-	}
-	routingRigContext := graphRouteRigContext(defaultRoute.QualifiedName)
-	controlRoute, err := controlDispatcherBinding(store, cityName, cfg, routingRigContext)
-	if err != nil {
-		return err
-	}
-	stepByID := make(map[string]*formula.RecipeStep, len(recipe.Steps))
-	stepAlias := make(map[string]string, len(recipe.Steps))
-	for i := range recipe.Steps {
-		stepByID[recipe.Steps[i].ID] = &recipe.Steps[i]
-		if short, ok := strings.CutPrefix(recipe.Steps[i].ID, recipe.Name+"."); ok {
-			stepAlias[short] = recipe.Steps[i].ID
-		}
-	}
-	depsByStep := make(map[string][]string, len(recipe.Deps))
-	for _, dep := range recipe.Deps {
-		if dep.Type != "blocks" && dep.Type != "waits-for" && dep.Type != "conditional-blocks" {
-			continue
-		}
-		depsByStep[dep.StepID] = append(depsByStep[dep.StepID], dep.DependsOnID)
-	}
-	bindingCache := make(map[string]graphRouteBinding, len(recipe.Steps))
-	resolving := make(map[string]bool, len(recipe.Steps))
-	for i := range recipe.Steps {
-		step := &recipe.Steps[i]
-		if step.Metadata == nil {
-			step.Metadata = make(map[string]string)
-		} else {
-			step.Metadata = maps.Clone(step.Metadata)
-		}
-		if step.IsRoot {
-			// Mirror of graphroute.DecorateGraphWorkflowRecipe: the root persists
-			// gc.routed_to (the sole canonical key the worker claim path reads)
-			// so a pool-routed root is claimable rather than idle-reaped
-			// (fixes #2763; gc.run_target retired as a wire field — ga-eld2x).
-			step.Metadata["gc.routed_to"] = routedTo
-			delete(step.Metadata, "gc.run_target")
-			if sessionName != "" {
-				// Mirror graphroute's root #2843 session stamp so this CLI-local
-				// decorator stays in sync. Non-root steps already delegate to
-				// graphroute via assignGraphStepRoute.
-				step.Metadata["gc.session_name"] = sessionName
-			}
-			continue
-		}
-		if sling.IsWorkflowTopologyKind(step.Metadata["gc.kind"]) {
-			continue
-		}
-		binding, err := resolveGraphStepBindingWithVars(step.ID, stepByID, stepAlias, depsByStep, bindingCache, resolving, routeVars, defaultRoute, routingRigContext, store, cityName, cityPath, cfg)
-		if err != nil {
-			return err
-		}
-		if isControlDispatcherKind(step.Metadata["gc.kind"]) {
-			assignGraphStepRoute(step, binding, &controlRoute)
-			continue
-		}
-		assignGraphStepRoute(step, binding, nil)
-	}
-	return nil
-}
-
 func workflowStoreRefForDir(storeDir, cityPath, cityName string, cfg *config.City) string {
 	if strings.TrimSpace(storeDir) == "" || strings.TrimSpace(cityPath) == "" {
 		return ""
@@ -1242,8 +1169,8 @@ func workflowStoreRefForDir(storeDir, cityPath, cityName string, cfg *config.Cit
 	return ""
 }
 
-// graphRouteBinding is an alias for sling.GraphRouteBinding.
-type graphRouteBinding = sling.GraphRouteBinding
+// graphRouteBinding is an alias for graphroute.GraphRouteBinding.
+type graphRouteBinding = graphroute.GraphRouteBinding
 
 type graphStepTarget struct {
 	value        string
@@ -1262,7 +1189,7 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 		return binding, nil
 	}
 	if resolving[stepID] {
-		return graphRouteBinding{}, fmt.Errorf("graph.v2 routing cycle while resolving %s", stepID)
+		return graphRouteBinding{}, fmt.Errorf("formulas v2 routing cycle while resolving %s", stepID)
 	}
 	step := stepByID[stepID]
 	if step == nil {
@@ -1273,9 +1200,9 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 
 	target := graphStepRouteTarget(step, routeVars)
 	if target.value == "" {
-		switch step.Metadata["gc.kind"] {
+		switch step.Metadata[beadmeta.KindMetadataKey] {
 		case "scope-check":
-			controlTarget := strings.TrimSpace(step.Metadata["gc.control_for"])
+			controlTarget := strings.TrimSpace(step.Metadata[beadmeta.ControlForMetadataKey])
 			if controlTarget != "" {
 				binding, err := resolveGraphStepBindingWithVars(controlTarget, stepByID, stepAlias, depsByStep, cache, resolving, routeVars, fallback, rigContext, store, cityName, cityPath, cfg)
 				if err != nil {
@@ -1285,7 +1212,7 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 				return binding, nil
 			}
 		case "fanout":
-			controlTarget := strings.TrimSpace(step.Metadata["gc.control_for"])
+			controlTarget := strings.TrimSpace(step.Metadata[beadmeta.ControlForMetadataKey])
 			if controlTarget != "" {
 				binding, err := resolveGraphStepBindingWithVars(controlTarget, stepByID, stepAlias, depsByStep, cache, resolving, routeVars, fallback, rigContext, store, cityName, cityPath, cfg)
 				if err != nil {
@@ -1304,7 +1231,7 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 				if depStep == nil {
 					continue
 				}
-				switch depStep.Metadata["gc.kind"] {
+				switch depStep.Metadata[beadmeta.KindMetadataKey] {
 				case "retry-run", "run":
 					subjectID = depID
 				}
@@ -1353,7 +1280,7 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 	}
 
 	if cfg == nil {
-		return graphRouteBinding{}, fmt.Errorf("graph.v2 routing for %s requires config", stepID)
+		return graphRouteBinding{}, fmt.Errorf("formulas v2 routing for %s requires config", stepID)
 	}
 	if target.fromAssignee {
 		binding, ok, err := resolveGraphDirectSessionBinding(store, cityName, cityPath, cfg, target.value, rigContext)
@@ -1368,7 +1295,7 @@ func resolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 	}
 	agentCfg, ok := resolveAgentIdentity(cfg, target.value, rigContext)
 	if !ok {
-		return graphRouteBinding{}, fmt.Errorf("step %s: unknown graph.v2 target %q", stepID, target.value)
+		return graphRouteBinding{}, fmt.Errorf("step %s: unknown formulas v2 target %q", stepID, target.value)
 	}
 	binding := graphRouteBinding{QualifiedName: agentCfg.QualifiedName()}
 	if agentCfg.SupportsInstanceExpansion() {
@@ -1396,7 +1323,7 @@ func graphStepRouteTarget(step *formula.RecipeStep, routeVars map[string]string)
 	if step.Metadata == nil {
 		return graphStepTarget{}
 	}
-	return graphStepTarget{value: strings.TrimSpace(formula.Substitute(step.Metadata["gc.run_target"], routeVars))}
+	return graphStepTarget{value: strings.TrimSpace(formula.Substitute(step.Metadata[beadmeta.RunTargetMetadataKey], routeVars))}
 }
 
 func resolveGraphDirectSessionBinding(store beads.Store, cityName, cityPath string, cfg *config.City, target, rigContext string) (graphRouteBinding, bool, error) {

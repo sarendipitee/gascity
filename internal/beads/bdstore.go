@@ -109,12 +109,7 @@ func ExecCommandRunnerWithEnv(env map[string]string) CommandRunner {
 		cmd.Cancel = func() error {
 			return killCommandTree(cmd)
 		}
-		baseEnv := processEnvSnapshotExcludingNativeDoltOpen()
-		if len(env) > 0 {
-			cmd.Env = mergeEnv(baseEnv, env)
-		} else {
-			cmd.Env = baseEnv
-		}
+		cmd.Env = execEnvFor(name, processEnvSnapshotExcludingNativeDoltOpen(), env)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -445,6 +440,29 @@ func truncateRawOutput(data []byte, maxBytes int) string {
 		return string(trimmed)
 	}
 	return string(trimmed[:maxBytes]) + "...(truncated)"
+}
+
+// bdAutoBackupOptOutEnvKey disables bd's PersistentPostRun auto-backup (the
+// hardcoded "backup_export" Dolt remote synced into <root>/.beads/backup on
+// nearly every bd invocation, with no retention). A stuck-looping
+// backup_export sync was the root cause of the 2026-06-08 town-wide wedge
+// (ga-0eq), and the unrotated archives reached 210GB on one dev store
+// (ga-yfbs28). gc's projected envs already opt out (cmd/gc applyBdAutoBackupOptOut);
+// injecting it here covers every other runner-spawned bd call — hook claim,
+// store bridge, t3bridge, libstore, provider lifecycle — current and future.
+const bdAutoBackupOptOutEnvKey = "BD_BACKUP_ENABLED"
+
+// execEnvFor assembles the child environment for a runner exec. For bd
+// commands the auto-backup opt-out is injected as a baseline, replacing any
+// value inherited from the parent process (matching the unconditional
+// projected-env opt-out policy); an explicit per-call override still wins
+// because mergeEnv applies overrides last. Non-bd commands (e.g. direct dolt
+// queries) pass through untouched.
+func execEnvFor(name string, baseEnv []string, overrides map[string]string) []string {
+	if name == "bd" {
+		baseEnv = append(envWithout(baseEnv, bdAutoBackupOptOutEnvKey), bdAutoBackupOptOutEnvKey+"=false")
+	}
+	return mergeEnv(baseEnv, overrides)
 }
 
 // envWithout returns a copy of environ with all entries for the given key removed.
@@ -1802,11 +1820,9 @@ func (s *BdStore) CloseAll(ids []string, metadata map[string]string) (int, error
 
 	// Set metadata on all beads first (before closing, since some stores
 	// prevent metadata writes on closed beads).
-	for _, id := range ids {
-		if len(metadata) > 0 {
-			if err := s.SetMetadataBatch(id, metadata); err != nil {
-				return 0, err
-			}
+	if len(metadata) > 0 {
+		if err := s.setMetadataBatchAll(ids, metadata); err != nil {
+			return 0, err
 		}
 	}
 
@@ -1831,6 +1847,36 @@ func (s *BdStore) CloseAll(ids []string, metadata map[string]string) (int, error
 		return closed, nil
 	}
 	return len(ids), nil
+}
+
+func (s *BdStore) setMetadataBatchAll(ids []string, kvs map[string]string) error {
+	if len(ids) == 0 || len(kvs) == 0 {
+		return nil
+	}
+	args := []string{"update", "--json"}
+	args = append(args, ids...)
+	keys := make([]string, 0, len(kvs))
+	for k := range kvs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--set-metadata", k+"="+kvs[k])
+	}
+	err := s.runBDTransientWrite(args...)
+	if err == nil {
+		return nil
+	}
+	if isBdNotFound(err) {
+		if len(ids) == 1 {
+			return fmt.Errorf("setting metadata on %q: %w", ids[0], ErrNotFound)
+		}
+		return fmt.Errorf("setting metadata on %d beads: %w", len(ids), ErrNotFound)
+	}
+	if len(ids) == 1 {
+		return fmt.Errorf("setting metadata on %q: %w", ids[0], err)
+	}
+	return fmt.Errorf("setting metadata on %d beads: %w", len(ids), err)
 }
 
 // CloseAllWithReason closes multiple beads with one reasoned bd close command

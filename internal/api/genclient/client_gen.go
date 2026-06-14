@@ -228,6 +228,27 @@ func (e SupervisorShutdownPayloadSource) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorStartedPayloadPreviousExit.
+const (
+	Clean   SupervisorStartedPayloadPreviousExit = "clean"
+	Crash   SupervisorStartedPayloadPreviousExit = "crash"
+	Unknown SupervisorStartedPayloadPreviousExit = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorStartedPayloadPreviousExit enum.
+func (e SupervisorStartedPayloadPreviousExit) Valid() bool {
+	switch e {
+	case Clean:
+		return true
+	case Crash:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TranscriptMessageKind.
 const (
 	Inbound  TranscriptMessageKind = "inbound"
@@ -859,12 +880,13 @@ type ConfigValidateOutputBody struct {
 
 // ConversationGroupParticipant defines model for ConversationGroupParticipant.
 type ConversationGroupParticipant struct {
-	GroupID   string            `json:"GroupID"`
-	Handle    string            `json:"Handle"`
-	ID        string            `json:"ID"`
-	Metadata  map[string]string `json:"Metadata"`
-	Public    bool              `json:"Public"`
-	SessionID string            `json:"SessionID"`
+	GroupID     string            `json:"GroupID"`
+	Handle      string            `json:"Handle"`
+	ID          string            `json:"ID"`
+	Metadata    map[string]string `json:"Metadata"`
+	Public      bool              `json:"Public"`
+	SessionID   string            `json:"SessionID"`
+	SessionName string            `json:"SessionName"`
 }
 
 // ConversationGroupRecord defines model for ConversationGroupRecord.
@@ -1336,7 +1358,7 @@ type FormulaPreviewBody struct {
 	// ScopeRef Scope reference.
 	ScopeRef *string `json:"scope_ref,omitempty"`
 
-	// Target Target agent for preview compilation.
+	// Target Preview target: a bead or convoy ID, or a configured agent identity (for example a workflow root's gc.routed_to value).
 	Target string `json:"target"`
 
 	// Vars Variable name-to-value overrides applied to the compiled preview.
@@ -2523,6 +2545,7 @@ type SessionBindingRecord struct {
 	Metadata          map[string]string `json:"Metadata"`
 	SchemaVersion     int64             `json:"SchemaVersion"`
 	SessionID         string            `json:"SessionID"`
+	SessionName       string            `json:"SessionName"`
 
 	// Status Lifecycle state of a session binding.
 	Status BindingStatus `json:"Status"`
@@ -2709,6 +2732,21 @@ type SessionResponse struct {
 	SubmissionCapabilities *SubmissionCapabilities `json:"submission_capabilities,omitempty"`
 	Template               string                  `json:"template"`
 	Title                  string                  `json:"title"`
+}
+
+// SessionStrandedPayload defines model for SessionStrandedPayload.
+type SessionStrandedPayload struct {
+	// SessionId Canonical session bead ID for the stranded pool session (also the envelope Subject).
+	SessionId string `json:"session_id"`
+
+	// SessionName Runtime session name from the session bead metadata, when set.
+	SessionName *string `json:"session_name,omitempty"`
+
+	// Template Pool template name when known at the emission site.
+	Template *string `json:"template,omitempty"`
+
+	// WorkBeadIds IDs of the open/in-progress work beads still assigned to the session. Never truncated, unlike the envelope Message. Empty when the work-collection query failed at emission time.
+	WorkBeadIds *[]string `json:"work_bead_ids,omitempty"`
 }
 
 // SessionStreamCommonEvent Non-message events emitted on the session SSE stream: activity transitions, pending interactions, and keepalive heartbeats. The concrete variant is identified by the SSE event name.
@@ -3129,8 +3167,11 @@ type SupervisorHealthOutputBody struct {
 	CitiesRunning int64 `json:"cities_running"`
 
 	// CitiesTotal Total managed cities.
-	CitiesTotal int64              `json:"cities_total"`
-	Startup     *SupervisorStartup `json:"startup,omitempty"`
+	CitiesTotal int64 `json:"cities_total"`
+
+	// PacksLockSha256 SHA-256 hex digest of the first managed city's packs.lock contents, for single-city deployments (mirrors the startup field's first-city semantics). Drift checkers compare this against the committed lockfile copy. Omitted when no city is registered, the city has no packs.lock, or the lockfile is unreadable (read error logged server-side) — treat absence as unknown, not as proof there is no lockfile.
+	PacksLockSha256 *string            `json:"packs_lock_sha256,omitempty"`
+	Startup         *SupervisorStartup `json:"startup,omitempty"`
 
 	// Status Health status ("ok").
 	Status string `json:"status"`
@@ -3195,6 +3236,15 @@ type SupervisorShutdownPayloadMode string
 
 // SupervisorShutdownPayloadSource Which path triggered the shutdown.
 type SupervisorShutdownPayloadSource string
+
+// SupervisorStartedPayload defines model for SupervisorStartedPayload.
+type SupervisorStartedPayload struct {
+	// PreviousExit How the previous supervisor instance exited: clean (it completed its STOPPING path and left the shutdown handoff token), crash (a prior instance ran but left no token), or unknown (no evidence of a prior instance).
+	PreviousExit SupervisorStartedPayloadPreviousExit `json:"previous_exit"`
+}
+
+// SupervisorStartedPayloadPreviousExit How the previous supervisor instance exited: clean (it completed its STOPPING path and left the shutdown handoff token), crash (a prior instance ran but left no token), or unknown (no evidence of a prior instance).
+type SupervisorStartedPayloadPreviousExit string
 
 // SupervisorStartup defines model for SupervisorStartup.
 type SupervisorStartup struct {
@@ -3896,7 +3946,7 @@ type TypedEventStreamEnvelopeSessionStopped struct {
 type TypedEventStreamEnvelopeSessionStranded struct {
 	Actor    string                   `json:"actor"`
 	Message  *string                  `json:"message,omitempty"`
-	Payload  NoPayload                `json:"payload"`
+	Payload  SessionStrandedPayload   `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -3998,6 +4048,18 @@ type TypedEventStreamEnvelopeSupervisorShutdownRequested struct {
 	Ts       time.Time                 `json:"ts"`
 	Type     string                    `json:"type"`
 	Workflow *WorkflowEventProjection  `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeSupervisorStarted defines model for TypedEventStreamEnvelopeSupervisorStarted.
+type TypedEventStreamEnvelopeSupervisorStarted struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  SupervisorStartedPayload `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
 // TypedEventStreamEnvelopeWorkerOperation defines model for TypedEventStreamEnvelopeWorkerOperation.
@@ -4737,7 +4799,7 @@ type TypedTaggedEventStreamEnvelopeSessionStranded struct {
 	Actor    string                   `json:"actor"`
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
-	Payload  NoPayload                `json:"payload"`
+	Payload  SessionStrandedPayload   `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -4847,6 +4909,19 @@ type TypedTaggedEventStreamEnvelopeSupervisorShutdownRequested struct {
 	Ts       time.Time                 `json:"ts"`
 	Type     string                    `json:"type"`
 	Workflow *WorkflowEventProjection  `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeSupervisorStarted defines model for TypedTaggedEventStreamEnvelopeSupervisorStarted.
+type TypedTaggedEventStreamEnvelopeSupervisorStarted struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  SupervisorStartedPayload `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
 // TypedTaggedEventStreamEnvelopeWorkerOperation defines model for TypedTaggedEventStreamEnvelopeWorkerOperation.
@@ -5422,7 +5497,7 @@ type GetV0CityByCityNameFormulaByNameParams struct {
 	// ScopeRef Scope reference.
 	ScopeRef *string `form:"scope_ref,omitempty" json:"scope_ref,omitempty"`
 
-	// Target Target agent for preview compilation.
+	// Target Preview target: a bead or convoy ID, or a configured agent identity (for example a workflow root's gc.routed_to value).
 	Target string `form:"target" json:"target"`
 }
 
@@ -5455,7 +5530,7 @@ type GetV0CityByCityNameFormulasByNameParams struct {
 	// ScopeRef Scope reference.
 	ScopeRef *string `form:"scope_ref,omitempty" json:"scope_ref,omitempty"`
 
-	// Target Target agent for preview compilation.
+	// Target Preview target: a bead or convoy ID, or a configured agent identity (for example a workflow root's gc.routed_to value).
 	Target string `form:"target" json:"target"`
 }
 
@@ -6667,6 +6742,32 @@ func (t *EventPayload) MergeSessionResetStalledPayload(v SessionResetStalledPayl
 	return err
 }
 
+// AsSessionStrandedPayload returns the union data inside the EventPayload as a SessionStrandedPayload
+func (t EventPayload) AsSessionStrandedPayload() (SessionStrandedPayload, error) {
+	var body SessionStrandedPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionStrandedPayload overwrites any union data inside the EventPayload as the provided SessionStrandedPayload
+func (t *EventPayload) FromSessionStrandedPayload(v SessionStrandedPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionStrandedPayload performs a merge with any union data inside the EventPayload, using the provided SessionStrandedPayload
+func (t *EventPayload) MergeSessionStrandedPayload(v SessionStrandedPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsSessionSubmitSucceededPayload returns the union data inside the EventPayload as a SessionSubmitSucceededPayload
 func (t EventPayload) AsSessionSubmitSucceededPayload() (SessionSubmitSucceededPayload, error) {
 	var body SessionSubmitSucceededPayload
@@ -6865,6 +6966,32 @@ func (t *EventPayload) FromSupervisorShutdownPayload(v SupervisorShutdownPayload
 
 // MergeSupervisorShutdownPayload performs a merge with any union data inside the EventPayload, using the provided SupervisorShutdownPayload
 func (t *EventPayload) MergeSupervisorShutdownPayload(v SupervisorShutdownPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSupervisorStartedPayload returns the union data inside the EventPayload as a SupervisorStartedPayload
+func (t EventPayload) AsSupervisorStartedPayload() (SupervisorStartedPayload, error) {
+	var body SupervisorStartedPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSupervisorStartedPayload overwrites any union data inside the EventPayload as the provided SupervisorStartedPayload
+func (t *EventPayload) FromSupervisorStartedPayload(v SupervisorStartedPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSupervisorStartedPayload performs a merge with any union data inside the EventPayload, using the provided SupervisorStartedPayload
+func (t *EventPayload) MergeSupervisorStartedPayload(v SupervisorStartedPayload) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -8789,6 +8916,34 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSupervisorShutdo
 	return err
 }
 
+// AsTypedEventStreamEnvelopeSupervisorStarted returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSupervisorStarted
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSupervisorStarted() (TypedEventStreamEnvelopeSupervisorStarted, error) {
+	var body TypedEventStreamEnvelopeSupervisorStarted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeSupervisorStarted overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeSupervisorStarted
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeSupervisorStarted(v TypedEventStreamEnvelopeSupervisorStarted) error {
+	v.Type = "supervisor.started"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeSupervisorStarted performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeSupervisorStarted
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSupervisorStarted(v TypedEventStreamEnvelopeSupervisorStarted) error {
+	v.Type = "supervisor.started"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeWorkerOperation returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeWorkerOperation
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeWorkerOperation() (TypedEventStreamEnvelopeWorkerOperation, error) {
 	var body TypedEventStreamEnvelopeWorkerOperation
@@ -8987,6 +9142,8 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeSupervisorRequest()
 	case "supervisor.shutdown_requested":
 		return t.AsTypedEventStreamEnvelopeSupervisorShutdownRequested()
+	case "supervisor.started":
+		return t.AsTypedEventStreamEnvelopeSupervisorStarted()
 	case "worker.operation":
 		return t.AsTypedEventStreamEnvelopeWorkerOperation()
 	default:
@@ -10768,6 +10925,34 @@ func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSupe
 	return err
 }
 
+// AsTypedTaggedEventStreamEnvelopeSupervisorStarted returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSupervisorStarted
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSupervisorStarted() (TypedTaggedEventStreamEnvelopeSupervisorStarted, error) {
+	var body TypedTaggedEventStreamEnvelopeSupervisorStarted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeSupervisorStarted overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeSupervisorStarted
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeSupervisorStarted(v TypedTaggedEventStreamEnvelopeSupervisorStarted) error {
+	v.Type = "supervisor.started"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeSupervisorStarted performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeSupervisorStarted
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSupervisorStarted(v TypedTaggedEventStreamEnvelopeSupervisorStarted) error {
+	v.Type = "supervisor.started"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedTaggedEventStreamEnvelopeWorkerOperation returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeWorkerOperation
 func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeWorkerOperation() (TypedTaggedEventStreamEnvelopeWorkerOperation, error) {
 	var body TypedTaggedEventStreamEnvelopeWorkerOperation
@@ -10966,6 +11151,8 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeSupervisorRequest()
 	case "supervisor.shutdown_requested":
 		return t.AsTypedTaggedEventStreamEnvelopeSupervisorShutdownRequested()
+	case "supervisor.started":
+		return t.AsTypedTaggedEventStreamEnvelopeSupervisorStarted()
 	case "worker.operation":
 		return t.AsTypedTaggedEventStreamEnvelopeWorkerOperation()
 	default:

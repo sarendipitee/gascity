@@ -111,6 +111,7 @@ type CityRuntime struct {
 	fsPressureEpisodeLogged    bool
 
 	convScopes          map[string]*convergenceScope // nil until bead store available; keyed by rig name ("" = city/HQ)
+	convScopesMu        sync.RWMutex                 // guards convScopes map pointer
 	convergenceReqCh    chan convergenceRequest      // receives CLI commands from controller.sock
 	reloadReqCh         chan reloadRequest           // receives structured reload requests from controller.sock
 	pokeCh              chan struct{}                // non-blocking signal to trigger immediate reconciler tick
@@ -873,6 +874,14 @@ func (d *tickDebouncer) fired() <-chan struct{} {
 	return d.fireCh
 }
 
+// convScope returns the convergence scope for the given rig name under a read
+// lock so callers outside the run() goroutine can safely read the map.
+func (cr *CityRuntime) convScope(rig string) *convergenceScope {
+	cr.convScopesMu.RLock()
+	defer cr.convScopesMu.RUnlock()
+	return cr.convScopes[rig]
+}
+
 func convergenceStartupComplete(cr *CityRuntime) bool {
 	if cr.convScopes == nil || cr.convergenceReqCh == nil {
 		return true
@@ -1157,6 +1166,18 @@ func (cr *CityRuntime) tick(
 	phaseStart = time.Now()
 	sessionBeads = cr.loadSessionBeadSnapshot()
 	recordPhase(TraceSiteSessionSnapshot, "load_session_snapshot.after_sync", phaseStart, traceSessionSnapshotFields(sessionBeads))
+	// Re-point external-message bindings at respawned sessions (and clear
+	// bindings whose session is gone) now that replacement beads are visible.
+	phaseStart = time.Now()
+	reapStaleExtmsgBindings(ctx, cr.cityBeadStore(), time.Now(), cr.stderr)
+	recordPhase(TraceSiteControllerTickPhase, "reap_stale_extmsg_bindings", phaseStart, nil)
+	// Re-point group participants at respawned sessions and carry their
+	// group-owned transcript membership; the participant side has no read-time
+	// membership overlay, so this backstop is what converges binding-less
+	// participants the binding reaper never sees.
+	phaseStart = time.Now()
+	reapStaleExtmsgParticipants(ctx, cr.cityBeadStore(), cr.stderr)
+	recordPhase(TraceSiteControllerTickPhase, "reap_stale_extmsg_participants", phaseStart, nil)
 	phaseStart = time.Now()
 	result = refreshDesiredStateWithSessionBeads(
 		result,
@@ -2081,6 +2102,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		phaseStart = time.Now()
 		poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(cr.cfg, cr.cityPath, sessionBeads.Open(), assignedWorkBeads, assignedWorkStoreRefs)
 		poolDesired = retainScaleCheckPartialPoolDesired(
+			cr.cfg,
 			PoolDesiredCounts(ComputePoolDesiredStatesTraced(
 				cr.cfg, poolWorkBeads, sessionBeads.Open(), result.ScaleCheckCounts, trace)),
 			sessionBeads,
@@ -2711,6 +2733,7 @@ func (cr *CityRuntime) controlDispatcherTick(ctx context.Context) {
 	open := filterSessionBeadsByName(updated, cfgNames)
 	poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(filteredCfg, cr.cityPath, open, wfcResult.AssignedWorkBeads, wfcResult.AssignedWorkStoreRefs)
 	poolDesired := retainScaleCheckPartialPoolDesired(
+		filteredCfg,
 		PoolDesiredCounts(ComputePoolDesiredStates(
 			filteredCfg, poolWorkBeads, open, wfcResult.ScaleCheckCounts)),
 		newSessionBeadSnapshot(open),
@@ -2896,6 +2919,7 @@ func (cr *CityRuntime) loadDemandSnapshot(
 		}
 		poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(cr.cfg, cr.cityPath, openSessionBeads, result.AssignedWorkBeads, result.AssignedWorkStoreRefs)
 		result.PoolDesiredCounts = retainScaleCheckPartialPoolDesired(
+			cr.cfg,
 			PoolDesiredCounts(ComputePoolDesiredStatesTraced(
 				cr.cfg, poolWorkBeads, openSessionBeads, result.ScaleCheckCounts, trace)),
 			sessionBeads,

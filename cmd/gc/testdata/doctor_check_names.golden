@@ -29,13 +29,14 @@ provider-parity
 formula-requirements
 named-always-min-conflict
 instructions-file
+service-secrets-perms
 skill-collision
 order-firing-current
 codex-hooks-drift
-beads-proxied-capability
 rig-pack-coverage
 mcp-config
 mcp-shared-target
+builtin-pack-includes
 packv2-import-state
 jsonl-archive
 tmux-binary
@@ -64,6 +65,7 @@ dolt-version
 events-log
 events-log-size
 bd-backup-size
+bd-backup-state
 worktree-disk-size
 nested-worktree-prune
 custom-types:city

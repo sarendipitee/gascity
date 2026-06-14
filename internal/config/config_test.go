@@ -660,68 +660,6 @@ name = "mayor"
 	}
 }
 
-func TestBeadsProxiedGateAccessors(t *testing.T) {
-	// Default (nil) => gate off, pool size default 4 (byte-identical legacy).
-	var zero BeadsConfig
-	if zero.ProxiedEnabled() {
-		t.Error("ProxiedEnabled() = true for nil, want false")
-	}
-	if got := zero.ProxyPoolSizeOrDefault(); got != defaultBeadsProxyPoolSize {
-		t.Errorf("ProxyPoolSizeOrDefault() = %d, want %d", got, defaultBeadsProxyPoolSize)
-	}
-
-	tru, fls := true, false
-	if !(BeadsConfig{Proxied: &tru}).ProxiedEnabled() {
-		t.Error("ProxiedEnabled() = false for proxied=true")
-	}
-	if (BeadsConfig{Proxied: &fls}).ProxiedEnabled() {
-		t.Error("ProxiedEnabled() = true for proxied=false")
-	}
-
-	n6, n0, neg := 6, 0, -3
-	if got := (BeadsConfig{ProxyPoolSize: &n6}).ProxyPoolSizeOrDefault(); got != 6 {
-		t.Errorf("ProxyPoolSizeOrDefault(6) = %d, want 6", got)
-	}
-	// Non-positive sizes fall back to the default rather than producing an
-	// unusable pool.
-	if got := (BeadsConfig{ProxyPoolSize: &n0}).ProxyPoolSizeOrDefault(); got != defaultBeadsProxyPoolSize {
-		t.Errorf("ProxyPoolSizeOrDefault(0) = %d, want %d", got, defaultBeadsProxyPoolSize)
-	}
-	if got := (BeadsConfig{ProxyPoolSize: &neg}).ProxyPoolSizeOrDefault(); got != defaultBeadsProxyPoolSize {
-		t.Errorf("ProxyPoolSizeOrDefault(-3) = %d, want %d", got, defaultBeadsProxyPoolSize)
-	}
-}
-
-func TestParseBeadsProxiedSection(t *testing.T) {
-	cfg, err := Parse([]byte("[workspace]\nname = \"t\"\n\n[beads]\nproxied = true\nproxy_pool_size = 8\nproxy_idle_timeout = \"15m\"\n"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if !cfg.Beads.ProxiedEnabled() {
-		t.Error("proxied not parsed as true")
-	}
-	if got := cfg.Beads.ProxyPoolSizeOrDefault(); got != 8 {
-		t.Errorf("proxy_pool_size = %d, want 8", got)
-	}
-	if got := cfg.Beads.ProxyIdleTimeoutOrDefault(); got != "15m" {
-		t.Errorf("proxy_idle_timeout = %q, want 15m", got)
-	}
-}
-
-func TestBeadsProxyIdleTimeoutAccessor(t *testing.T) {
-	if got := (BeadsConfig{}).ProxyIdleTimeoutOrDefault(); got != defaultBeadsProxyIdleTimeout {
-		t.Errorf("default = %q, want %q", got, defaultBeadsProxyIdleTimeout)
-	}
-	blank := "  "
-	if got := (BeadsConfig{ProxyIdleTimeout: &blank}).ProxyIdleTimeoutOrDefault(); got != defaultBeadsProxyIdleTimeout {
-		t.Errorf("blank = %q, want default %q", got, defaultBeadsProxyIdleTimeout)
-	}
-	v := "5m"
-	if got := (BeadsConfig{ProxyIdleTimeout: &v}).ProxyIdleTimeoutOrDefault(); got != "5m" {
-		t.Errorf("set = %q, want 5m", got)
-	}
-}
-
 func TestMarshalOmitsEmptyBeadsSection(t *testing.T) {
 	c := DefaultCity("test")
 	data, err := c.Marshal()
@@ -807,6 +745,79 @@ func TestBeadsConfigRoundTripPreservesStagedFields(t *testing.T) {
 	}
 	if got.Beads.Policies["control"].DeleteAfterClose != "48h" {
 		t.Errorf("round-tripped policy = %#v, want delete_after_close=48h", got.Beads.Policies["control"])
+	}
+}
+
+func TestApplyBeadPolicyDefaults_NilCityIsNoop(t *testing.T) {
+	ApplyBeadPolicyDefaults(nil) // must not panic
+	t.Log("nil city is a noop")
+}
+
+func TestApplyBeadPolicyDefaults_SetsOrderTrackingDefault(t *testing.T) {
+	cfg := &City{}
+	ApplyBeadPolicyDefaults(cfg)
+
+	p, ok := cfg.Beads.Policies["order_tracking"]
+	if !ok {
+		t.Fatal("order_tracking policy not set after ApplyBeadPolicyDefaults")
+	}
+	if p.DeleteAfterClose != "7d" {
+		t.Errorf("order_tracking.delete_after_close = %q, want 7d", p.DeleteAfterClose)
+	}
+}
+
+func TestApplyBeadPolicyDefaults_DoesNotOverrideExplicitValue(t *testing.T) {
+	cfg := &City{
+		Beads: BeadsConfig{
+			Policies: map[string]BeadPolicyConfig{
+				"order_tracking": {DeleteAfterClose: "48h"},
+			},
+		},
+	}
+	ApplyBeadPolicyDefaults(cfg)
+
+	p := cfg.Beads.Policies["order_tracking"]
+	if p.DeleteAfterClose != "48h" {
+		t.Errorf("order_tracking.delete_after_close = %q, want 48h (explicit value must not be overridden)", p.DeleteAfterClose)
+	}
+}
+
+func TestApplyBeadPolicyDefaults_PreservesOtherPolicies(t *testing.T) {
+	cfg := &City{
+		Beads: BeadsConfig{
+			Policies: map[string]BeadPolicyConfig{
+				"control": {DeleteAfterClose: "24h"},
+			},
+		},
+	}
+	ApplyBeadPolicyDefaults(cfg)
+
+	control := cfg.Beads.Policies["control"]
+	if control.DeleteAfterClose != "24h" {
+		t.Errorf("control.delete_after_close = %q, want 24h (must be preserved)", control.DeleteAfterClose)
+	}
+	orderTracking := cfg.Beads.Policies["order_tracking"]
+	if orderTracking.DeleteAfterClose != "7d" {
+		t.Errorf("order_tracking.delete_after_close = %q, want 7d", orderTracking.DeleteAfterClose)
+	}
+}
+
+func TestApplyBeadPolicyDefaults_StorageFieldPreserved(t *testing.T) {
+	cfg := &City{
+		Beads: BeadsConfig{
+			Policies: map[string]BeadPolicyConfig{
+				"order_tracking": {Storage: BeadStorageNoHistory},
+			},
+		},
+	}
+	ApplyBeadPolicyDefaults(cfg)
+
+	p := cfg.Beads.Policies["order_tracking"]
+	if p.DeleteAfterClose != "7d" {
+		t.Errorf("order_tracking.delete_after_close = %q, want 7d (default should be applied when only Storage is set)", p.DeleteAfterClose)
+	}
+	if p.Storage != BeadStorageNoHistory {
+		t.Errorf("order_tracking.storage = %q, want no_history (must be preserved)", p.Storage)
 	}
 }
 
@@ -3871,6 +3882,78 @@ func TestValidateNonNegativeDurationsRejectsNegativeDoltStopTimeout(t *testing.T
 	}
 }
 
+// --- DoltLockReleaseTimeout tests ---
+
+func TestDoltConfigDoltLockReleaseTimeoutDefault(t *testing.T) {
+	d := DoltConfig{}
+	got := d.DoltLockReleaseTimeoutDuration()
+	if got != DefaultDoltLockReleaseTimeout {
+		t.Errorf("DoltLockReleaseTimeoutDuration() = %v, want %v", got, DefaultDoltLockReleaseTimeout)
+	}
+}
+
+func TestDoltConfigDoltLockReleaseTimeoutCustom(t *testing.T) {
+	d := DoltConfig{DoltLockReleaseTimeout: "90s"}
+	got := d.DoltLockReleaseTimeoutDuration()
+	if got != 90*time.Second {
+		t.Errorf("DoltLockReleaseTimeoutDuration() = %v, want 90s", got)
+	}
+}
+
+func TestDoltConfigDoltLockReleaseTimeoutZero(t *testing.T) {
+	d := DoltConfig{DoltLockReleaseTimeout: "0s"}
+	got := d.DoltLockReleaseTimeoutDuration()
+	if got != 0 {
+		t.Errorf("DoltLockReleaseTimeoutDuration() = %v, want 0", got)
+	}
+}
+
+func TestDoltConfigDoltLockReleaseTimeoutInvalid(t *testing.T) {
+	d := DoltConfig{DoltLockReleaseTimeout: "not-a-duration"}
+	got := d.DoltLockReleaseTimeoutDuration()
+	if got != DefaultDoltLockReleaseTimeout {
+		t.Errorf("DoltLockReleaseTimeoutDuration() = %v, want %v (default for invalid)", got, DefaultDoltLockReleaseTimeout)
+	}
+}
+
+func TestParseDoltLockReleaseTimeout(t *testing.T) {
+	data := []byte(`
+[workspace]
+name = "test"
+
+[dolt]
+dolt_lock_release_timeout = "2m"
+
+[[agent]]
+name = "mayor"
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Dolt.DoltLockReleaseTimeout != "2m" {
+		t.Errorf("Dolt.DoltLockReleaseTimeout = %q, want %q", cfg.Dolt.DoltLockReleaseTimeout, "2m")
+	}
+	got := cfg.Dolt.DoltLockReleaseTimeoutDuration()
+	if got != 2*time.Minute {
+		t.Errorf("DoltLockReleaseTimeoutDuration() = %v, want 2m", got)
+	}
+}
+
+func TestValidateNonNegativeDurationsRejectsNegativeDoltLockReleaseTimeout(t *testing.T) {
+	cfg := &City{}
+	cfg.Dolt.DoltLockReleaseTimeout = "-1s"
+	err := ValidateNonNegativeDurations(cfg, "city.toml")
+	if err == nil {
+		t.Fatal("ValidateNonNegativeDurations() = nil, want error for negative dolt_lock_release_timeout")
+	}
+	if !strings.Contains(err.Error(), "dolt_lock_release_timeout") ||
+		!strings.Contains(err.Error(), "must not be negative") ||
+		!strings.Contains(err.Error(), `"-1s"`) {
+		t.Errorf("ValidateNonNegativeDurations() error = %q, want it to name the field, the constraint, and the value", err)
+	}
+}
+
 func TestDaemonDoltStartAddressInUseRetryDefault(t *testing.T) {
 	d := DaemonConfig{}
 	got := d.DoltStartAddressInUseRetryWindowDuration()
@@ -4819,6 +4902,30 @@ func TestValidateAgentsSameNameDifferentDir(t *testing.T) {
 	}
 	if err := ValidateAgents(agents); err != nil {
 		t.Errorf("ValidateAgents: unexpected error for same name different dir: %v", err)
+	}
+}
+
+func TestValidateAgentsSameNameDifferentBinding(t *testing.T) {
+	agents := []Agent{
+		{Name: "dog", SourceDir: "packs/maintenance"},
+		{Name: "dog", BindingName: "dolt", SourceDir: "packs/bd/dolt"},
+	}
+	if err := ValidateAgents(agents); err != nil {
+		t.Errorf("ValidateAgents: unexpected error for qualified same-name agents: %v", err)
+	}
+}
+
+func TestValidateAgentsSameNameSameBinding(t *testing.T) {
+	agents := []Agent{
+		{Name: "dog", BindingName: "dolt", SourceDir: "packs/bd/dolt"},
+		{Name: "dog", BindingName: "dolt", SourceDir: "packs/other-dolt"},
+	}
+	err := ValidateAgents(agents)
+	if err == nil {
+		t.Fatal("expected error for duplicate binding-qualified name")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error = %q, want 'duplicate'", err)
 	}
 }
 
@@ -7742,6 +7849,7 @@ func TestDefaultInstallAgentHooksForProvider(t *testing.T) {
 		want     []string
 	}{
 		{"opencode", []string{"opencode"}},
+		{"mimocode", []string{"mimocode"}},
 		{"kiro", []string{"kiro"}},
 		{"groq", []string{"groq"}},
 		{"kimi", []string{"kimi"}},

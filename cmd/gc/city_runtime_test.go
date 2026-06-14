@@ -5339,7 +5339,7 @@ func TestCityRuntimeRun_RetriesConvergenceStartupUntilIndexPopulated(t *testing.
 
 	deadline := time.After(5 * time.Second)
 	for {
-		if scope := cr.convScopes[""]; scope != nil && scope.adapter.activeIndex != nil {
+		if scope := cr.convScope(""); scope != nil && scope.adapter.indexReady.Load() {
 			cancel()
 			break
 		}
@@ -5720,8 +5720,8 @@ func writeCityRuntimeSoftReloadConfig(t *testing.T, tomlPath, shutdownTimeout st
 		"beads-health",
 		"cross-rig-deps",
 		"gate-sweep",
-		"mol-dog-jsonl",
-		"mol-dog-reaper",
+		"jsonl-export",
+		"reaper",
 		"order-tracking-sweep",
 		"orphan-sweep",
 		"prune-branches",

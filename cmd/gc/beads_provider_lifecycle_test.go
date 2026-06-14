@@ -303,6 +303,42 @@ func TestProviderLifecycleProcessEnvPropagatesArchiveLevel(t *testing.T) {
 	}
 }
 
+func TestProviderLifecycleProcessEnvPropagatesAutoGCEnabled(t *testing.T) {
+	cityPath := t.TempDir()
+	normPath := normalizePathForCompare(cityPath)
+
+	autoGC := false
+	cityDoltConfigs.Store(normPath, config.DoltConfig{AutoGCEnabled: &autoGC})
+	t.Cleanup(func() { cityDoltConfigs.Delete(normPath) })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
+	env := map[string]string{}
+	for _, entry := range envEntries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	if got := env["GC_DOLT_AUTO_GC_ENABLED"]; got != "false" {
+		t.Fatalf("GC_DOLT_AUTO_GC_ENABLED = %q, want %q", got, "false")
+	}
+}
+
+func TestProviderLifecycleProcessEnvOmitsAutoGCEnabledWhenNil(t *testing.T) {
+	cityPath := t.TempDir()
+	normPath := normalizePathForCompare(cityPath)
+
+	cityDoltConfigs.Store(normPath, config.DoltConfig{})
+	t.Cleanup(func() { cityDoltConfigs.Delete(normPath) })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
+	for _, entry := range envEntries {
+		if strings.HasPrefix(entry, "GC_DOLT_AUTO_GC_ENABLED=") {
+			t.Fatalf("GC_DOLT_AUTO_GC_ENABLED should not be set when AutoGCEnabled is nil, got %q", entry)
+		}
+	}
+}
+
 func TestProviderLifecycleProcessEnvPropagatesManagedDoltListenerOverrides(t *testing.T) {
 	cityPath := t.TempDir()
 	normPath := normalizePathForCompare(cityPath)
@@ -330,6 +366,72 @@ func TestProviderLifecycleProcessEnvPropagatesManagedDoltListenerOverrides(t *te
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestProviderLifecycleProcessEnvPropagatesDoltLockReleaseTimeout(t *testing.T) {
+	cityPath := t.TempDir()
+	normPath := normalizePathForCompare(cityPath)
+
+	cityDoltConfigs.Store(normPath, config.DoltConfig{DoltLockReleaseTimeout: "90s"})
+	t.Cleanup(func() { cityDoltConfigs.Delete(normPath) })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
+	env := map[string]string{}
+	for _, entry := range envEntries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	if got := env["GC_DOLT_LOCK_RELEASE_TIMEOUT_MS"]; got != "90000" {
+		t.Fatalf("GC_DOLT_LOCK_RELEASE_TIMEOUT_MS = %q, want %q", got, "90000")
+	}
+}
+
+func TestProviderLifecycleProcessEnvOmitsDoltLockReleaseTimeoutWhenUnset(t *testing.T) {
+	cityPath := t.TempDir()
+	normPath := normalizePathForCompare(cityPath)
+
+	cityDoltConfigs.Store(normPath, config.DoltConfig{})
+	t.Cleanup(func() { cityDoltConfigs.Delete(normPath) })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "exec:"+gcBeadsBdScriptPath(cityPath))
+	for _, entry := range envEntries {
+		if strings.HasPrefix(entry, "GC_DOLT_LOCK_RELEASE_TIMEOUT_MS=") {
+			t.Fatalf("GC_DOLT_LOCK_RELEASE_TIMEOUT_MS should not be set when DoltLockReleaseTimeout is empty, got %q", entry)
+		}
+	}
+}
+
+func TestCityDoltConfigHasLifecycleFieldsRecognizesDoltLockReleaseTimeout(t *testing.T) {
+	// A city that sets only [dolt].dolt_lock_release_timeout must register
+	// its dolt config — otherwise startBeadsLifecycle clears the registry
+	// entry and the value never reaches providerLifecycleProcessEnv.
+	if !cityDoltConfigHasLifecycleFields(config.DoltConfig{DoltLockReleaseTimeout: "90s"}) {
+		t.Fatal("cityDoltConfigHasLifecycleFields must recognize DoltLockReleaseTimeout")
+	}
+	if cityDoltConfigHasLifecycleFields(config.DoltConfig{}) {
+		t.Fatal("cityDoltConfigHasLifecycleFields must stay false for an empty config")
+	}
+}
+
+func TestCityDoltConfigHasLifecycleFieldsRecognizesAutoGCEnabled(t *testing.T) {
+	// A city that sets only [dolt].auto_gc_enabled must register its dolt
+	// config — otherwise startBeadsLifecycle clears the registry entry and
+	// the documented auto_gc_enabled=false rollback never reaches
+	// providerLifecycleProcessEnv, so the shell fallback silently re-enables
+	// auto-GC. Both an explicit false and an explicit true must register.
+	autoGCOff := false
+	if !cityDoltConfigHasLifecycleFields(config.DoltConfig{AutoGCEnabled: &autoGCOff}) {
+		t.Fatal("cityDoltConfigHasLifecycleFields must recognize AutoGCEnabled=false")
+	}
+	autoGCOn := true
+	if !cityDoltConfigHasLifecycleFields(config.DoltConfig{AutoGCEnabled: &autoGCOn}) {
+		t.Fatal("cityDoltConfigHasLifecycleFields must recognize AutoGCEnabled=true")
+	}
+	if cityDoltConfigHasLifecycleFields(config.DoltConfig{}) {
+		t.Fatal("cityDoltConfigHasLifecycleFields must stay false for an empty config")
 	}
 }
 
@@ -1670,6 +1772,92 @@ func TestSyncConfiguredDoltPortFilesWarnsOnRigPortFileRewrite(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(data)); got != managedPort {
 		t.Errorf("rig port file = %q, want %q", got, managedPort)
+	}
+}
+
+func TestWriteDoltPortFileWritesThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := filepath.Join(t.TempDir(), "ports")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "dolt-server.port")
+	if err := os.WriteFile(target, []byte("3307\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(beadsDir, "dolt-server.port")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	writeDoltPortFile(dir, "3311", "city", &warn)
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dolt-server.port symlink was replaced by a %v entry; rewrite must write through the link", info.Mode())
+	}
+	if got := strings.TrimSpace(string(mustReadFile(t, target))); got != "3311" {
+		t.Fatalf("target port = %q, want 3311", got)
+	}
+	if out := warn.String(); !strings.Contains(out, "3307") || !strings.Contains(out, "3311") {
+		t.Fatalf("warning = %q, want old and new ports", out)
+	}
+}
+
+func TestRemoveDoltPortFileClearsThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := filepath.Join(t.TempDir(), "ports")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "dolt-server.port")
+	if err := os.WriteFile(target, []byte("3311\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(beadsDir, "dolt-server.port")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	removeDoltPortFile(dir)
+
+	// The best-effort lifecycle mirror cleanup must preserve the operator's
+	// link and clear only the resolved target.
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dolt-server.port symlink was replaced by a %v entry; cleanup must clear through the link", info.Mode())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target stat err = %v, want resolved target removed", err)
+	}
+
+	// A later publication must write through the preserved link.
+	var warn bytes.Buffer
+	writeDoltPortFile(dir, "3320", "city", &warn)
+	info, err = os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link after re-publish: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("after re-publish, link mode = %v; want symlink preserved", info.Mode())
+	}
+	if got := strings.TrimSpace(string(mustReadFile(t, target))); got != "3320" {
+		t.Fatalf("re-published target port = %q, want 3320", got)
 	}
 }
 
@@ -7785,11 +7973,11 @@ data_dir: "$data_dir"
 
 behavior:
   auto_gc_behavior:
-    enable: false
+    enable: true
     archive_level: 0
 
 system_variables:
-  dolt_auto_gc_enabled: "OFF"
+  dolt_auto_gc_enabled: "ON"
   dolt_stats_enabled: "OFF"
   dolt_stats_gc_enabled: "OFF"
   dolt_stats_memory_only: "ON"
@@ -8047,11 +8235,11 @@ data_dir: "$data_dir"
 
 behavior:
   auto_gc_behavior:
-    enable: false
+    enable: true
     archive_level: 0
 
 system_variables:
-  dolt_auto_gc_enabled: "OFF"
+  dolt_auto_gc_enabled: "ON"
   dolt_stats_enabled: "OFF"
   dolt_stats_gc_enabled: "OFF"
   dolt_stats_memory_only: "ON"
@@ -10318,6 +10506,47 @@ func TestStartBeadsLifecycleRegistersArchiveLevelOnlyDoltConfig(t *testing.T) {
 	}
 	if got := env["GC_DOLT_ARCHIVE_LEVEL"]; got != "1" {
 		t.Fatalf("GC_DOLT_ARCHIVE_LEVEL = %q, want 1", got)
+	}
+}
+
+func TestStartBeadsLifecycleRegistersAutoGCOnlyDoltConfig(t *testing.T) {
+	// A city.toml whose [dolt] table sets only auto_gc_enabled = false (the
+	// documented opt-out and the documented rollback for the auto-GC default
+	// flip) must register its dolt config so the override reaches the managed
+	// dolt server. Without AutoGCEnabled in cityDoltConfigHasLifecycleFields,
+	// startBeadsLifecycle clears the registry entry and
+	// providerLifecycleProcessEnvFromBase never projects
+	// GC_DOLT_AUTO_GC_ENABLED, so the shell fallback re-enables auto-GC.
+	realCity := t.TempDir()
+	aliasRoot := t.TempDir()
+	aliasCity := filepath.Join(aliasRoot, "city-link")
+	if err := os.Symlink(realCity, aliasCity); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", aliasCity)
+	t.Setenv("GC_DOLT", "skip")
+
+	autoGCOff := false
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Dolt:      config.DoltConfig{AutoGCEnabled: &autoGCOff},
+	}
+	if err := startBeadsLifecycle(aliasCity, "test-city", cfg, io.Discard); err != nil {
+		t.Fatalf("startBeadsLifecycle: %v", err)
+	}
+	t.Cleanup(func() { cityDoltConfigs.Delete(normalizePathForCompare(realCity)) })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, realCity, "exec:"+gcBeadsBdScriptPath(realCity))
+	env := map[string]string{}
+	for _, entry := range envEntries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	if got := env["GC_DOLT_AUTO_GC_ENABLED"]; got != "false" {
+		t.Fatalf("GC_DOLT_AUTO_GC_ENABLED = %q, want false", got)
 	}
 }
 
