@@ -245,7 +245,7 @@ Tried: <what you've attempted>"
 gc runtime request-restart
 ```
 This blocks until the controller kills your session. The next session
-resumes from context (re-reads formula steps, checks git/bead state).
+receives the re-injected formula step and resumes from context (checks git/bead state).
 
 **Exit criteria:** Implementation complete, all changes committed."""
 
