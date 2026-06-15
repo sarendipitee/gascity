@@ -2933,6 +2933,63 @@ esac
 	}
 }
 
+// TestEffectivePoolDemandQueryExcludesClosedReworkBeads guards against upstream
+// Dolt status-index drift that causes bd list --status=open to return closed
+// beads (gcy-1on). The rework jq filter must explicitly exclude beads with
+// status="closed" so a phantom closed bead never inflates pool demand and
+// triggers a spurious spawn or witness false-alarm escalation.
+func TestEffectivePoolDemandQueryExcludesClosedReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	// Simulate bd list --status=open returning a closed bead (upstream index drift).
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"gcy-oqf","status":"closed","started_at":"2026-01-01T00:00:00Z","issue_type":"bug"}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "0" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 0 (closed rework bead must be excluded)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectiveWorkQueryExcludesClosedReworkBeads guards against upstream Dolt
+// status-index drift (gcy-1on): a closed bead appearing in bd list --status=open
+// must not be returned as ready work to a worker hook.
+func TestEffectiveWorkQueryExcludesClosedReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runEffectiveWorkQuery(t, a, nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"gcy-oqf","status":"closed","started_at":"2026-01-01T00:00:00Z","issue_type":"bug","priority":1}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.Contains(strings.TrimSpace(out), "gcy-oqf") {
+		t.Fatalf("EffectiveWorkQuery() returned closed bead gcy-oqf in output = %q", strings.TrimSpace(out))
+	}
+}
+
 // TestEffectivePoolDemandQueryRespectsOverride verifies the user-set
 // scale_check override flows through unchanged. Pass-through behavior
 // preserves config-side flexibility while keeping the default form

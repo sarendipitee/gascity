@@ -583,6 +583,9 @@ func filterUnreadyHookCandidates(output string, now time.Time) string {
 			filtered = append(filtered, item)
 			continue
 		}
+		if isClosedHookCandidate(obj) {
+			continue
+		}
 		if isFutureDeferredHookCandidate(obj, now) {
 			continue
 		}
@@ -634,6 +637,14 @@ func isDepBlockedHookCandidate(item map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// isClosedHookCandidate reports whether item is a closed bead. Defense-in-depth
+// against upstream Dolt status-index drift that can cause bd list --status=open
+// to return closed beads (gcy-1on).
+func isClosedHookCandidate(item map[string]any) bool {
+	status, ok := item["status"].(string)
+	return ok && strings.EqualFold(strings.TrimSpace(status), "closed")
 }
 
 func normalizeWorkQueryOutput(output string) string {
