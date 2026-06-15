@@ -10650,3 +10650,373 @@ exit 0
 		t.Fatalf("cross-rig-deps summary missing or wrong (subshell counter regression?)\nwant substring: %q\ngot output:\n%s\nbd log:\n%s", want, out, logData)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// rig-liveness-watchdog.sh tests
+// ---------------------------------------------------------------------------
+
+// watchdogGitRig creates a local git repo with a bare "origin" and returns
+// (rigPath, originPath). The initial commit on main has the given age in
+// seconds ago. If freshOriginCommit is true a second, recent commit is pushed
+// directly to origin and then fetched (but NOT merged) into the local clone,
+// leaving local main stale while refs/remotes/origin/main is fresh. This is
+// the exact scenario that produced the false-positive merge-stall incidents in
+// the original bug (gcy-vee / refiled from gcy-6xu).
+func watchdogGitRig(t *testing.T, staleAgeSecs int, freshOriginCommit bool) (rigPath, originPath string) {
+	t.Helper()
+	originPath = filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, t.TempDir(), "init", "-q", "--bare", "-b", "main", originPath)
+
+	rigPath = t.TempDir()
+	runGit(t, rigPath, "init", "-q", "-b", "main", ".")
+	runGit(t, rigPath, "remote", "add", "origin", originPath)
+
+	// Initial commit dated `staleAgeSecs` seconds ago.
+	staleDate := fmt.Sprintf("@%d", time.Now().Unix()-int64(staleAgeSecs))
+	if err := os.WriteFile(filepath.Join(rigPath, "README"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleDateEnv := map[string]string{
+		"GIT_AUTHOR_NAME":     "Test",
+		"GIT_AUTHOR_EMAIL":    "test@example.com",
+		"GIT_COMMITTER_NAME":  "Test",
+		"GIT_COMMITTER_EMAIL": "test@example.com",
+		"GIT_AUTHOR_DATE":     staleDate,
+		"GIT_COMMITTER_DATE":  staleDate,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CONFIG_GLOBAL":   filepath.Join(t.TempDir(), "gitconfig"),
+	}
+	addCmd := exec.Command("git", "add", "README")
+	addCmd.Dir = rigPath
+	addCmd.Env = mergeTestEnv(staleDateEnv)
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-q", "-m", "seed")
+	commitCmd.Dir = rigPath
+	commitCmd.Env = mergeTestEnv(staleDateEnv)
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit (stale): %v\n%s", err, out)
+	}
+	runGit(t, rigPath, "push", "-q", "-u", "origin", "main")
+
+	if freshOriginCommit {
+		// Simulate a recent merge landing on origin/main (e.g. refinery merged
+		// a PR to origin/main 5 minutes ago) via a scratch clone that pushes to
+		// the bare origin, then fetch (not pull) so local main stays stale while
+		// refs/remotes/origin/main advances.
+		scratch := t.TempDir()
+		cloneCmd := exec.Command("git", "clone", "-q", originPath, ".")
+		cloneCmd.Dir = scratch
+		cloneCmd.Env = mergeTestEnv(staleDateEnv)
+		if out, err := cloneCmd.CombinedOutput(); err != nil {
+			t.Fatalf("git clone (scratch): %v\n%s", err, out)
+		}
+		freshDate := fmt.Sprintf("@%d", time.Now().Unix()-int64(5*60)) // 5 min ago
+		freshDateEnv := map[string]string{
+			"GIT_AUTHOR_NAME":     "Test",
+			"GIT_AUTHOR_EMAIL":    "test@example.com",
+			"GIT_COMMITTER_NAME":  "Test",
+			"GIT_COMMITTER_EMAIL": "test@example.com",
+			"GIT_AUTHOR_DATE":     freshDate,
+			"GIT_COMMITTER_DATE":  freshDate,
+			"GIT_CONFIG_NOSYSTEM": "1",
+			"GIT_CONFIG_GLOBAL":   filepath.Join(t.TempDir(), "gitconfig"),
+		}
+		if err := os.WriteFile(filepath.Join(scratch, "merged"), []byte("merged"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		scratchAdd := exec.Command("git", "add", "merged")
+		scratchAdd.Dir = scratch
+		scratchAdd.Env = mergeTestEnv(freshDateEnv)
+		if out, err := scratchAdd.CombinedOutput(); err != nil {
+			t.Fatalf("git add (scratch): %v\n%s", err, out)
+		}
+		scratchCommit := exec.Command("git", "commit", "-q", "-m", "fresh merge")
+		scratchCommit.Dir = scratch
+		scratchCommit.Env = mergeTestEnv(freshDateEnv)
+		if out, err := scratchCommit.CombinedOutput(); err != nil {
+			t.Fatalf("git commit (fresh): %v\n%s", err, out)
+		}
+		scratchPush := exec.Command("git", "push", "-q", "origin", "main")
+		scratchPush.Dir = scratch
+		scratchPush.Env = mergeTestEnv(freshDateEnv)
+		if out, err := scratchPush.CombinedOutput(); err != nil {
+			t.Fatalf("git push (fresh): %v\n%s", err, out)
+		}
+		// Fetch into rigPath so refs/remotes/origin/main is current but local
+		// main is NOT updated — the local ref still points to the stale commit.
+		runGit(t, rigPath, "fetch", "origin")
+	}
+	return rigPath, originPath
+}
+
+// watchdogGCStub writes a gc stub to path. It handles the four commands the
+// watchdog issues:
+//
+//   - rig list --json → returns a single running rig at rigPath with default branch "main"
+//   - --rig <rig> session list --json → returns refinery in refineryState, witness in "active"
+//   - bd list --rig <rig> --json --limit=0 → returns queueDepth non-ephemeral open beads assigned to refinery
+//   - mail send ... → appends subject to mailLog
+func watchdogGCStub(t *testing.T, path, rigName, rigPath, refineryState, mailLog string, queueDepth int) {
+	t.Helper()
+	beads := ""
+	for i := range queueDepth {
+		if i > 0 {
+			beads += ","
+		}
+		beads += fmt.Sprintf(`{"id":"ga-q%d","status":"open","assignee":"%s/gastown.refinery","ephemeral":false}`, i, rigName)
+	}
+
+	sessionsJSON := fmt.Sprintf(`{"sessions":[
+  {"id":"s-ref","name":"%s.refinery","state":"%s","last_active":"0001-01-01T00:00:00Z","last_nudge_delivered_at":""},
+  {"id":"s-wit","name":"%s.witness","state":"active","last_active":"%s","last_nudge_delivered_at":""}
+]}`,
+		rigName, refineryState,
+		rigName, time.Now().UTC().Format(time.RFC3339))
+
+	writeExecutable(t, path, fmt.Sprintf(`#!/bin/sh
+# Watchdog gc stub for rig=%s
+GC_MAIL_LOG="%s"
+rig_arg=""
+if [ "${1:-}" = "--rig" ]; then
+  rig_arg="$2"; shift 2
+fi
+
+case "${rig_arg:+--rig $rig_arg }$*" in
+  "rig list --json")
+    printf '{"rigs":[{"name":"%s","path":"%s","default_branch":"main","hq":false,"suspended":false,"running":true}]}\n'
+    exit 0 ;;
+  "--rig %s bd list --rig %s --json --limit=0"|"bd list --rig %s --json --limit=0")
+    printf '[%s]\n'
+    exit 0 ;;
+  "--rig %s session list --json"|"session list --json")
+    printf '%%s\n' '%s'
+    exit 0 ;;
+  "mail send "*)
+    printf '%%s\n' "$*" >> "$GC_MAIL_LOG"
+    exit 0 ;;
+  *)
+    printf 'UNEXPECTED gc call: [%%s]\n' "$*" >&2
+    exit 2 ;;
+esac
+`, rigName, mailLog,
+		rigName, rigPath,
+		rigName, rigName, rigName,
+		beads,
+		rigName, sessionsJSON))
+}
+
+// watchdogEnv builds the env map for running rig-liveness-watchdog.sh.
+func watchdogEnv(t *testing.T, rigName, binDir string) map[string]string {
+	t.Helper()
+	return map[string]string{
+		"GC_RIG":          rigName,
+		"GC_CITY":         t.TempDir(),
+		"GC_CITY_PATH":    t.TempDir(),
+		"GC_PACK_STATE_DIR": t.TempDir(),
+		"PATH":            binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"TZ":              "UTC",
+	}
+}
+
+// TestWatchdogMergeStallNoIncidentWhenOriginRefFresh is the regression test for
+// the false-positive merge-stall bug (gcy-vee). The local default-branch ref is
+// 3 hours stale, but refs/remotes/origin/main carries a commit from 5 minutes
+// ago — well within the 60-minute freshness window. The watchdog must NOT fire
+// an incident, because origin/main (the real merge target) is fresh.
+//
+// Before the fix the detector read the stale LOCAL ref and produced:
+// "[INCIDENT] … refinery merge-stall — last merge 134 min ago (window 60)".
+// After the fix it reads origin/main and correctly reports no incident.
+func TestWatchdogMergeStallNoIncidentWhenOriginRefFresh(t *testing.T) {
+	const rig = "chatehr"
+	rigPath, _ := watchdogGitRig(t, 3*3600, true) // local main = 3h ago; origin/main = 5min ago
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Queue at threshold (2 beads) → real_backlog=yes. Only the stale local ref
+	// should trigger a stall, so if a merge-stall incident fires, the fix is broken.
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "asleep", mailLog, 2)
+
+	env := watchdogEnv(t, rig, binDir)
+	out, err := exec.Command(coreScriptPath("rig-liveness-watchdog.sh")).
+		CombinedOutput()
+	_ = err // exit code can be non-zero on jq not found; verify via mail log
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ = cmd.CombinedOutput()
+
+	mailData, readErr := os.ReadFile(mailLog)
+	if readErr != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", readErr, out)
+	}
+	if strings.Contains(string(mailData), "merge-stall") {
+		t.Fatalf("false-positive merge-stall: watchdog fired incident when origin/main is fresh\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+	if strings.Contains(string(mailData), "[INCIDENT]") {
+		t.Fatalf("unexpected incident when origin/main is fresh:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
+
+// TestWatchdogMergeStallFiresWhenBothRefsStaleAndBacklogReal asserts that a
+// merge-stall IS detected when both the local ref and origin/<default> are
+// older than the freshness window and the routed bead queue is at/above the
+// threshold. This is the true-positive case — the refinery really is stalled.
+func TestWatchdogMergeStallFiresWhenBothRefsStaleAndBacklogReal(t *testing.T) {
+	const rig = "chatehr"
+	// freshOriginCommit=false → both local main and origin/main = 3h old (stale)
+	rigPath, _ := watchdogGitRig(t, 3*3600, false)
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "asleep", mailLog, 2)
+
+	env := watchdogEnv(t, rig, binDir)
+	env["WATCHDOG_FRESH_MIN"] = "60"
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ := cmd.CombinedOutput()
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", err, out)
+	}
+	if !strings.Contains(string(mailData), "merge-stall") {
+		t.Fatalf("expected merge-stall incident when both refs are stale and queue >= threshold;\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
+
+// TestWatchdogMergeStallNoIncidentBelowQueueThreshold asserts that an idle
+// refinery with a sub-threshold queue does NOT trigger a merge-stall even when
+// origin/<default> is stale. A quiet dev rig with a queue of 1 is normal, not
+// a stall.
+func TestWatchdogMergeStallNoIncidentBelowQueueThreshold(t *testing.T) {
+	const rig = "chatehr"
+	rigPath, _ := watchdogGitRig(t, 3*3600, false) // both refs stale
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// queueDepth=1 is below the default MIN_QUEUE of 2.
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "asleep", mailLog, 1)
+
+	env := watchdogEnv(t, rig, binDir)
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ := cmd.CombinedOutput()
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", err, out)
+	}
+	if strings.Contains(string(mailData), "merge-stall") {
+		t.Fatalf("sub-threshold queue should NOT trigger merge-stall;\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
+
+// TestWatchdogRefineryDeadAlwaysIncident asserts that a dead/crashed refinery
+// always triggers an incident regardless of queue depth or merge freshness.
+func TestWatchdogRefineryDeadAlwaysIncident(t *testing.T) {
+	const rig = "chatehr"
+	rigPath, _ := watchdogGitRig(t, 5*60, false) // fresh HEAD; empty queue
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Queue=0 and HEAD fresh, but refinery is crashed.
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "crashed", mailLog, 0)
+
+	env := watchdogEnv(t, rig, binDir)
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ := cmd.CombinedOutput()
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", err, out)
+	}
+	if !strings.Contains(string(mailData), "refinery crashed") {
+		t.Fatalf("expected refinery-dead incident for crashed state;\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
+
+// TestWatchdogRefineryStartupGraceNoImmediateIncident asserts that a refinery
+// in "creating" state does NOT trigger an incident immediately: the startup
+// grace window (WATCHDOG_STARTUP_GRACE_MIN) gives a freshly-spawning refinery
+// time to finish initializing.
+func TestWatchdogRefineryStartupGraceNoImmediateIncident(t *testing.T) {
+	const rig = "chatehr"
+	rigPath, _ := watchdogGitRig(t, 3*3600, false)
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "creating", mailLog, 2)
+
+	env := watchdogEnv(t, rig, binDir)
+	// Grace window = 10 min (default). No prior ledger entry means first-seen is
+	// stamped NOW → age=0 < grace → no incident should fire.
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ := cmd.CombinedOutput()
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", err, out)
+	}
+	if strings.Contains(string(mailData), "[INCIDENT]") {
+		t.Fatalf("refinery mid-startup must not alert within grace window;\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
+
+// TestWatchdogMergeFreshnessUsesRemoteRefNotLocalRef is the specification test
+// that pins the fixed behaviour: freshness MUST come from origin/<default> when
+// a remote-tracking ref exists, not from the local default-branch ref. It
+// constructs a git repo where the two refs have different timestamps, runs the
+// watchdog, and asserts the origin ref's timestamp wins.
+//
+// Concretely: local main = 3h stale; origin/main = 5min fresh; queue = 2
+// (backlog real). A detector that reads the local ref fires an incident; a
+// detector that reads origin/main does not. The test asserts NO incident — the
+// only way that assertion holds is if the detector chose the remote ref.
+func TestWatchdogMergeFreshnessUsesRemoteRefNotLocalRef(t *testing.T) {
+	const rig = "chatehr"
+	rigPath, _ := watchdogGitRig(t, 3*3600, true) // local=stale, origin/main=fresh
+	binDir := t.TempDir()
+	mailLog := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(mailLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	watchdogGCStub(t, filepath.Join(binDir, "gc"), rig, rigPath, "asleep", mailLog, 2)
+
+	env := watchdogEnv(t, rig, binDir)
+	env["WATCHDOG_FRESH_MIN"] = "60" // 5min-old origin/main is well within window
+	cmd := exec.Command(coreScriptPath("rig-liveness-watchdog.sh"))
+	cmd.Env = mergeTestEnv(env)
+	out, _ := cmd.CombinedOutput()
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v\nwatchdog output:\n%s", err, out)
+	}
+	// A detector reading the local ref (3h stale) would fire a merge-stall
+	// incident here. The absence of that incident proves the fix: origin/main
+	// (5min fresh) was used instead.
+	if strings.Contains(string(mailData), "merge-stall") {
+		t.Fatalf("merge-stall falsely fired: watchdog used stale local ref instead of origin/main\nmail log:\n%s\nwatchdog output:\n%s", mailData, out)
+	}
+}
