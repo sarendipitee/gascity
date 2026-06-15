@@ -2565,7 +2565,6 @@ func TestClaimHookWorkDrainsClaimsErroredWhenEveryCandidateErrors(t *testing.T) 
 		t.Fatalf("claim result = %+v, want drain/claims_errored", result)
 	}
 }
-
 // TestFilterUnreadyHookCandidatesExcludesClosedBeads guards against upstream
 // Dolt status-index drift where bd list --status=open returns closed beads
 // (gcy-1on). filterUnreadyHookCandidates must strip them before they reach the
