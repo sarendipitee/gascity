@@ -3420,10 +3420,12 @@ func bdListReworkPoolDemandShell(includeEphemeralReady bool) string {
 }
 
 // reworkPoolDemandFilterJQ returns a jq filter that selects rework-eligible
-// beads: started_at set (previously claimed, not fresh), not an epic. Sorts by
-// priority and slices to limit when limit > 0.
+// beads: started_at set (previously claimed, not fresh), not an epic, and
+// not closed. The closed-status guard is defense-in-depth against upstream
+// Dolt status-index drift that can cause bd list --status=open to return
+// closed beads (gcy-1on).
 func reworkPoolDemandFilterJQ(limit int) string {
-	filter := `[.[] | select((.started_at // "") != "") | select(((.issue_type // .type // "") != "epic"))]`
+	filter := `[.[] | select((.started_at // "") != "") | select(((.issue_type // .type // "") != "epic")) | select((.status // "") != "closed")]`
 	if limit > 0 {
 		filter += ` | sort_by(.priority // 4) | .[:` + strconv.Itoa(limit) + `]`
 	}
