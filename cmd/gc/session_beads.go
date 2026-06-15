@@ -2388,7 +2388,6 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 					continue
 				}
 				seenWork[item.ID] = struct{}{}
-<<<<<<< HEAD
 				// The session owning this work is closing, so the work is
 				// fully detached (not preserved to a new assignee). Clear the
 				// stale session-affinity metadata too, or the next claim
@@ -2399,9 +2398,6 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 					Assignee: &empty,
 					Metadata: withClearedSessionAffinityMetadata(nil),
 				}
-=======
-				update := beads.UpdateOpts{Assignee: &empty}
->>>>>>> 4d11efed6 (fix(controller): recover deferred pool-routed work beads (gcy-tw3))
 				if item.Status == "in_progress" || item.Status == "deferred" {
 					update.Status = &openStatus
 				}
