@@ -172,23 +172,43 @@
         "group": "Guides",
         "pages": [
           "guides/index",
-          "guides/capabilities-for-coding-agent-users",
-          "guides/understanding-packs",
-          "guides/understanding-formulas",
-          "guides/shareable-packs",
-          "guides/gastown-config-recipes",
-          "guides/using-json-from-gc",
-          "guides/multi-agent-engineering-environment"
+          {
+            "group": "Understand",
+            "pages": [
+              "guides/capabilities-for-coding-agent-users",
+              "guides/understanding-packs",
+              "guides/understanding-formulas"
+            ]
+          },
+          {
+            "group": "How-to",
+            "pages": [
+              "guides/shareable-packs",
+              "guides/gastown-config-recipes",
+              "guides/using-json-from-gc",
+              "guides/multi-agent-engineering-environment"
+            ]
+          }
         ]
       },
       {
         "group": "Troubleshooting",
         "pages": [
           "troubleshooting/index",
-          "troubleshooting/gc-start-walkthrough",
-          "troubleshooting/dolt-bloat-recovery",
-          "troubleshooting/bd-backup-cleanup",
-          "runbooks/managed-city-endpoints"
+          {
+            "group": "Diagnose",
+            "pages": [
+              "troubleshooting/gc-start-walkthrough",
+              "troubleshooting/dolt-bloat-recovery",
+              "troubleshooting/bd-backup-cleanup"
+            ]
+          },
+          {
+            "group": "Operate",
+            "pages": [
+              "runbooks/managed-city-endpoints"
+            ]
+          }
         ]
       },
       {

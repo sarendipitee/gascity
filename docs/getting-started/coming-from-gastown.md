@@ -1,6 +1,6 @@
 ---
 title: Coming from Gas Town
-description: Recap what Gas Town gives you, see how Gas City works, then map Gas Town roles, mechanisms, layout, commands, and workflows onto Gas City primitives.
+description: Map Gas Town's roles, mechanisms, layout, commands, and workflows onto Gas City's primitives.
 ---
 
 If you have run Gas Town, you already know its roles, its `~/gt/...` layout, and its `gt` commands. This page carries that knowledge across to Gas City.
@@ -8,33 +8,6 @@ If you have run Gas Town, you already know its roles, its `~/gt/...` layout, and
 Gas City is the platform that machinery was extracted into. Two things changed. First, the orchestrator hardcodes **zero roles** — every role you knew is now configuration, and you express Gas Town (or any orchestration) on top of a few primitives. Second, and bigger: the orchestrator can now run a formula as a **graph across many agents, out of your session** — decomposing a job into beads, fanning the ready ones out in parallel, gating each step on its dependencies, and retrying failures to completion. Your single-agent, in-session formulas still run (v1); this fleet orchestration (v2) is what's new. Because it is a platform, a feature added to Gas City lifts *every* orchestrator built on it — Gas Town included.
 
 For the system-level mental model first, read [How Gas City Works](/getting-started/how-gas-city-works).
-
-## How Gas City works
-
-Gas City's job is the same as Gas Town's: **orchestrate a fleet of agents** to get work done. What changed is that the orchestration is no longer baked into the binary — the orchestrator hardcodes **zero roles** (no built-in mayor, deacon, or polecat), and every role you knew is now configuration. Gas Town's single-agent, in-session formulas still run (that's v1); Gas City's reason to exist is **v2** — the orchestrator running a formula graph across many agents, out of your session.
-
-Six primitives carry the model:
-
-| Primitive | Answers | Is |
-|---|---|---|
-| **Agent** | WHO does the work | A configured worker; session, provider, and pool are facets under it. |
-| **Bead** | WHAT the work is | A unit of work. Tasks, mail, and convoy members are all beads. |
-| **Formula** | HOW work gets done | A reusable method applied over a convoy of beads, fanning each to an agent. |
-| **Rig** | WHERE work happens | A project or repo registered with the city. |
-| **Pack** | CONFIGURES the system | Declares agents, formulas, and orders. The City is the local (root) pack; it imports shared packs. |
-| **Event** | OBSERVE what happens | An outbound notification fired by activity, for humans and agents to watch. |
-
-The backbone: packs declare agents, formulas, and orders → the local pack is the City → a Formula operates over a convoy of Beads, fanning to Agents that execute in a Rig → an Order automates *when* a formula runs → Events fire for observation. Run, sling, and order are derived under Formula; Health Patrol is one kind of order. A formula run materializes as beads at runtime (the v1 container is a *molecule*; ephemeral ones are *wisps*).
-
-The **orchestrator** is the engine that keeps these in sync. It owns platform infrastructure operations — reconciliation, scaling, order evaluation, health patrol — so no platform feature depends on a user-configured role existing.
-
-The default mental model after the move:
-
-- reusable behavior lives in `pack.toml` plus pack directories; deployment choices live in `city.toml`
-- builtin packs are explicit — `gc init` writes their includes into `city.toml` (`[workspace] includes = [".gc/system/packs/core", ...]`), never spliced in implicitly
-- machine-local bindings and runtime state live in `.gc/`
-- every durable work item is a bead; agents are generic and roles come from prompts, formulas, orders, and config
-- directories are an implementation detail, not the architecture
 
 ## Mapping tables
 

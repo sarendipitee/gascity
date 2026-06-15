@@ -8,12 +8,12 @@ day — start here. This section pairs diagnosis walkthroughs that match a
 symptom to its fix with operational runbooks for the deployments you keep
 alive.
 
-## Diagnose a problem
+## Diagnose
 
 - [gc start failure walkthrough](/troubleshooting/gc-start-walkthrough) — match a `gc start` failure symptom to its cause and resolution.
 - [Dolt bloat recovery](/troubleshooting/dolt-bloat-recovery) — recover a beads store whose Dolt noms directory has grown out of proportion.
 - [bd auto-backup cleanup](/troubleshooting/bd-backup-cleanup) — reclaim space when bd's `.beads/backup/` directory grows large enough to threaten disk pressure.
 
-## Operate a deployment
+## Operate
 
 - [Managed-city Dolt endpoints](/runbooks/managed-city-endpoints) — mental model, forbidden edits, sanctioned escape hatches, and recovery recipe for the city-level Dolt endpoint architecture.
