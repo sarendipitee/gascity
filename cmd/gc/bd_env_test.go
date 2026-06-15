@@ -5049,6 +5049,11 @@ func TestProjectedKeysCoverage(t *testing.T) {
 			t.Errorf("bdAutoBackupOptOutEnvKeys[%q] is not in mergeRuntimeEnv strip list - symmetry broken", key)
 		}
 	}
+	for _, key := range bdContributorRoutingOptOutEnvKeys {
+		if !projectedKeyStripped(key) {
+			t.Errorf("bdContributorRoutingOptOutEnvKeys[%q] is not in mergeRuntimeEnv strip list - symmetry broken", key)
+		}
+	}
 }
 
 func TestMergeRuntimeEnvStripsInheritedBeadsBackend(t *testing.T) {
