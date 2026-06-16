@@ -1797,6 +1797,56 @@ func TestCompileInlineExpansionUsesExpandVarsForConditionalTemplateSelection(t *
 	}
 }
 
+func TestCompileInlineExpansionResolvesExpandVarsFromParentVarsForConditions(t *testing.T) {
+	dir := t.TempDir()
+
+	expansion := `{
+		"formula": "report-mode-expansion",
+		"type": "expansion",
+		"version": 1,
+		"vars": {
+			"review_mode": {"default": "agent"}
+		},
+		"template": [
+			{"id": "{target}.report", "title": "Write report"},
+			{"id": "{target}.apply", "title": "Apply findings", "condition": "{{review_mode}} != report"}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "report-mode-expansion.formula.json"), []byte(expansion), 0o644); err != nil {
+		t.Fatalf("write expansion: %v", err)
+	}
+
+	formulaText := `{
+		"formula": "report-mode-parent",
+		"version": 1,
+		"vars": {
+			"review_mode": {"default": "report"}
+		},
+		"steps": [
+			{"id": "work", "title": "Work", "expand": "report-mode-expansion", "expand_vars": {"review_mode": "{{review_mode}}"}}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "report-mode-parent.formula.json"), []byte(formulaText), 0o644); err != nil {
+		t.Fatalf("write formula: %v", err)
+	}
+
+	recipe, err := Compile(context.Background(), "report-mode-parent", []string{dir}, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	for _, step := range recipe.Steps {
+		if step.ID == "report-mode-parent.work.apply" {
+			t.Fatalf("report-only inline expansion included apply step: %#v", step)
+		}
+	}
+	if len(recipe.Steps) != 2 {
+		t.Fatalf("len(recipe.Steps) = %d, want 2", len(recipe.Steps))
+	}
+	if got := recipe.Steps[1].ID; got != "report-mode-parent.work.report" {
+		t.Fatalf("recipe.Steps[1].ID = %q, want report-mode-parent.work.report", got)
+	}
+}
+
 func formatDepsForCleanup(deps []RecipeDep, stepID string) string {
 	var lines []string
 	for _, d := range deps {
