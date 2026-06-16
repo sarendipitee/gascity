@@ -3892,6 +3892,74 @@ func TestDeaconPatrolNextIterationBurnsCurrentBeforeIdleExit(t *testing.T) {
 	}
 }
 
+// TestWitnessPatrolNextIterationBurnIsIdempotentSafe verifies that the
+// witness formula's next-iteration step never lets a failed burn stall the
+// patrol loop. Every gc bd mol burn "$CURRENT_WISP" --force call must either
+// be wrapped in an if-else (non-fatal) or use || true so that a missing/
+// already-burned wisp does not block the next iteration from starting.
+// This is the gascity-source contract that pairs with the bd mol burn
+// idempotency fix (gcy-3n7): both layers must be safe independently.
+func TestWitnessPatrolNextIterationBurnIsIdempotentSafe(t *testing.T) {
+	path := filepath.Join(packRoot(), "packs", "gastown", "formulas", "mol-witness-patrol.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("mol-witness-patrol.toml not present in pinned gascity-packs: %v", err)
+		}
+		t.Fatalf("reading witness formula: %v", err)
+	}
+	body := string(data)
+	// Guard: skip if the pinned gascity-packs version predates the idempotent-burn
+	// next-iteration pattern. The contract is enforced once the pack is updated.
+	if !strings.Contains(body, "CURRENT_WISP=${GC_BEAD_ID:-}") {
+		t.Skipf("pinned gascity-packs does not yet include the idempotent-burn next-iteration pattern")
+	}
+	section := sectionBetween(t, body, `id = "next-iteration"`, "")
+
+	// Successor must be poured and assigned before the primary burn.
+	assertContainsInOrder(t, section,
+		`CURRENT_WISP=${GC_BEAD_ID:-}`,
+		`if [ -z "$CURRENT_WISP" ]; then`,
+		`NEXT=$(gc bd mol wisp mol-witness-patrol --root-only`,
+		`jq -r '.new_epic_id // empty'`,
+		`if [ -z "$NEXT" ]; then`,
+		`if ! gc bd update "$NEXT" --assignee=`,
+		`if [ -n "$CURRENT_WISP" ]; then`,
+		`gc bd mol burn "$CURRENT_WISP" --force`,
+	)
+
+	// Every burn of $CURRENT_WISP must be non-fatal: either inside an `if`
+	// condition (if gc bd mol burn ...; then) or followed by || true.
+	// A bare `gc bd mol burn "$CURRENT_WISP" --force` on its own line would
+	// exit non-zero for already-burned wisps and stall the patrol loop.
+	lines := strings.Split(section, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, `gc bd mol burn "$CURRENT_WISP" --force`) {
+			continue
+		}
+		isBare := true
+		// Non-fatal forms: `if gc bd mol burn ...` or `... || true`
+		if strings.HasPrefix(trimmed, "if ") {
+			isBare = false
+		}
+		if strings.HasSuffix(trimmed, "|| true") {
+			isBare = false
+		}
+		if isBare {
+			t.Errorf("witness next-iteration has bare (fatal) burn at line %d: %q\n"+
+				"wrap in `if gc bd mol burn ... 2>/dev/null; then` or append `|| true`\n"+
+				"to prevent patrol stall when wisp is already burned (#gcy-3n7)", i+1, trimmed)
+		}
+	}
+
+	// The step must exit cleanly (idle or drain-ack) after burning.
+	if !strings.Contains(section, "IDLE: no work, exiting turn.") &&
+		!strings.Contains(section, "gc runtime drain-ack") {
+		t.Error("witness next-iteration has no clean exit after burn")
+	}
+}
+
 // TestRefineryPromptUsesCanonicalAgentIdentity verifies the refinery
 // prompt's wisp lookup and assignment commands use $GC_AGENT, which the
 // session harness guarantees (internal/session/lifecycle.go). $GC_ALIAS
