@@ -228,6 +228,12 @@ func (testAgentResolver) ResolveAgent(cfg *config.City, name, _ string) (config.
 	return config.Agent{}, false
 }
 
+type noMatchAgentResolver struct{}
+
+func (noMatchAgentResolver) ResolveAgent(*config.City, string, string) (config.Agent, bool) {
+	return config.Agent{}, false
+}
+
 func TestDecorateGraphWorkflowRecipe_SetsRootMetadata(t *testing.T) {
 	cfg := &config.City{Agents: []config.Agent{
 		{Name: "mayor", MaxActiveSessions: intPtr(1)},
@@ -712,6 +718,39 @@ func TestControlDispatcherBinding_ConfiguredDispatcherUsesCanonicalQueue(t *test
 	}
 	if binding.QualifiedName != "gascity/control-dispatcher" {
 		t.Fatalf("QualifiedName = %q, want gascity/control-dispatcher", binding.QualifiedName)
+	}
+	if binding.SessionName != "" {
+		t.Fatalf("SessionName = %q, want empty for routed control-dispatcher queue", binding.SessionName)
+	}
+	if !binding.MetadataOnly {
+		t.Fatalf("MetadataOnly = false, want true")
+	}
+}
+
+func TestControlDispatcherBinding_ConfiguredImportQualifiedDispatcherUsesScope(t *testing.T) {
+	maxActive := 1
+	cfg := &config.City{Agents: []config.Agent{
+		{
+			Name:              config.ControlDispatcherAgentName,
+			BindingName:       "core",
+			StartCommand:      config.ControlDispatcherStartCommandFor("{{.Agent}}"),
+			MaxActiveSessions: &maxActive,
+		},
+		{
+			Name:              config.ControlDispatcherAgentName,
+			BindingName:       "core",
+			Dir:               "fixture",
+			StartCommand:      config.ControlDispatcherStartCommandFor("{{.Agent}}"),
+			MaxActiveSessions: &maxActive,
+		},
+	}}
+
+	binding, err := ControlDispatcherBinding(nil, "test-city", cfg, "fixture", Deps{Resolver: noMatchAgentResolver{}})
+	if err != nil {
+		t.Fatalf("ControlDispatcherBinding: %v", err)
+	}
+	if binding.QualifiedName != "fixture/core.control-dispatcher" {
+		t.Fatalf("QualifiedName = %q, want fixture/core.control-dispatcher", binding.QualifiedName)
 	}
 	if binding.SessionName != "" {
 		t.Fatalf("SessionName = %q, want empty for routed control-dispatcher queue", binding.SessionName)

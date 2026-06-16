@@ -263,9 +263,25 @@ func ControlDispatcherBinding(_ beads.Store, _ string, cfg *config.City, rigCont
 	}
 	agentCfg, ok := deps.Resolver.ResolveAgent(cfg, config.ControlDispatcherAgentName, rigContext)
 	if !ok {
+		agentCfg, ok = configuredControlDispatcherForScope(cfg, rigContext)
+	}
+	if !ok {
 		return GraphRouteBinding{}, fmt.Errorf("control-dispatcher agent %q not found", config.ControlDispatcherAgentName)
 	}
 	return GraphRouteBinding{QualifiedName: agentCfg.QualifiedName(), MetadataOnly: true}, nil
+}
+
+func configuredControlDispatcherForScope(cfg *config.City, rigContext string) (config.Agent, bool) {
+	rigContext = strings.TrimSpace(rigContext)
+	for _, a := range cfg.Agents {
+		if !config.IsDeterministicControlDispatcher(&a) {
+			continue
+		}
+		if strings.TrimSpace(a.Dir) == rigContext {
+			return a, true
+		}
+	}
+	return config.Agent{}, false
 }
 
 // ResolveGraphStepBinding resolves the routing binding for a graph step
