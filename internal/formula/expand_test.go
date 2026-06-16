@@ -1481,6 +1481,86 @@ func TestApplyInlineExpansionsWithVarsCarriesExpansionVarsIntoNestedInlineExpans
 	}
 }
 
+func TestApplyInlineExpansionsWithVarsResolvesExpandVarsFromParentVars(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	expansion := `{
+		"formula": "env-inline",
+		"type": "expansion",
+		"version": 1,
+		"vars": {
+			"environment": {"default": "staging"},
+			"replicas": {"default": "1"}
+		},
+		"template": [
+			{"id": "{target}.deploy-{environment}", "title": "Deploy to {environment} with {replicas} replicas"}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "env-inline.formula.json"), []byte(expansion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parser := NewParser(tmpDir)
+
+	t.Run("inline expand vars resolved from parent vars", func(t *testing.T) {
+		// The step's ExpandVars reference parent vars via {varname} placeholders.
+		// ApplyInlineExpansionsWithVars must substitute parent vars into ExpandVars
+		// values before merging with formula defaults — matching the compose.Expand
+		// path's resolveOverrideVars behavior.
+		steps := []*Step{
+			{
+				ID:     "release",
+				Title:  "Release",
+				Expand: "env-inline",
+				ExpandVars: map[string]string{
+					"environment": "{deploy_env}",
+					"replicas":    "{deploy_replicas}",
+				},
+			},
+		}
+
+		parentVars := map[string]string{
+			"deploy_env":      "production",
+			"deploy_replicas": "5",
+		}
+		result, err := ApplyInlineExpansionsWithVars(steps, parser, parentVars)
+		if err != nil {
+			t.Fatalf("ApplyInlineExpansionsWithVars failed: %v", err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("len(result) = %d, want 1", len(result))
+		}
+		if got := result[0].ID; got != "release.deploy-production" {
+			t.Fatalf("step ID = %q, want release.deploy-production", got)
+		}
+		if got := result[0].Title; got != "Deploy to production with 5 replicas" {
+			t.Fatalf("step title = %q, want 'Deploy to production with 5 replicas'", got)
+		}
+	})
+
+	t.Run("inline expand vars fall back to defaults when parent var absent", func(t *testing.T) {
+		steps := []*Step{
+			{
+				ID:     "release",
+				Title:  "Release",
+				Expand: "env-inline",
+				// ExpandVars not set; formula defaults should apply.
+			},
+		}
+
+		result, err := ApplyInlineExpansionsWithVars(steps, parser, map[string]string{"unrelated": "x"})
+		if err != nil {
+			t.Fatalf("ApplyInlineExpansionsWithVars failed: %v", err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("len(result) = %d, want 1", len(result))
+		}
+		if got := result[0].ID; got != "release.deploy-staging" {
+			t.Fatalf("step ID = %q, want release.deploy-staging", got)
+		}
+	})
+}
+
 func TestFindDuplicateStepIDs(t *testing.T) {
 	tests := []struct {
 		name     string
