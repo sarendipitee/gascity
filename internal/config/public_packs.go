@@ -17,7 +17,7 @@ const (
 	// PublicGascityPackVersion pins fresh init output to the registry
 	// release content commit from gastownhall/gascity-packs main
 	// (gascity 0.1.6).
-	PublicGascityPackVersion = "sha:7aedf80cfa39905bee4104095bfae8a02c67aaa1"
+	PublicGascityPackVersion = "sha:20ac017f5417b82a300f0bfdfa7cddab3773cb07"
 
 	// BundledPackImportVersion pins the [imports.core]/[imports.bd] entries
 	// gc init writes for the gascity.git packs bundled with the binary.
@@ -70,4 +70,5 @@ var SupersededPublicGascityPackVersions = []string{
 	"sha:af1640917a24f88126c37a1e3697a619b731cc0f",
 	"sha:99464ed9240b1f6e6b7ab1d351f67016e1a973ff",
 	"sha:39f07fed3524c016482b82fa0d4973aa6b4fc05e",
+	"sha:7aedf80cfa39905bee4104095bfae8a02c67aaa1",
 }
