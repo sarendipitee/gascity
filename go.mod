@@ -244,3 +244,7 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+// Witness burn-failsafe fix (gcy-3n7): live branch commits not yet synced to upstream.
+// Remove replace once github.com/gastownhall/gascity-packs includes the fix.
+replace github.com/gastownhall/gascity-packs => /home/saren/projects/gastownhall/gascity-packs
