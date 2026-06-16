@@ -681,8 +681,10 @@ func ApplyInlineExpansions(steps []*Step, parser *Parser) ([]*Step, error) {
 	return ApplyInlineExpansionsWithVars(steps, parser, nil)
 }
 
-// ApplyInlineExpansionsWithVars applies Step.Expand fields to inline expansions
-// using vars for condition filtering during expansion-time validation.
+// ApplyInlineExpansionsWithVars applies Step.Expand fields to inline expansions.
+// vars is used in two ways: (1) {varname} placeholders in step ExpandVars values
+// are substituted from vars before the merge with formula defaults, and (2) vars
+// are used for condition filtering during expansion-time validation.
 func ApplyInlineExpansionsWithVars(steps []*Step, parser *Parser, vars map[string]string) ([]*Step, error) {
 	return applyInlineExpansionsWithVars(steps, parser, vars, nil)
 }
@@ -712,8 +714,10 @@ func applyInlineExpansionsRecursive(steps []*Step, parser *Parser, vars map[stri
 				return nil, err
 			}
 
-			// Merge formula default vars with step's ExpandVars overrides
-			// resolved against the parent invocation vars.
+			// Merge formula default vars with step's ExpandVars overrides,
+			// resolving any {varname} placeholders in ExpandVars values against
+			// the caller's parent vars before the merge (mirrors the compose
+			// Expand path which calls resolveOverrideVars before mergeVars).
 			expansionVars := mergeVars(expFormula, resolveOverrideVars(step.ExpandVars, vars))
 
 			// Expand the step using the template (reuse existing expandStep)
