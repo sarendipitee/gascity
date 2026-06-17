@@ -10271,3 +10271,33 @@ func TestBuildDesiredState_OpenBlockedControlDispatcherWorkRetainsDemand(t *test
 		}
 	}
 }
+
+// TestOpenControlDispatcherDemandHonorsBareLegacyRoute guards the upgrade gap:
+// control beads created by pre-1.3 builds route to the binding-stripped bare
+// name ("control-dispatcher"), not the qualified "core.control-dispatcher".
+// In-flight work persisted across the upgrade must still scale the qualified
+// dispatcher, and demand must be keyed by its qualified template name so the
+// scaler matches it.
+func TestOpenControlDispatcherDemandHonorsBareLegacyRoute(t *testing.T) {
+	maxActive := 1
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              config.ControlDispatcherAgentName,
+			BindingName:       "core",
+			StartCommand:      config.ControlDispatcherStartCommandFor("{{.Agent}}"),
+			MaxActiveSessions: &maxActive,
+		}},
+	}
+	work := []beads.Bead{{
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.kind":      "retry",
+			"gc.routed_to": config.ControlDispatcherAgentName, // bare, pre-1.3 route
+		},
+	}}
+	demand := openControlDispatcherDemand(cfg, work)
+	if !demand["core.control-dispatcher"] {
+		t.Fatalf("openControlDispatcherDemand = %v, want demand keyed by qualified name from bare route", demand)
+	}
+}

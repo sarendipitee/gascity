@@ -1491,14 +1491,26 @@ func openControlDispatcherDemand(cfg *config.City, workBeads []beads.Bead) map[s
 	if cfg == nil || len(workBeads) == 0 {
 		return demand
 	}
-	controlDispatchers := make(map[string]struct{})
+	// Map every route a deterministic control dispatcher answers to — its
+	// qualified name plus the pre-1.3 binding-stripped bare alias — back to its
+	// canonical qualified template key. Pre-1.3 builds routed control beads to
+	// the bare name; honoring it keeps in-flight work persisted across an
+	// upgrade scaling the qualified dispatcher (keyed by the template name the
+	// scaler matches).
+	aliasToCanonical := make(map[string]string)
 	for i := range cfg.Agents {
 		if !config.IsDeterministicControlDispatcher(&cfg.Agents[i]) {
 			continue
 		}
-		controlDispatchers[cfg.Agents[i].QualifiedName()] = struct{}{}
+		qualified := cfg.Agents[i].QualifiedName()
+		aliasToCanonical[qualified] = qualified
+		if bare := controlDispatcherBareRoute(qualified); bare != "" {
+			if _, taken := aliasToCanonical[bare]; !taken {
+				aliasToCanonical[bare] = qualified
+			}
+		}
 	}
-	if len(controlDispatchers) == 0 {
+	if len(aliasToCanonical) == 0 {
 		return demand
 	}
 	for _, wb := range workBeads {
@@ -1506,8 +1518,8 @@ func openControlDispatcherDemand(cfg *config.City, workBeads []beads.Bead) map[s
 			continue
 		}
 		for _, candidate := range controllerDemandRouteCandidates(wb) {
-			if _, ok := controlDispatchers[candidate]; ok {
-				demand[candidate] = true
+			if canonical, ok := aliasToCanonical[candidate]; ok {
+				demand[canonical] = true
 				break
 			}
 		}

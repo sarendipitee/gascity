@@ -2892,6 +2892,41 @@ func TestWorkflowServeControlReadyQueryBD105IncludesEphemeral(t *testing.T) {
 	}
 }
 
+// TestWorkflowServeControlReadyQueryHonorsBareLegacyRoute guards the upgrade
+// gap: a qualified "core.control-dispatcher" serve loop must still claim
+// control beads that pre-1.3 builds routed to the binding-stripped bare name
+// "control-dispatcher". The bare alias is queried alongside the qualified
+// target so persisted in-flight work is not stranded after upgrade.
+func TestWorkflowServeControlReadyQueryHonorsBareLegacyRoute(t *testing.T) {
+	query := workflowServeControlReadyQuery(config.Agent{Name: config.ControlDispatcherAgentName, BindingName: "core"})
+	if !strings.Contains(query, "GC_CONTROL_TARGET='core.control-dispatcher'") {
+		t.Fatalf("serve query missing qualified target: %q", query)
+	}
+	if !strings.Contains(query, "GC_CONTROL_BARE_TARGET='control-dispatcher'") {
+		t.Fatalf("serve query missing bare legacy target: %q", query)
+	}
+	if !strings.Contains(query, `routed_ready "${GC_CONTROL_BARE_TARGET:-}"`) {
+		t.Fatalf("serve query missing bare routed_ready scan: %q", query)
+	}
+}
+
+// TestControlDispatcherBareRoute pins the binding-stripping alias derivation.
+func TestControlDispatcherBareRoute(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"core.control-dispatcher", "control-dispatcher"},
+		{"rig/core.control-dispatcher", "rig/control-dispatcher"},
+		{"control-dispatcher", ""},     // already bare: no distinct alias
+		{"rig/control-dispatcher", ""}, // already bare (rig-scoped)
+		{"gascity.polecat", ""},        // not a control dispatcher
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := controlDispatcherBareRoute(tc.in); got != tc.want {
+			t.Errorf("controlDispatcherBareRoute(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestWorkflowServeControlReadyQueryIgnoresInProgressAssigned(t *testing.T) {
 	query := workflowServeControlReadyQuery(config.Agent{Name: config.ControlDispatcherAgentName, Dir: "gascity"})
 	out := runWorkflowServeShellQueryForTest(t, query, map[string]string{
