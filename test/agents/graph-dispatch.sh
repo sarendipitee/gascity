@@ -225,6 +225,17 @@ should_use_hook_fallback() {
     if [ "${GC_SESSION_ORIGIN:-}" = "ephemeral" ]; then
         return 0
     fi
+    # Always-on named sessions also receive work that the deterministic control
+    # dispatcher assigned by SESSION BEAD ID -- e.g. ralph re-iterated
+    # run_target=<worker> steps land as assignee=<session bead id> with
+    # gc.routed_to cleared (internal/dispatch/control.go directSessionID route).
+    # The name-only `bd ready --assignee=$ASSIGNEE` fast path cannot match a
+    # bead-ID assignee, so a named session must fall back to `gc hook`, whose
+    # work query resolves by GC_SESSION_ID too. Omitting this stalls the worker
+    # (it name-polls into the void) and hangs the review workflow.
+    if [ "${GC_SESSION_ORIGIN:-}" = "named" ]; then
+        return 0
+    fi
     [ -n "${GC_TEMPLATE:-}" ] && [ "${GC_TEMPLATE:-}" != "${GC_AGENT:-}" ]
 }
 
