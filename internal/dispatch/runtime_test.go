@@ -641,6 +641,127 @@ func TestProcessScopeCheckAbortScopeNormalizesFailureContract(t *testing.T) {
 	}
 }
 
+func TestProcessRetryControlHardFailClosesScopeBodyWithPendingScopeCheck(t *testing.T) {
+	t.Parallel()
+
+	store := beads.NewMemStore()
+	workflow := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "workflow",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":             "workflow",
+			"gc.formula_contract": "graph.v2",
+		},
+	})
+	body := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "body",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":         "scope",
+			"gc.root_bead_id": workflow.ID,
+			"gc.scope_role":   "body",
+			"gc.step_ref":     "demo.body",
+		},
+	})
+	preflight := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "preflight",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":         "retry",
+			"gc.max_attempts": "1",
+			"gc.on_exhausted": "hard_fail",
+			"gc.on_fail":      "abort_scope",
+			"gc.root_bead_id": workflow.ID,
+			"gc.scope_ref":    "body",
+			"gc.scope_role":   "member",
+			"gc.step_id":      "preflight-tests",
+			"gc.step_ref":     "demo.preflight-tests",
+		},
+	})
+	preflightAttempt := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title:  "preflight attempt",
+		Type:   "task",
+		Status: "closed",
+		Metadata: map[string]string{
+			"gc.attempt":         "1",
+			"gc.logical_bead_id": preflight.ID,
+			"gc.outcome":         "fail",
+			"gc.failure_class":   "hard",
+			"gc.failure_reason":  "preflight_failed",
+			"gc.root_bead_id":    workflow.ID,
+			"gc.step_id":         "preflight-tests",
+			"gc.step_ref":        "demo.preflight-tests.attempt.1",
+		},
+	})
+	preflightScopeCheck := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "Finalize scope for preflight",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.control_for":  "preflight-tests",
+			"gc.kind":         "scope-check",
+			"gc.root_bead_id": workflow.ID,
+			"gc.scope_ref":    "body",
+			"gc.scope_role":   "control",
+			"gc.step_id":      "preflight-tests",
+			"gc.step_ref":     "demo.preflight-tests-scope-check",
+		},
+	})
+	implement := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "implement",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":         "retry",
+			"gc.max_attempts": "1",
+			"gc.on_exhausted": "hard_fail",
+			"gc.on_fail":      "abort_scope",
+			"gc.root_bead_id": workflow.ID,
+			"gc.scope_ref":    "body",
+			"gc.scope_role":   "member",
+			"gc.step_id":      "implement",
+			"gc.step_ref":     "demo.implement",
+		},
+	})
+	implementScopeCheck := mustCreateWorkflowBead(t, store, beads.Bead{
+		Title: "Finalize scope for implement",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.control_for":  "implement",
+			"gc.kind":         "scope-check",
+			"gc.root_bead_id": workflow.ID,
+			"gc.scope_ref":    "body",
+			"gc.scope_role":   "control",
+			"gc.step_id":      "implement",
+			"gc.step_ref":     "demo.implement-scope-check",
+		},
+	})
+	mustDepAdd(t, store, preflight.ID, preflightAttempt.ID, "blocks")
+	mustDepAdd(t, store, preflightScopeCheck.ID, preflight.ID, "blocks")
+	mustDepAdd(t, store, implement.ID, preflightScopeCheck.ID, "blocks")
+	mustDepAdd(t, store, implementScopeCheck.ID, implement.ID, "blocks")
+	mustDepAdd(t, store, body.ID, preflightScopeCheck.ID, "blocks")
+	mustDepAdd(t, store, body.ID, implementScopeCheck.ID, "blocks")
+
+	result, err := ProcessControl(store, mustGetBead(t, store, preflight.ID), ProcessOptions{})
+	if err != nil {
+		t.Fatalf("ProcessControl(retry hard fail): %v", err)
+	}
+	if !result.Processed || result.Action != "hard-fail" {
+		t.Fatalf("result = %+v, want processed hard-fail", result)
+	}
+	bodyAfter := mustGetBead(t, store, body.ID)
+	if bodyAfter.Status != "closed" || bodyAfter.Metadata["gc.outcome"] != "fail" {
+		t.Fatalf("body = status %q outcome %q, want closed/fail", bodyAfter.Status, bodyAfter.Metadata["gc.outcome"])
+	}
+	controlAfter := mustGetBead(t, store, preflightScopeCheck.ID)
+	if controlAfter.Status != "open" {
+		t.Fatalf("failed member scope-check status = %q, want open for idempotent body-close recovery", controlAfter.Status)
+	}
+	downstreamControlAfter := mustGetBead(t, store, implementScopeCheck.ID)
+	if downstreamControlAfter.Status != "closed" || downstreamControlAfter.Metadata["gc.outcome"] != "skipped" {
+		t.Fatalf("downstream scope-check = status %q outcome %q, want closed/skipped", downstreamControlAfter.Status, downstreamControlAfter.Metadata["gc.outcome"])
+	}
+}
+
 // Scoped members that did NOT opt into gc.on_fail=abort_scope keep the
 // legacy lenient contract: a bare close advances the scope, and an
 // affirmative pass never aborts even with the opt-in present.
