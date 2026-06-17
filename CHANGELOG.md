@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tables expose `source` and optional `version`; older `export`,
   `transitive`, and `shadow` keys remain compatibility-only loader behavior,
   not public schema.
+- **Formula v2 targeted executions use `convoy_id`, not `bead_id`.**
+  Graph/formula v2 templates no longer receive `{{bead_id}}`; update them to
+  use the reserved `{{convoy_id}}` variable for the input convoy. Formula v2
+  rejects authored inputs named `convoy_id` or `bead_id`, and `{{issue}}`
+  remains only a temporary compatibility alias that should be migrated too.
 
 ### Changed
 
