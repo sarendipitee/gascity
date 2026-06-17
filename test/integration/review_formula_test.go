@@ -12,17 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/testfixtures/reviewworkflows"
 )
 
 // reviewWorkflowTimeout bounds waits for review-formula workflow beads to
-// close. Successful runs on CI average ~5 min per test, but runner variance
-// is high: the transient-retry test (soft-fail after 3 attempts) runs 3
-// full polecat cycles back-to-back, each ~3 min on a busy runner, plus
-// synthesis. The earlier 12-minute budget left no headroom and produced
-// intermittent timeout flakes; 18 min keeps a healthy margin for runner
-// contention without letting a genuinely stuck workflow loiter.
-const reviewWorkflowTimeout = 18 * time.Minute
+// close. Successful runs on CI average ~5 min per test, but runner variance is
+// high: the transient-retry test (soft-fail after 3 attempts) runs 3 full
+// polecat cycles back-to-back, and the personal-work fixture exercises two
+// complete review loops plus two compose.expand sites. An 18-minute budget was
+// too close to RC-gate reality on busy runners, timing out while the workflow
+// was already in finalization. Keep enough headroom for release gates without
+// letting a genuinely stuck workflow loiter indefinitely.
+const reviewWorkflowTimeout = 24 * time.Minute
 
 // reviewWorkflowSlingTimeout only covers formula instantiation and convoy
 // routing. The personal-work graph is large enough that bd-backed graph apply
@@ -558,9 +560,21 @@ func dumpReviewFormulaCityState(t *testing.T, cityDir string) {
 	t.Helper()
 	out, _ := bdDolt(cityDir, "list", "--json", "--all", "--limit=0")
 	t.Logf("all beads:\n%s", out)
+	sessionList, _ := gcDolt(cityDir, "session", "list")
+	t.Logf("sessions:\n%s", sessionList)
 	if traceFile := filepath.Join(cityDir, "graph-workflow-trace.log"); fileExists(traceFile) {
 		data, _ := os.ReadFile(traceFile)
 		t.Logf("agent trace:\n%s", string(data))
+	}
+	for _, traceFile := range []string{
+		citylayout.ControlDispatcherTraceDefaultPath(cityDir),
+		citylayout.ControlDispatcherTraceDefaultPathFor(cityDir, "core.control-dispatcher"),
+	} {
+		if !fileExists(traceFile) {
+			continue
+		}
+		data, _ := os.ReadFile(traceFile)
+		t.Logf("control dispatcher trace %s:\n%s", traceFile, string(data))
 	}
 }
 
