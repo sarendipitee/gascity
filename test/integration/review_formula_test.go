@@ -12,18 +12,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/testfixtures/reviewworkflows"
 )
 
 // reviewWorkflowTimeout bounds waits for review-formula workflow beads to
-// close. Successful runs on CI average ~5 min per test, but runner variance
-// is high: mol-personal-work-v2 has 18+ steps across two Ralph loops (6
-// polecat in design-review, 2 in code-review), taking ~20 min on busy
-// runners. The transient-retry tests add extra polecat cycles on top. The
-// earlier 12-minute budget produced intermittent flakes; 18 min still left
-// no headroom for personal-work and retry tests (~38 s from done at cutoff
-// in CI run 27788351365). 24 min leaves ~4 min margin while staying under
-// the 30-minute job ceiling.
+// close. Successful runs on CI average ~5 min per test, but runner variance is
+// high: the transient-retry test (soft-fail after 3 attempts) runs 3 full
+// polecat cycles back-to-back, and the personal-work fixture exercises two
+// complete review loops plus two compose.expand sites. An 18-minute budget was
+// too close to RC-gate reality on busy runners, timing out while the workflow
+// was already in finalization. Keep enough headroom for release gates without
+// letting a genuinely stuck workflow loiter indefinitely.
 const reviewWorkflowTimeout = 24 * time.Minute
 
 // reviewWorkflowSlingTimeout only covers formula instantiation and convoy
@@ -350,9 +350,6 @@ on_exhausted = "hard_fail"
 func setupReviewFormulaCity(t *testing.T, mode string, extraEnv map[string]string) string {
 	t.Helper()
 	env := newIsolatedCommandEnv(t, true)
-	// Reduce bd probe timeout so pool respawn gaps don't stall CI runners.
-	// 30s is well above the floor (5s) and well below the 180s production default.
-	env = append(env, "GC_BD_PROBE_TIMEOUT=30s")
 
 	var cityName string
 	if usingSubprocess() {
@@ -563,9 +560,21 @@ func dumpReviewFormulaCityState(t *testing.T, cityDir string) {
 	t.Helper()
 	out, _ := bdDolt(cityDir, "list", "--json", "--all", "--limit=0")
 	t.Logf("all beads:\n%s", out)
+	sessionList, _ := gcDolt(cityDir, "session", "list")
+	t.Logf("sessions:\n%s", sessionList)
 	if traceFile := filepath.Join(cityDir, "graph-workflow-trace.log"); fileExists(traceFile) {
 		data, _ := os.ReadFile(traceFile)
 		t.Logf("agent trace:\n%s", string(data))
+	}
+	for _, traceFile := range []string{
+		citylayout.ControlDispatcherTraceDefaultPath(cityDir),
+		citylayout.ControlDispatcherTraceDefaultPathFor(cityDir, "core.control-dispatcher"),
+	} {
+		if !fileExists(traceFile) {
+			continue
+		}
+		data, _ := os.ReadFile(traceFile)
+		t.Logf("control dispatcher trace %s:\n%s", traceFile, string(data))
 	}
 }
 

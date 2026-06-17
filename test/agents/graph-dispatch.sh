@@ -218,6 +218,16 @@ ack_drain_if_idle() {
     exit 0
 }
 
+should_use_hook_fallback() {
+    if [ "${GC_GRAPH_HOOK_FALLBACK:-0}" = "1" ]; then
+        return 0
+    fi
+    if [ "${GC_SESSION_ORIGIN:-}" = "ephemeral" ]; then
+        return 0
+    fi
+    [ -n "${GC_TEMPLATE:-}" ] && [ "${GC_TEMPLATE:-}" != "${GC_AGENT:-}" ]
+}
+
 trace "startup pid=$$ assignee=${ASSIGNEE:-}"
 trace_store
 cleanup() {
@@ -271,7 +281,7 @@ fetch_ready_queue() {
             return 0
         fi
     fi
-    if [ "${GC_GRAPH_HOOK_FALLBACK:-0}" = "1" ]; then
+    if should_use_hook_fallback; then
         timeout "$HOOK_TIMEOUT" gc hook 2>/dev/null
         return $?
     fi
