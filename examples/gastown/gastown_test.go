@@ -2136,18 +2136,6 @@ func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
-			rel:     "packs/gastown/agents/polecat/prompt.template.md",
-			start:   "## Startup Protocol",
-			end:     "## Context Exhaustion",
-			want:    "{{ .AssignedInProgressQuery }}",
-			forbid:  []string{`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`},
-			render:  true,
-			agent:   "gastown/polecat",
-			tmpl:    "polecat",
-			rig:     "gastown",
-			binding: "gastown.",
-		},
-		{
 			rel:     "packs/gastown/agents/deacon/prompt.template.md",
 			start:   "## Startup Protocol",
 			end:     "**Hook ->",
@@ -2203,6 +2191,42 @@ func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
 				t.Fatalf("%s rendered prompt missing compatibility-aware in-progress query: %q", check.rel, rendered)
 			}
 		})
+	}
+}
+
+func TestPolecatStartupUsesHookClaim(t *testing.T) {
+	rel := "packs/gastown/agents/polecat/prompt.template.md"
+	data, err := os.ReadFile(gastownRel(rel))
+	if err != nil {
+		t.Fatalf("reading %s: %v", rel, err)
+	}
+	body := sectionBetween(t, string(data), "## Startup Protocol", "## Context Exhaustion")
+	for _, want := range []string{
+		"gc hook --claim --json",
+		"checks assigned work first",
+		"performs the atomic",
+		"claim before you inspect the bead",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("%s Startup Protocol missing %q", rel, want)
+		}
+	}
+	for _, forbidden := range []string{
+		"{{ .AssignedInProgressQuery }}",
+		"{{ .WorkQuery }}",
+		`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("%s Startup Protocol still contains stale direct query/claim %q", rel, forbidden)
+		}
+	}
+
+	rendered := renderGastownPromptForPack(t, rel, "gastown/polecat", "polecat", "demo", "gastown", "gastown.")
+	if strings.Contains(rendered, "{{ .") {
+		t.Fatalf("%s rendered prompt still contains template placeholders: %q", rel, rendered)
+	}
+	if !strings.Contains(rendered, "gc hook --claim --json") {
+		t.Fatalf("%s rendered prompt missing hook claim: %q", rel, rendered)
 	}
 }
 
