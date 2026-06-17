@@ -612,12 +612,19 @@ func (s scopeSnapshot) skipOpenScopeMembers(store beads.Store, skipControlID str
 		}
 		skippable := make([]string, 0, len(ids))
 		for _, id := range ids {
+			if preserveScopeCheckForSubject(pending[id], depsByID[id], skipControlID) {
+				delete(pending, id)
+				continue
+			}
 			if !canSkipScopeMemberWithDeps(depsByID[id], pending) {
 				continue
 			}
 			skippable = append(skippable, id)
 		}
 		if len(skippable) == 0 {
+			if len(pending) == 0 {
+				break
+			}
 			return skipped, fmt.Errorf("unable to skip remaining scope members: %v", ids)
 		}
 		closed, err := skipScopeMembers(store, skippable)
@@ -631,6 +638,27 @@ func (s scopeSnapshot) skipOpenScopeMembers(store beads.Store, skipControlID str
 	}
 
 	return skipped, nil
+}
+
+func preserveScopeCheckForSubject(candidate beads.Bead, deps []beads.Dep, subjectID string) bool {
+	if subjectID == "" {
+		return false
+	}
+	// Keep the failed subject's own scope-check replayable: if abort
+	// reconciliation skips siblings but fails before closing the body, that
+	// control bead is the idempotent recovery path.
+	if candidate.Metadata[beadmeta.KindMetadataKey] != beadmeta.KindScopeCheck {
+		return false
+	}
+	if candidate.Metadata[beadmeta.ScopeRoleMetadataKey] != "control" {
+		return false
+	}
+	for _, dep := range deps {
+		if dep.Type == "blocks" && dep.DependsOnID == subjectID {
+			return true
+		}
+	}
+	return false
 }
 
 // beadOutcomeFailed reports whether a closed bead counts as failed for
