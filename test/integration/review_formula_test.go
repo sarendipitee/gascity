@@ -348,6 +348,9 @@ on_exhausted = "hard_fail"
 func setupReviewFormulaCity(t *testing.T, mode string, extraEnv map[string]string) string {
 	t.Helper()
 	env := newIsolatedCommandEnv(t, true)
+	// Reduce bd probe timeout so pool respawn gaps don't stall CI runners.
+	// 30s is well above the floor (5s) and well below the 180s production default.
+	env = append(env, "GC_BD_PROBE_TIMEOUT=30s")
 
 	var cityName string
 	if usingSubprocess() {
