@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -358,7 +359,48 @@ func nonNilQueuedNudges(items []queuedNudge) []queuedNudge {
 	return items
 }
 
+var nudgeDrainInjectTimeout = 2 * time.Second
+
 func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdout, stderr io.Writer) int {
+	if inject {
+		return cmdNudgeDrainInjectBounded(args, hookFormat, readHookStdin(), stdout, stderr)
+	}
+	return cmdNudgeDrainWithFormatCore(args, false, hookFormat, nil, stdout, stderr)
+}
+
+func cmdNudgeDrainInjectBounded(args []string, hookFormat string, hookInput []byte, stdout, stderr io.Writer) int {
+	type result struct {
+		code   int
+		stdout string
+		stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out bytes.Buffer
+		var errOut bytes.Buffer
+		code := cmdNudgeDrainWithFormatCore(args, true, hookFormat, hookInput, &out, &errOut)
+		done <- result{code: code, stdout: out.String(), stderr: errOut.String()}
+	}()
+
+	timer := time.NewTimer(nudgeDrainInjectTimeout)
+	defer timer.Stop()
+	select {
+	case res := <-done:
+		_, _ = io.WriteString(stdout, res.stdout)
+		_, _ = io.WriteString(stderr, res.stderr)
+		return res.code
+	case <-timer.C:
+		prefix := clockInjectLine() + contextInjectLine(hookInput)
+		if cityPath, err := resolveCity(); err == nil {
+			prefix += wispStepInjectionContent(cityPath)
+		}
+		prefix += "<system-reminder>\ngc nudge drain degraded: queued reminders were not checked before the prompt-hook timeout budget expired. Continue this turn; deferred reminders remain queued for a later drain or poller pass.\n</system-reminder>\n"
+		_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", prefix)
+		return 0
+	}
+}
+
+func cmdNudgeDrainWithFormatCore(args []string, inject bool, hookFormat string, hookInput []byte, stdout, stderr io.Writer) int {
 	// On every prompt, emit a live clock (operator-local + UTC + epoch) and
 	// the agent's active formula step (if any) as UserPromptSubmit hook context.
 	// When a nudge also fires we fold everything into that nudge's single
@@ -375,7 +417,7 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		// pipe-only — see readHookStdin) and build the shared inject prefix:
 		// the clock line plus, when context pressure crosses its threshold,
 		// the context-usage guidance (see context_inject.go).
-		injectPrefix = clockInjectLine() + contextInjectLine(readHookStdin())
+		injectPrefix = clockInjectLine() + contextInjectLine(hookInput)
 		defer func() {
 			if !emittedHookContext {
 				line := injectPrefix + wispExtra
@@ -1470,13 +1512,7 @@ func claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(que
 	store := openNudgeBeadStore(cityPath)
 	var claimed []queuedNudge
 	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
-		if err := recoverExpiredInFlightNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneExpiredQueuedNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneDeadQueuedNudges(state, store, now); err != nil {
+		if err := maintainQueuedNudgeState(state, store, now, false); err != nil {
 			return err
 		}
 		pending := state.Pending[:0]
@@ -1507,13 +1543,7 @@ func listQueuedNudges(cityPath, agentName string, now time.Time) ([]queuedNudge,
 	var inFlight []queuedNudge
 	var dead []queuedNudge
 	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
-		if err := recoverExpiredInFlightNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneExpiredQueuedNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneDeadQueuedNudges(state, store, now); err != nil {
+		if err := maintainQueuedNudgeState(state, store, now, false); err != nil {
 			return err
 		}
 		for _, item := range state.Pending {
@@ -1542,13 +1572,7 @@ func listQueuedNudgesForTarget(cityPath string, target nudgeTarget, now time.Tim
 	var inFlight []queuedNudge
 	var dead []queuedNudge
 	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
-		if err := recoverExpiredInFlightNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneExpiredQueuedNudges(state, store, now); err != nil {
-			return err
-		}
-		if err := pruneDeadQueuedNudges(state, store, now); err != nil {
+		if err := maintainQueuedNudgeState(state, store, now, false); err != nil {
 			return err
 		}
 		for _, item := range state.Pending {
@@ -1915,6 +1939,21 @@ func terminalStateForDeadQueuedNudge(item queuedNudge) string {
 	default:
 		return "failed"
 	}
+}
+
+func maintainQueuedNudgeState(state *nudgeQueueState, store beads.Store, now time.Time, repairDead bool) error {
+	if err := recoverExpiredInFlightNudges(state, store, now); err != nil {
+		return err
+	}
+	if err := pruneExpiredQueuedNudges(state, store, now); err != nil {
+		return err
+	}
+	if repairDead {
+		if err := pruneDeadQueuedNudges(state, store, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func pruneExpiredQueuedNudges(state *nudgeQueueState, store beads.Store, now time.Time) error {
