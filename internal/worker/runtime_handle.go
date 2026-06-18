@@ -409,7 +409,6 @@ func runtimeHandleIsActivitylessTimedOnly(provider runtime.Provider, sessionName
 	sleeper, ok := provider.(runtime.SleepCapabilityProvider)
 	return ok && sleeper.SleepCapability(sessionName) == runtime.SessionSleepCapabilityTimedOnly
 }
-
 func runtimeHandleProviderFamily(providerName string) string {
 	return sessionpkg.ProviderFamilyFromMetadata(nil, providerName)
 }

@@ -460,7 +460,6 @@ func TestExpiredNudgeCleanupSurvivesNilFrontDoor(t *testing.T) {
 		}
 	}
 }
-
 func TestDeliverSessionNudgeWithProviderWaitIdleDeliversCodexImmediately(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
