@@ -2177,7 +2177,6 @@ func terminalStateForDeadQueuedNudge(item queuedNudge) string {
 	}
 }
 
-func pruneExpiredQueuedNudges(state *nudgeQueueState, front *nudgequeue.Store, now time.Time) error {
 func maintainQueuedNudgeState(state *nudgeQueueState, front *nudgequeue.Store, now time.Time, repairDead bool) error {
 	if err := recoverExpiredInFlightNudges(state, front, now); err != nil {
 		return err
