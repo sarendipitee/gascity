@@ -80,6 +80,32 @@ func repairWispEventsIDDefault(db *sql.DB) error {
 	return nil
 }
 
+// repairEventsIDDefault ensures the regular events.id column has DEFAULT
+// (uuid()). The same migration/default mismatch can affect regular bead event
+// recording, which routes through events instead of wisp_events.
+func repairEventsIDDefault(db *sql.DB) error {
+	var hasDefault int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'events'
+		  AND COLUMN_NAME = 'id'
+		  AND COLUMN_DEFAULT IS NOT NULL
+	`).Scan(&hasDefault)
+	if err != nil {
+		return fmt.Errorf("checking events.id default: %w", err)
+	}
+	if hasDefault > 0 {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE `events` MODIFY COLUMN `id` char(36) NOT NULL DEFAULT (uuid())")
+	if err != nil {
+		return fmt.Errorf("repairing events.id default: %w", err)
+	}
+	return nil
+}
+
 const nativeDoltStoreActor = "gascity"
 
 var nativeDoltOpenReadyStatuses = []beadslib.Status{
@@ -238,6 +264,11 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 		if repairErr := repairWispEventsIDDefault(accessor.DB()); repairErr != nil {
 			// Log but don't fail: the error will surface on the first
 			// ephemeral event recording (gc mail, gc session attach, etc.).
+			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
+		}
+		if repairErr := repairEventsIDDefault(accessor.DB()); repairErr != nil {
+			// Log but don't fail: the error will surface on the first
+			// regular bead event recording (metadata, labels, status, etc.).
 			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
 		}
 	}
