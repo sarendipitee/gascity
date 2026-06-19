@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-06-19
+
 ### Fixed
 
 - **Pin the `bd`/`beads` dependency to v1.0.4 (off the withdrawn v1.0.5).**
