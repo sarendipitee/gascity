@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/sling"
+	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
 
 // sessionBeadAssigneeIdentities returns every identifier under which a work
@@ -140,6 +141,9 @@ func releaseOrphanedPoolAssignments(
 			continue
 		}
 		assignee := strings.TrimSpace(wb.Assignee)
+		if assignee == "" && wb.Status == "in_progress" && isCanonicalWorkflowRoot(wb) {
+			continue
+		}
 		template := routedToOrLegacyWorkflowTarget(wb)
 		if template == "" {
 			continue
@@ -330,12 +334,15 @@ func isRecoverableUnassignedInProgressPoolWork(cfg *config.City, wb beads.Bead) 
 	if template == "" {
 		return false
 	}
+	if isCanonicalWorkflowRoot(wb) {
+		return false
+	}
 	agentCfg := findAgentByTemplate(cfg, template)
 	return agentCfg != nil && agentCfg.SupportsGenericEphemeralSessions()
 }
 
-func releaseOrphanedPoolAssignment(store beads.Store, id string, clearDetached bool) bool {
-	return releaseOrphanedPoolAssignmentFull(store, id, clearDetached, false)
+func isCanonicalWorkflowRoot(wb beads.Bead) bool {
+	return sourceworkflow.IsWorkflowRoot(wb) && legacyWorkflowRunTarget(wb) == ""
 }
 
 func releaseOrphanedPoolAssignmentFull(store beads.Store, id string, clearDetached, clearDefer bool) bool {

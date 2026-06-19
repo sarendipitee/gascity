@@ -127,8 +127,8 @@ provider = "claude"
 base = "builtin:claude"
 ready_delay_ms = 0
 
-[daemon]
-formula_v2 = true               # the v2 formula compiler, on by default (Tutorial 05)
+... # commented mail-retention example elided
+
 ```
 
 ```shell
@@ -157,9 +157,9 @@ mode = "always"
 
 The `[workspace]` section in `city.toml` sets shared runtime defaults such as
 the provider. The `[providers.claude]` table registers your chosen provider
-against the builtin `claude` preset, and `[daemon]`'s `formula_v2 = true`
-turns on the v2 formula compiler — the default for new cities (you'll meet
-formulas in [Tutorial 05](/tutorials/05-formulas)). The `[imports]` entries
+against the builtin `claude` preset. The v2 formula compiler is on by default,
+so nothing is written for it (you'll meet formulas in
+[Tutorial 05](/tutorials/05-formulas)). The `[imports]` entries
 in `pack.toml` are explicit pack composition, not hidden load-time behavior.
 `core` and, for cities on the default `bd` beads provider, `bd` are bundled
 system packs that resolve offline from the user-global pack cache. The
@@ -196,27 +196,25 @@ my-city  /Users/csells/my-city
   Suspended:  no
 
 Agents:
-  dolt.dog                scaled (min=0, max=2)
-    dolt.dog-1            stopped
-    dolt.dog-2            stopped
+  bd.dog                  scaled (min=0, max=2)
+    bd.dog-1              stopped
+    bd.dog-2              stopped
   control-dispatcher      stopped
 
 0/3 agents running
 
 Named sessions:
   mayor                   reserved-unmaterialized (always)
-  control-dispatcher      reserved-unmaterialized (on_demand)
 ```
 
 A named session shows `reserved-unmaterialized` until the orchestrator
 materializes it; once the mayor session is up, its state reads `awake` (or
 `active` — the two are equivalent).
 
-The `dolt.dog` pool is a background utility agent from the bundled `dolt` pack
-(pulled in transitively through the explicit `bd` import you saw in
-`pack.toml` — the `dolt.` prefix is the import binding it arrived through).
-It handles Dolt database housekeeping for the beads backend. `control-dispatcher` is platform
-infrastructure: the orchestrator uses it to advance formula workflows. You don't
+The `bd.dog` pool is a background utility agent from the bundled `bd` pack.
+It handles Dolt database housekeeping for the beads backend. `control-dispatcher` is SDK
+infrastructure: the controller uses it to advance formula workflows. You don't
+
 need to interact with either — ignore them for now.
 
 ## Adding a rig
@@ -249,8 +247,14 @@ path binding stays machine-local in `.gc/site.toml`:
 # city.toml — portable
 [[rigs]]
 name = "my-project"
+```
 
-# .gc/site.toml — machine-local
+The machine-local workspace identity and path binding live in `.gc/site.toml`:
+
+```toml
+workspace_name = "my-city"
+
+
 [[rig]]
 name = "my-project"
 path = "/Users/csells/my-project"

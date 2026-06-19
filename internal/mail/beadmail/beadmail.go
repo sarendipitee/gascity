@@ -71,7 +71,7 @@ func (p *Provider) cachedSessionBeads() ([]beads.Bead, error) {
 		return nil, nil
 	}
 	if p.sessionCache == nil {
-		return session.ListAllSessionBeads(p.store, beads.ListQuery{IncludeClosed: true})
+		return listAllSessionBeadsForMail(p.store)
 	}
 	return p.sessionCache.get(p.store)
 }
@@ -83,7 +83,7 @@ func (c *sessionBeadCache) get(store beads.Store) ([]beads.Bead, error) {
 	if c.fetched && c.isFresh(now) {
 		return c.list, nil
 	}
-	list, err := session.ListAllSessionBeads(store, beads.ListQuery{IncludeClosed: true})
+	list, err := listAllSessionBeadsForMail(store)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +102,32 @@ func (c *sessionBeadCache) currentTime() time.Time {
 
 func (c *sessionBeadCache) isFresh(now time.Time) bool {
 	return c.refreshInterval > 0 && now.Sub(c.fetchedAt) < c.refreshInterval
+}
+
+func listAllSessionBeadsForMail(store beads.Store) ([]beads.Bead, error) {
+	list, err := session.ListAllSessionBeads(store, beads.ListQuery{IncludeClosed: true})
+	if err == nil || beads.IsPartialResult(err) {
+		return list, err
+	}
+
+	open, openErr := store.ListOpen()
+	if openErr != nil {
+		return nil, err
+	}
+	closed, closedErr := store.ListOpen("closed")
+	if closedErr != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(open)+len(closed))
+	out := make([]beads.Bead, 0, len(open)+len(closed))
+	for _, b := range append(open, closed...) {
+		if _, ok := seen[b.ID]; ok || !session.IsSessionBeadOrRepairable(b) {
+			continue
+		}
+		seen[b.ID] = struct{}{}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // Send creates a message bead with subject in Title and body in Description.
@@ -657,6 +683,9 @@ func (p *Provider) recipientRoutes(recipient string) []string {
 	routes := make([]string, 0, 4)
 	routes = appendRecipientRoute(routes, recipient)
 	if recipient == "human" || p.store == nil {
+		return routes
+	}
+	if _, ok := p.store.(*beads.BdStore); ok && strings.Contains(recipient, "/") {
 		return routes
 	}
 

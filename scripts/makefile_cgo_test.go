@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,6 +294,15 @@ exit 0
 
 func runMakefileCGOPrintTarget(t *testing.T, repoRoot, tmp, binDir string, args ...string) string {
 	t.Helper()
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	fakeGC := filepath.Join(binDir, "gc")
+	if _, err := os.Stat(fakeGC); errors.Is(err, os.ErrNotExist) {
+		writeExecutable(t, fakeGC, "#!/usr/bin/env sh\nexit 0\n")
+	} else if err != nil {
+		t.Fatalf("stat fake gc: %v", err)
+	}
 	makefile, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
 		t.Fatalf("read Makefile: %v", err)

@@ -48,14 +48,14 @@ interval = "5m"
 pool = "worker"
 ```
 
-The `pool` field tells the orchestrator where to send the work. A _pool_ is a
-named group of agents that share a work queue (you saw the bundled `dolt.dog`
-pool in Tutorial 01); a single agent's name works as a pool target too, so the
-examples here route to the `worker` agent from Tutorial 05. When the order
-fires, the orchestrator runs the formula and writes `gc.routed_to=worker` on the
-resulting work beads — the marker that the pool's `bd ready` query and the
-supervisor's `scale_check` both read. Any agent in the pool can then pick the
-work up.
+The `pool` field tells the controller where to send the work. A _pool_ is a
+named group of one or more agents that share a work queue — you glimpsed one
+in Tutorial 01, where `gc status` showed the bundled `bd.dog` pool. A single
+agent's name works as a pool target too; the examples here route to the
+`worker` agent from Tutorial 05. When an order fires, the controller creates a
+wisp from the formula and routes it to the named pool. Any agent in that pool
+can pick it up.
+
 
 The order name comes from the file basename (`pancakes-check.toml` →
 `pancakes-check`), not from anything in the TOML.
