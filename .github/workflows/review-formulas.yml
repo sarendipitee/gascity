@@ -146,7 +146,7 @@ jobs:
       - gate
     if: needs.gate.outputs.run_shard == 'true'
     runs-on: ${{ needs.runner-policy.outputs.runner_32vcpu }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
