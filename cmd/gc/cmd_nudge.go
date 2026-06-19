@@ -507,6 +507,10 @@ func queuedNudgeOptionsFromTarget(target nudgeTarget) queuedNudgeOptions {
 	}
 }
 
+var nudgePollSleep = time.Sleep
+
+var deliverQueuedNudgesByPoller = tryDeliverQueuedNudgesByPoller
+
 func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.Duration, _ io.Writer, stderr io.Writer) int {
 	targetID := os.Getenv("GC_ALIAS")
 	if targetID == "" {
@@ -564,7 +568,7 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 1
@@ -575,20 +579,21 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 0
 		}
 		missingSince = time.Time{}
-		delivered, pollErr := tryDeliverQueuedNudgesByPoller(target, store, sp, quiescence, obs)
+		delivered, pollErr := deliverQueuedNudgesByPoller(target, store, sp, quiescence, obs)
 		if pollErr != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", pollErr) //nolint:errcheck
 		}
 		if delivered {
+			nudgePollSleep(interval)
 			continue
 		}
-		time.Sleep(interval)
+		nudgePollSleep(interval)
 	}
 }
 
