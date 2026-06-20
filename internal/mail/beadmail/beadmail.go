@@ -660,28 +660,35 @@ func (p *Provider) recipientRoutes(recipient string) []string {
 		return routes
 	}
 
-	liveMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, false)
-	if err != nil {
-		log.Printf("beadmail: listing sessions for recipient route %q: %v", recipient, err)
-		return routes
-	}
-	if len(liveMatches) > 1 {
-		return []string{recipient}
-	}
-	if len(liveMatches) == 1 {
-		return appendSessionRecipientRoutes(routes, liveMatches[0])
-	}
+	// Slash recipients (e.g. "pack/role.agent-name") are path-style named
+	// addresses, not bead IDs. Skip store.Get so the ephemeral-bead fallback
+	// inside BdStore.Get (which issues a bd query with the recipient as an ID)
+	// is never triggered. Historical alias lookup is still allowed because it
+	// searches all session beads by alias_history value, not by bead ID.
+	if !strings.Contains(recipient, "/") {
+		liveMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, false)
+		if err != nil {
+			log.Printf("beadmail: listing sessions for recipient route %q: %v", recipient, err)
+			return routes
+		}
+		if len(liveMatches) > 1 {
+			return []string{recipient}
+		}
+		if len(liveMatches) == 1 {
+			return appendSessionRecipientRoutes(routes, liveMatches[0])
+		}
 
-	closedMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, true)
-	if err != nil {
-		log.Printf("beadmail: listing closed sessions for recipient route %q: %v", recipient, err)
-		return routes
-	}
-	if len(closedMatches) > 1 {
-		return []string{recipient}
-	}
-	if len(closedMatches) == 1 {
-		return appendSessionRecipientRoutes(routes, closedMatches[0])
+		closedMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, true)
+		if err != nil {
+			log.Printf("beadmail: listing closed sessions for recipient route %q: %v", recipient, err)
+			return routes
+		}
+		if len(closedMatches) > 1 {
+			return []string{recipient}
+		}
+		if len(closedMatches) == 1 {
+			return appendSessionRecipientRoutes(routes, closedMatches[0])
+		}
 	}
 	return p.recipientRoutesByHistoricalAlias(recipient, routes)
 }

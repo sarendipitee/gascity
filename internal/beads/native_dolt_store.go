@@ -58,6 +58,36 @@ func repairIDDefault(db *sql.DB, table string) error {
 	return nil
 }
 
+// repairWispEventsIDDefault ensures the wisp_events.id column has DEFAULT
+// (uuid()). The same Dolt schema-migration quirk that strips the expression
+// default from dependencies.id also affects wisp_events.id. Without the default
+// the beadslib ephemeral INSERT (gc mail, session event recording) fails with
+// "Field 'id' doesn't have a default value" because the library never supplies
+// id explicitly, relying on the expression default.
+// This repair is idempotent: it checks INFORMATION_SCHEMA before altering.
+func repairWispEventsIDDefault(db *sql.DB) error {
+	var hasDefault int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'wisp_events'
+		  AND COLUMN_NAME = 'id'
+		  AND COLUMN_DEFAULT IS NOT NULL
+	`).Scan(&hasDefault)
+	if err != nil {
+		return fmt.Errorf("checking wisp_events.id default: %w", err)
+	}
+	if hasDefault > 0 {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE `wisp_events` MODIFY COLUMN `id` char(36) NOT NULL DEFAULT (uuid())")
+	if err != nil {
+		return fmt.Errorf("repairing wisp_events.id default: %w", err)
+	}
+	return nil
+}
+
 const nativeDoltStoreActor = "gascity"
 
 var nativeDoltOpenReadyStatuses = []beadslib.Status{
@@ -215,6 +245,11 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 				// DepAdd / event-recording write against the affected table.
 				fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
 			}
+		}
+		if repairErr := repairWispEventsIDDefault(accessor.DB()); repairErr != nil {
+			// Log but don't fail: the error will surface on the first
+			// ephemeral event recording (gc mail, gc session attach, etc.).
+			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
 		}
 	}
 	return newNativeDoltStoreWithStorageAndPrefix(storage, nativeDoltStoreActor, prefix), nil
