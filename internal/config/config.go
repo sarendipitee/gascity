@@ -81,6 +81,16 @@ func ControlDispatcherStartCommandFor(qualifiedName string) string {
 	return `sh -c '` + controlDispatcherTraceInit + `; ` + controlDispatcherTraceDirInit + `; exec "${GC_BIN:-gc}" convoy control --serve --follow ` + qualifiedName + `'`
 }
 
+// IsDeterministicControlDispatcher reports whether an agent is the providerless
+// control-dispatcher worker that runs the deterministic control loop.
+func IsDeterministicControlDispatcher(agent *Agent) bool {
+	return agent != nil &&
+		agent.Name == ControlDispatcherAgentName &&
+		strings.TrimSpace(agent.StartCommand) != "" &&
+		strings.TrimSpace(agent.Provider) == "" &&
+		strings.Contains(agent.StartCommand, "convoy control --serve")
+}
+
 // BindingQualifiedName returns the binding-qualified agent identity without a
 // rig prefix. Examples: "polecat", "gastown.polecat", or "gastown.mayor".
 func (a *Agent) BindingQualifiedName() string {
@@ -4136,39 +4146,6 @@ func InjectImplicitAgents(cfg *City) {
 	}
 
 	injectControlDispatcherAgents(cfg, existing)
-}
-
-// implicitAgentIdentities returns the set of (dir, name) keys for agents that
-// InjectImplicitAgents would create given the current config state. This is
-// used by compose.go to partition [[patches.agent]] blocks so that patches
-// targeting not-yet-injected implicit agents can be deferred until after
-// InjectImplicitAgents runs.
-func implicitAgentIdentities(cfg *City) map[agentKey]bool {
-	configured := configuredProviders(cfg)
-	if len(configured) == 0 {
-		return nil
-	}
-	providers := configuredProviderOrder(configured)
-
-	existing := make(map[agentKey]bool, len(cfg.Agents))
-	for _, a := range cfg.Agents {
-		existing[agentKey{a.Dir, a.Name}] = true
-	}
-
-	result := make(map[agentKey]bool)
-	for _, name := range providers {
-		if !existing[agentKey{"", name}] {
-			result[agentKey{"", name}] = true
-		}
-	}
-	for _, rig := range cfg.Rigs {
-		for _, name := range providers {
-			if !existing[agentKey{rig.Name, name}] {
-				result[agentKey{rig.Name, name}] = true
-			}
-		}
-	}
-	return result
 }
 
 // implicitAgentIdentities returns the set of (dir, name) keys for agents that
