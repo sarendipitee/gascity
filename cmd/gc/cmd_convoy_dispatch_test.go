@@ -2989,7 +2989,7 @@ case "$*" in
   "--readonly --sandbox ready --assignee=gascity--control-dispatcher --exclude-type=epic --json --limit=20")
     printf '[{"id":"ga-instantiating-assigned","metadata":{"%s":"true"}},{"id":"ga-assigned","metadata":{"gc.kind":"retry"}}]'
     ;;
-  "--readonly --sandbox ready --metadata-field gc.run_target=gascity/control-dispatcher --unassigned --exclude-type=epic --json --sort oldest --limit=20")
+  "--readonly --sandbox ready --metadata-field gc.run_target=gascity/control-dispatcher --unassigned --exclude-type=epic --json --sort priority --limit=20")
     printf '[{"id":"ga-instantiating-routed","metadata":{"%s":"true"}},{"id":"ga-routed","metadata":{"gc.kind":"scope-check"}}]'
     ;;
   *)
@@ -3266,7 +3266,7 @@ if [ "$#" -eq 11 ] &&
    [ "$7" = "--exclude-type=epic" ] &&
    [ "$8" = "--json" ] &&
    [ "$9" = "--sort" ] &&
-   [ "${10}" = "oldest" ] &&
+   [ "${10}" = "priority" ] &&
    [ "${11}" = "--limit=20" ]; then
   printf '%s\n' "$@" > "$BD_MATCHED_ARGS"
   printf '[{"id":"ga-routed"}]'
