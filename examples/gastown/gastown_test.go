@@ -4054,7 +4054,13 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 				t.Skipf("%s not installed", shell)
 			}
 
+			// Use a throwaway ZDOTDIR so shell startup files (e.g. ~/.zshrc with
+			// Flox activation) do not print upgrade notices or other noise that
+			// would contaminate the output check below.
+			cleanEnv := append(os.Environ(), "ZDOTDIR="+t.TempDir())
+
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			cmd.Env = cleanEnv
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
@@ -4064,6 +4070,7 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			cmd.Env = cleanEnv
 			out, err = cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
