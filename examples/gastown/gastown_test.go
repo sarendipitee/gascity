@@ -483,6 +483,46 @@ func TestRefineryFormulaChainsMergeMetadataWithClose(t *testing.T) {
 	)
 }
 
+// TestRefineryFormulaDirectMergeUsesDetachedWorktree guards the RC-blocking
+// regression where the refinery tried `git checkout $TARGET` in its active
+// worktree while the target branch was already checked out by the rig's main
+// worktree. That checkout failed, but the agent still wrote merged metadata
+// and closed the bead. Direct merges must use a temporary detached worktree,
+// verify origin/<target> reaches the merged SHA, and only then mutate bead
+// state.
+func TestRefineryFormulaDirectMergeUsesDetachedWorktree(t *testing.T) {
+	body := refineryMergePushDescription(t)
+	direct := sectionBetween(t, body,
+		`**If MERGE_STRATEGY = "direct" (default):**`,
+		`**If MERGE_STRATEGY = "mr":**`,
+	)
+
+	for _, line := range strings.Split(direct, "\n") {
+		if strings.TrimSpace(line) == `git checkout $TARGET` {
+			t.Fatalf("direct refinery merge checks out target branch in active worktree:\n%s", direct)
+		}
+	}
+
+	assertContainsInOrder(t, direct,
+		`branch_has_real_change "origin/$TARGET" temp ||`,
+		"set -e",
+		`MERGE_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/gascity-refinery-merge.XXXXXX")`,
+		`git fetch origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"`,
+		`TEMP_SHA=$(git rev-parse temp)`,
+		`git worktree add --detach "$MERGE_WT" "origin/$TARGET"`,
+		`git -C "$MERGE_WT" merge --ff-only "$TEMP_SHA"`,
+		`MERGED_SHA=$(git -C "$MERGE_WT" rev-parse HEAD)`,
+		`git -C "$MERGE_WT" push origin "HEAD:$TARGET"`,
+		`REMOTE=$(git rev-parse "origin/$TARGET")`,
+		`if [ "$MERGED_SHA" != "$REMOTE" ]; then`,
+		"STOP. Do not mutate bead state.",
+		"gc runtime drain-ack",
+		"exit 1",
+		"--set-metadata merge_result=merged",
+		`gc bd close "$WORK" --reason "Merged to $TARGET at $MERGED_SHORT"`,
+	)
+}
+
 // TestRefineryFormulaRefusesZeroDiffMerge guards the false-completion
 // fix (gco-hu0p / upstream #3048): nothing previously stopped the refinery
 // from recording a 0-commit / no-diff branch as close-as-merged, producing
@@ -3954,7 +3994,13 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 				t.Skipf("%s not installed", shell)
 			}
 
+			// Use a throwaway ZDOTDIR so shell startup files (e.g. ~/.zshrc with
+			// Flox activation) do not print upgrade notices or other noise that
+			// would contaminate the output check below.
+			cleanEnv := append(os.Environ(), "ZDOTDIR="+t.TempDir())
+
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			cmd.Env = cleanEnv
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
@@ -3964,6 +4010,7 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
+			cmd.Env = cleanEnv
 			out, err = cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
