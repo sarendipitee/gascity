@@ -109,7 +109,6 @@ export type AgentPatch = {
     StartCommand: string | null;
     Suspended: boolean | null;
     TmuxAlias: string | null;
-    Upstream: string | null;
     WakeMode: string | null;
     WorkDir: string | null;
 };
@@ -287,12 +286,6 @@ export type BeadAssignInputBody = {
     assignee?: string;
 };
 
-export type BeadClaimRejectedPayload = {
-    attempted_claimant: string;
-    bead_id: string;
-    existing_claimant: string;
-};
-
 export type BeadCreateInputBody = {
     /**
      * Assigned agent.
@@ -424,7 +417,6 @@ export type BeadsDiagnostic = {
 export type BindingStatus = 'active' | 'ended';
 
 export type BoundEventPayload = {
-    agent_name?: string;
     conversation_id: string;
     provider: string;
     session_id: string;
@@ -810,7 +802,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | BeadClaimRejectedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundChannelMismatchPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | Record | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | BeadClaimRejectedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundChannelMismatchPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | Record | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionLivenessStalePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -931,10 +923,6 @@ export type ExtMsgAdapterUnregisterInputBody = {
 
 export type ExtMsgBindInputBody = {
     /**
-     * Configured agent identity to bind; its live session is resolved at delivery time, cold-waking one when none is live (mutually exclusive with session_id).
-     */
-    agent_name?: string;
-    /**
      * Conversation to bind.
      */
     conversation?: ConversationRef;
@@ -945,13 +933,9 @@ export type ExtMsgBindInputBody = {
         [key: string]: string;
     };
     /**
-     * Rebind (handoff) a conversation whose active binding targets someone else instead of returning a conflict.
+     * Session ID to bind.
      */
-    replace?: boolean;
-    /**
-     * Session ID to bind (mutually exclusive with agent_name).
-     */
-    session_id?: string;
+    session_id: string;
 };
 
 export type ExtMsgGroupEnsureInputBody = {
@@ -1077,17 +1061,13 @@ export type ExtMsgUnbindBody = {
 
 export type ExtMsgUnbindInputBody = {
     /**
-     * Configured agent identity to unbind.
-     */
-    agent_name?: string;
-    /**
-     * Conversation to unbind (nil = filter by session_id/agent_name).
+     * Conversation to unbind (nil = all).
      */
     conversation?: ConversationRef;
     /**
      * Session ID to unbind.
      */
-    session_id?: string;
+    session_id: string;
 };
 
 export type ExternalActor = {
@@ -1301,7 +1281,6 @@ export type InboundEventPayload = {
     actor: string;
     conversation_id: string;
     provider: string;
-    target_agent?: string;
     target_session: string;
 };
 
@@ -1309,7 +1288,6 @@ export type InboundResult = {
     Binding: SessionBindingRecord;
     GroupRoute: GroupRouteDecision;
     Message: ExternalInboundMessage;
-    TargetAgentName: string;
     TargetSessionID: string;
     TranscriptEntry: ConversationTranscriptRecord;
 };
@@ -1958,13 +1936,6 @@ export type OrdersFeedBody = {
     partial_errors?: Array<string> | null;
 };
 
-export type OutboundChannelMismatchPayload = {
-    conversation_id: string;
-    owner_session: string;
-    posting_session: string;
-    provider: string;
-};
-
 export type OutboundEventPayload = {
     conversation_id: string;
     message_id: string;
@@ -2563,7 +2534,6 @@ export type SessionAgentListResponse = {
 };
 
 export type SessionBindingRecord = {
-    AgentName: string;
     BindingGeneration: number;
     BoundAt: string;
     Conversation: ConversationRef;
@@ -2672,6 +2642,15 @@ export type SessionLifecyclePayload = {
      * Session template name when known at the emission site.
      */
     template?: string;
+};
+
+export type SessionLivenessStalePayload = {
+    episode_id: string;
+    escalate_to?: string;
+    freshness_window: string;
+    last_activity?: string;
+    session: string;
+    stale_since: string;
 };
 
 export type SessionMessageInputBody = {
@@ -2801,7 +2780,6 @@ export type SessionResponse = {
     submission_capabilities?: SubmissionCapabilities;
     template: string;
     title: string;
-    work_dir?: string;
 };
 
 export type SessionStrandedPayload = {
@@ -3473,8 +3451,6 @@ export type TranscriptProvenance = 'live' | 'hydrated';
  * Discriminated union of city event stream envelopes. Each variant constrains the envelope type and payload schema together.
  */
 export type TypedEventStreamEnvelope = ({
-    type: 'bead.claim_rejected';
-} & TypedEventStreamEnvelopeBeadClaimRejected) | ({
     type: 'bead.closed';
 } & TypedEventStreamEnvelopeBeadClosed) | ({
     type: 'bead.created';
@@ -3521,8 +3497,6 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeExtmsgInbound) | ({
     type: 'extmsg.outbound';
 } & TypedEventStreamEnvelopeExtmsgOutbound) | ({
-    type: 'extmsg.outbound_channel_mismatch';
-} & TypedEventStreamEnvelopeExtmsgOutboundChannelMismatch) | ({
     type: 'extmsg.unbound';
 } & TypedEventStreamEnvelopeExtmsgUnbound) | ({
     type: 'gc.store.disk_critical';
@@ -3581,6 +3555,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeSessionDraining) | ({
     type: 'session.idle_killed';
 } & TypedEventStreamEnvelopeSessionIdleKilled) | ({
+    type: 'session.liveness_stale';
+} & TypedEventStreamEnvelopeSessionLivenessStale) | ({
     type: 'session.max_age_killed';
 } & TypedEventStreamEnvelopeSessionMaxAgeKilled) | ({
     type: 'session.quarantined';
@@ -3613,20 +3589,6 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeWorkerOperation) | ({
     type: 'TypedEventStreamEnvelopeCustom';
 } & TypedEventStreamEnvelopeCustom);
-
-/**
- * TypedEventStreamEnvelope bead.claim_rejected
- */
-export type TypedEventStreamEnvelopeBeadClaimRejected = {
-    actor: string;
-    message?: string;
-    payload: BeadClaimRejectedPayload;
-    seq: number;
-    subject?: string;
-    ts: string;
-    type: 'bead.claim_rejected';
-    workflow?: WorkflowEventProjection;
-};
 
 /**
  * TypedEventStreamEnvelope bead.closed
@@ -3961,20 +3923,6 @@ export type TypedEventStreamEnvelopeExtmsgOutbound = {
     subject?: string;
     ts: string;
     type: 'extmsg.outbound';
-    workflow?: WorkflowEventProjection;
-};
-
-/**
- * TypedEventStreamEnvelope extmsg.outbound_channel_mismatch
- */
-export type TypedEventStreamEnvelopeExtmsgOutboundChannelMismatch = {
-    actor: string;
-    message?: string;
-    payload: OutboundChannelMismatchPayload;
-    seq: number;
-    subject?: string;
-    ts: string;
-    type: 'extmsg.outbound_channel_mismatch';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4385,6 +4333,20 @@ export type TypedEventStreamEnvelopeSessionIdleKilled = {
 };
 
 /**
+ * TypedEventStreamEnvelope session.liveness_stale
+ */
+export type TypedEventStreamEnvelopeSessionLivenessStale = {
+    actor: string;
+    message?: string;
+    payload: SessionLivenessStalePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'session.liveness_stale';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedEventStreamEnvelope session.max_age_killed
  */
 export type TypedEventStreamEnvelopeSessionMaxAgeKilled = {
@@ -4600,8 +4562,6 @@ export type TypedEventStreamEnvelopeWorkerOperation = {
  * Discriminated union of supervisor event stream envelopes. Each variant constrains the envelope type and payload schema together and includes the source city.
  */
 export type TypedTaggedEventStreamEnvelope = ({
-    type: 'bead.claim_rejected';
-} & TypedTaggedEventStreamEnvelopeBeadClaimRejected) | ({
     type: 'bead.closed';
 } & TypedTaggedEventStreamEnvelopeBeadClosed) | ({
     type: 'bead.created';
@@ -4648,8 +4608,6 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeExtmsgInbound) | ({
     type: 'extmsg.outbound';
 } & TypedTaggedEventStreamEnvelopeExtmsgOutbound) | ({
-    type: 'extmsg.outbound_channel_mismatch';
-} & TypedTaggedEventStreamEnvelopeExtmsgOutboundChannelMismatch) | ({
     type: 'extmsg.unbound';
 } & TypedTaggedEventStreamEnvelopeExtmsgUnbound) | ({
     type: 'gc.store.disk_critical';
@@ -4708,6 +4666,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeSessionDraining) | ({
     type: 'session.idle_killed';
 } & TypedTaggedEventStreamEnvelopeSessionIdleKilled) | ({
+    type: 'session.liveness_stale';
+} & TypedTaggedEventStreamEnvelopeSessionLivenessStale) | ({
     type: 'session.max_age_killed';
 } & TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled) | ({
     type: 'session.quarantined';
@@ -4740,21 +4700,6 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeWorkerOperation) | ({
     type: 'TypedTaggedEventStreamEnvelopeCustom';
 } & TypedTaggedEventStreamEnvelopeCustom);
-
-/**
- * TypedTaggedEventStreamEnvelope bead.claim_rejected
- */
-export type TypedTaggedEventStreamEnvelopeBeadClaimRejected = {
-    actor: string;
-    city: string;
-    message?: string;
-    payload: BeadClaimRejectedPayload;
-    seq: number;
-    subject?: string;
-    ts: string;
-    type: 'bead.claim_rejected';
-    workflow?: WorkflowEventProjection;
-};
 
 /**
  * TypedTaggedEventStreamEnvelope bead.closed
@@ -5113,21 +5058,6 @@ export type TypedTaggedEventStreamEnvelopeExtmsgOutbound = {
     subject?: string;
     ts: string;
     type: 'extmsg.outbound';
-    workflow?: WorkflowEventProjection;
-};
-
-/**
- * TypedTaggedEventStreamEnvelope extmsg.outbound_channel_mismatch
- */
-export type TypedTaggedEventStreamEnvelopeExtmsgOutboundChannelMismatch = {
-    actor: string;
-    city: string;
-    message?: string;
-    payload: OutboundChannelMismatchPayload;
-    seq: number;
-    subject?: string;
-    ts: string;
-    type: 'extmsg.outbound_channel_mismatch';
     workflow?: WorkflowEventProjection;
 };
 
@@ -5567,6 +5497,21 @@ export type TypedTaggedEventStreamEnvelopeSessionIdleKilled = {
 };
 
 /**
+ * TypedTaggedEventStreamEnvelope session.liveness_stale
+ */
+export type TypedTaggedEventStreamEnvelopeSessionLivenessStale = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: SessionLivenessStalePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'session.liveness_stale';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedTaggedEventStreamEnvelope session.max_age_killed
  */
 export type TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled = {
@@ -5850,19 +5795,11 @@ export type WorkerOperationEventPayload = {
     provider?: string;
     queued?: boolean;
     result: string;
-    /**
-     * Run-root identifier for rolling this operation up to a workflow/molecule/chat run (best-effort).
-     */
-    run_id?: string;
     session_id?: string;
     session_name?: string;
     started_at: string;
     template?: string;
     transport?: string;
-    /**
-     * True when tokens were observed but no price resolved (best-effort tri-state; absent = not evaluated).
-     */
-    unpriced?: boolean;
 };
 
 export type WorkflowAttemptSummary = {
