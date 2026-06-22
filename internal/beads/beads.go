@@ -405,6 +405,18 @@ type Store interface {
 	DepList(id, direction string) ([]Dep, error)
 }
 
+// MetadataResetter is an optional capability implemented by stores that can
+// overwrite a bead's metadata wholesale, discarding any existing (possibly
+// corrupt) metadata. Callers should prefer SetMetadataBatch for normal writes
+// and fall back to this interface only when the existing metadata is known to
+// be corrupt and unreadable.
+type MetadataResetter interface {
+	// ResetMetadataBatch replaces the bead's entire metadata map with kvs,
+	// ignoring and discarding any existing metadata. Returns ErrNotFound if
+	// the bead does not exist.
+	ResetMetadataBatch(id string, kvs map[string]string) error
+}
+
 // StorageClass selects the physical bead storage tier for adapters that
 // support table-specific creates. It is adapter plumbing, not a domain-level
 // behavior knob; normal callers should use Store.Create and let the policy

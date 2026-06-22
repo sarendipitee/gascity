@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,7 @@ var (
 	_ GraphApplyStore               = (*NativeDoltStore)(nil)
 	_ StorageGraphApplyStore        = (*NativeDoltStore)(nil)
 	_ EphemeralGraphApplyStore      = (*NativeDoltStore)(nil)
+	_ MetadataResetter              = (*NativeDoltStore)(nil)
 )
 
 func newNativeDoltStoreWithStorage(storage beadslib.Storage, actor string) *NativeDoltStore {
@@ -865,6 +867,31 @@ func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) err
 	return nativeStoreError(id, storage.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor))
 }
 
+// ResetMetadataBatch overwrites the bead's metadata with kvs, discarding any
+// existing (possibly corrupt) metadata. Use this to repair beads whose stored
+// metadata is not valid JSON and therefore cannot be read by SetMetadataBatch.
+func (s *NativeDoltStore) ResetMetadataBatch(id string, kvs map[string]string) error {
+	storage, release, err := s.acquireStorage()
+	if err != nil {
+		return err
+	}
+	defer release()
+	ctx, cancel := nativeDoltOperationContext(context.TODO())
+	defer cancel()
+	issue, err := storage.GetIssue(ctx, id)
+	if err != nil {
+		return nativeStoreError(id, err)
+	}
+	if issue == nil {
+		return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+	}
+	raw, err := metadataRawFromMap(kvs)
+	if err != nil {
+		return err
+	}
+	return nativeStoreError(id, storage.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor))
+}
+
 // Tx executes fn sequentially against the native Dolt store.
 func (s *NativeDoltStore) Tx(_ string, fn func(Tx) error) error {
 	_, release, err := s.acquireStorage()
@@ -1465,11 +1492,27 @@ func zeroTimePtr(t time.Time) *time.Time {
 	return &t
 }
 
+// ansiEscapeRe matches ANSI/VT100 escape sequences (CSI, OSC, and bare ESC).
+var ansiEscapeRe = regexp.MustCompile(`\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^[\]])`)
+
+// stripANSI removes ANSI escape sequences from s.
+func stripANSI(s string) string {
+	return ansiEscapeRe.ReplaceAllString(s, "")
+}
+
 func metadataRawFromMap(metadata map[string]string) (json.RawMessage, error) {
 	if len(metadata) == 0 {
 		return nil, nil
 	}
-	raw, err := json.Marshal(metadata)
+	// Sanitize values: ANSI escape sequences embedded in git output (e.g. a
+	// colorized rev-parse result) corrupt the stored JSON and cause hard parse
+	// failures on every subsequent read. Strip them at the persistence layer so
+	// callers never need to remember to clean up git-captured strings.
+	clean := make(map[string]string, len(metadata))
+	for k, v := range metadata {
+		clean[k] = stripANSI(v)
+	}
+	raw, err := json.Marshal(clean)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling metadata: %w", err)
 	}

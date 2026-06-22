@@ -2213,3 +2213,107 @@ func filterNativeIssuesForTest(issues []*beadslib.Issue, filter beadslib.IssueFi
 	}
 	return filtered
 }
+
+func TestStripANSIRemovesEscapeSequences(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"clean SHA", "db1c5b305", "db1c5b305"},
+		{"yellow SHA", "\x1b[33mdb1c5b305\x1b[m", "db1c5b305"},
+		{"reset only", "\x1b[m", ""},
+		{"mixed", "prefix\x1b[33mcolored\x1b[mSuffix", "prefixcoloredSuffix"},
+		{"no escape", "plain text", "plain text"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripANSI(tc.input); got != tc.want {
+				t.Fatalf("stripANSI(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMetadataRawFromMapStripsANSIFromValues(t *testing.T) {
+	// Simulate what happens when a colorized git rev-parse output is stored.
+	metadata := map[string]string{
+		"merged_sha": "\x1b[33mdb1c5b305\x1b[m",
+		"clean_key":  "normal-value",
+	}
+	raw, err := metadataRawFromMap(metadata)
+	if err != nil {
+		t.Fatalf("metadataRawFromMap: %v", err)
+	}
+	// Round-trip back to map to verify values.
+	got, err := metadataMapFromNative(raw)
+	if err != nil {
+		t.Fatalf("metadataMapFromNative after strip: %v", err)
+	}
+	if got["merged_sha"] != "db1c5b305" {
+		t.Fatalf("merged_sha = %q, want %q (ANSI stripped)", got["merged_sha"], "db1c5b305")
+	}
+	if got["clean_key"] != "normal-value" {
+		t.Fatalf("clean_key = %q, want %q", got["clean_key"], "normal-value")
+	}
+}
+
+func TestNativeDoltStoreResetMetadataBatchOverwritesCorruptMetadata(t *testing.T) {
+	var capturedUpdates map[string]interface{}
+	storage := &nativeDoltStorageSpy{
+		getIssue: func(_ context.Context, _ string) (*beadslib.Issue, error) {
+			return &beadslib.Issue{
+				ID:        "gc-corrupt",
+				Title:     "corrupt metadata",
+				Status:    beadslib.StatusOpen,
+				IssueType: beadslib.TypeTask,
+				Priority:  2,
+				// Corrupt metadata that SetMetadataBatch cannot parse.
+				Metadata: json.RawMessage(`{"merged_sha":`),
+			}, nil
+		},
+		updateIssue: func(_ context.Context, _ string, updates map[string]interface{}, _ string) error {
+			capturedUpdates = updates
+			return nil
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	// Normal SetMetadataBatch must fail on corrupt metadata.
+	if err := store.SetMetadataBatch("gc-corrupt", map[string]string{"k": "v"}); err == nil {
+		t.Fatal("SetMetadataBatch error = nil, want parse error")
+	}
+
+	// ResetMetadataBatch must succeed, discarding the corrupt existing bytes.
+	if err := store.ResetMetadataBatch("gc-corrupt", map[string]string{"merged_sha": "db1c5b305"}); err != nil {
+		t.Fatalf("ResetMetadataBatch: %v", err)
+	}
+	if capturedUpdates == nil {
+		t.Fatal("UpdateIssue was not called")
+	}
+	rawMeta, ok := capturedUpdates["metadata"].(json.RawMessage)
+	if !ok {
+		t.Fatalf("metadata in update = %T, want json.RawMessage", capturedUpdates["metadata"])
+	}
+	roundTripped, err := metadataMapFromNative(rawMeta)
+	if err != nil {
+		t.Fatalf("metadataMapFromNative after reset: %v", err)
+	}
+	if roundTripped["merged_sha"] != "db1c5b305" {
+		t.Fatalf("merged_sha after reset = %q, want %q", roundTripped["merged_sha"], "db1c5b305")
+	}
+}
+
+func TestNativeDoltStoreResetMetadataBatchReturnsNotFoundForMissingBead(t *testing.T) {
+	storage := &nativeDoltStorageSpy{
+		getIssue: func(_ context.Context, _ string) (*beadslib.Issue, error) {
+			return nil, nil
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+	err := store.ResetMetadataBatch("gc-missing", map[string]string{"k": "v"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResetMetadataBatch error = %v, want ErrNotFound", err)
+	}
+}

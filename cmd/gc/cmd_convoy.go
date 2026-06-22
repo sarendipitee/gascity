@@ -736,7 +736,10 @@ func doConvoyListAcrossStores(stores []convoyStoreView, jsonOut bool, stdout, st
 	if jsonOut {
 		return writeConvoyListJSON(convoys, stdout, stderr)
 	}
+	return writeConvoyListText(convoys, stdout, stderr)
+}
 
+func writeConvoyListText(convoys []convoyWithStore, stdout, stderr io.Writer) int {
 	if len(convoys) == 0 {
 		fmt.Fprintln(stdout, "No open convoys") //nolint:errcheck // best-effort stdout
 		return 0
@@ -747,8 +750,11 @@ func doConvoyListAcrossStores(stores []convoyStoreView, jsonOut bool, stdout, st
 	for _, c := range convoys {
 		children, err := listConvoyChildren(c.store, c.bead.ID, true)
 		if err != nil {
-			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
-			return 1
+			// Quarantine: one bead with corrupt metadata must not abort the
+			// entire listing. Log the error and show the convoy as degraded.
+			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v (quarantined — use 'gc bd update %s --reset-metadata' to repair)\n", c.bead.ID, err, c.bead.ID) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", c.bead.ID, c.bead.Title, "[corrupt: metadata unreadable]")                                                              //nolint:errcheck // best-effort stdout
+			continue
 		}
 		progress := convoyProgressFromChildren(children)
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.bead.ID, c.bead.Title, formatConvoyProgress(progress)) //nolint:errcheck // best-effort stdout
@@ -762,8 +768,10 @@ func writeConvoyListJSON(convoys []convoyWithStore, stdout, stderr io.Writer) in
 	for _, c := range convoys {
 		children, err := listConvoyChildren(c.store, c.bead.ID, true)
 		if err != nil {
-			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
-			return 1
+			// Quarantine: one bead with corrupt metadata must not abort the
+			// entire listing. Log the error and include a degraded entry.
+			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v (quarantined — use 'gc bd update %s --reset-metadata' to repair)\n", c.bead.ID, err, c.bead.ID) //nolint:errcheck // best-effort stderr
+			continue
 		}
 		item := convoySummaryFromBead(c.bead, children)
 		items = append(items, item)

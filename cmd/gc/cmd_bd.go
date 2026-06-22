@@ -224,6 +224,13 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 		}
 		return doBdReleaseIfCurrent(cityPath, target, id, expectedAssignee, stdout, stderr)
 	}
+	if id, kvs, ok, err := parseBdResetMetadataArgs(bdArgs); ok || err != nil {
+		if err != nil {
+			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		return doBdResetMetadata(cityPath, target.ScopeRoot, id, kvs, stderr)
+	}
 	if provider := rawBeadsProviderForScope(target.ScopeRoot, cityPath); !providerUsesBdStoreContract(provider) {
 		fmt.Fprintf(stderr, "gc bd: only supported for bd-backed beads providers (resolved %q for %s)\n", provider, target.ScopeRoot) //nolint:errcheck // best-effort stderr
 		if hint := bdProviderMismatchHint(target.ScopeRoot, provider); hint != "" {
@@ -365,6 +372,72 @@ func parseBdReleaseIfCurrentArgs(args []string) (id, expectedAssignee string, ok
 
 func invalidBdReleaseIfCurrentArg(value string) bool {
 	return value == "" || strings.IndexFunc(value, unicode.IsSpace) >= 0
+}
+
+// parseBdResetMetadataArgs detects the `gc bd update <id> --reset-metadata
+// [key=value ...]` form. When --reset-metadata is present the metadata is
+// written wholesale (discarding any existing, possibly corrupt, bytes) rather
+// than merged. Returns ok=true only when the subcommand is "update" and
+// --reset-metadata appears in args.
+func parseBdResetMetadataArgs(args []string) (id string, kvs map[string]string, ok bool, err error) {
+	if len(args) == 0 || args[0] != "update" {
+		return "", nil, false, nil
+	}
+	resetIdx := -1
+	for i, a := range args {
+		if a == "--reset-metadata" {
+			resetIdx = i
+			break
+		}
+	}
+	if resetIdx < 0 {
+		return "", nil, false, nil
+	}
+	// Expect: update <id> --reset-metadata [key=value ...]
+	// The positional bead ID must appear between "update" and --reset-metadata
+	// (or after, but before any other flags). We scan for the first non-flag arg.
+	var beadID string
+	for i := 1; i < resetIdx; i++ {
+		if !strings.HasPrefix(args[i], "-") {
+			beadID = args[i]
+			break
+		}
+	}
+	if beadID == "" {
+		return "", nil, true, fmt.Errorf("usage: gc bd update <issue-id> --reset-metadata [key=value ...]")
+	}
+	kvs = make(map[string]string)
+	for _, a := range args[resetIdx+1:] {
+		k, v, found := strings.Cut(a, "=")
+		if !found || k == "" {
+			return "", nil, true, fmt.Errorf("gc bd update --reset-metadata: expected key=value, got %q", a)
+		}
+		kvs[k] = v
+	}
+	return beadID, kvs, true, nil
+}
+
+// doBdResetMetadata calls ResetMetadataBatch on the store to overwrite a
+// bead's metadata wholesale. This is the repair path for beads whose stored
+// metadata is corrupt JSON (e.g. embedded ANSI escape sequences) and cannot
+// be read by the normal SetMetadataBatch path.
+func doBdResetMetadata(cityPath, scopeRoot, id string, kvs map[string]string, stderr io.Writer) int {
+	store, err := openStoreAtForCity(scopeRoot, cityPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc bd update --reset-metadata: opening store: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	resetter, ok := store.(beads.MetadataResetter)
+	if !ok {
+		fmt.Fprintf(stderr, "gc bd update --reset-metadata: store does not support metadata reset (provider: %T)\n", store) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	if err := resetter.ResetMetadataBatch(id, kvs); err != nil {
+		fmt.Fprintf(stderr, "gc bd update --reset-metadata: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	fmt.Fprintf(stderr, "gc bd update --reset-metadata: metadata reset for %s\n", id) //nolint:errcheck // best-effort stderr
+	return 0
 }
 
 // bdMutationWriteIDs extracts all positional bead IDs from a bd write-mutation
@@ -537,7 +610,7 @@ func bdSubcmdBoolFlags(sub string) map[string]bool {
 			"--allow-empty-description": true,
 			"--claim":                   true, "--ephemeral": true,
 			"--history": true, "--no-history": true,
-			"--persistent": true, "--stdin": true,
+			"--persistent": true, "--reset-metadata": true, "--stdin": true,
 		}
 	case "close":
 		subFlags = map[string]bool{

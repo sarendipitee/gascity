@@ -2448,3 +2448,54 @@ func TestRouteConvoyStatus_WorkflowConvoyFallsBack(t *testing.T) {
 		t.Errorf("stderr missing workflow-convoy route log:\n%s", stderr.String())
 	}
 }
+
+func TestConvoyListSkipsConvoyWithCorruptChildren(t *testing.T) {
+	// A convoy whose store returns an error when listing children must not
+	// abort the entire listing — the command must skip that convoy, log a
+	// quarantine message to stderr, and continue rendering healthy convoys.
+	goodStore := beads.NewMemStore()
+	_, _ = goodStore.Create(beads.Bead{Title: "healthy convoy", Type: "convoy"}) // gc-1
+	_, _ = goodStore.Create(beads.Bead{Title: "healthy task", ParentID: "gc-1"})
+
+	corruptConvoy := beads.Bead{ID: "gcy-corrupt", Title: "corrupt convoy"}
+	convoys := []convoyWithStore{
+		{store: goodStore, bead: beads.Bead{ID: "gc-1", Title: "healthy convoy"}},
+		{store: unavailableStore{err: fmt.Errorf("parsing metadata for bead \"gcy-h0s\": native issue metadata parse: unmarshaling metadata: invalid character 'm'")}, bead: corruptConvoy},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := writeConvoyListText(convoys, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("writeConvoyListText = %d, want 0 (should not hard-fail on corrupt convoy)", code)
+	}
+	if !strings.Contains(stdout.String(), "healthy convoy") {
+		t.Errorf("stdout missing healthy convoy:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "corrupt") || !strings.Contains(stderr.String(), "quarantined") {
+		t.Errorf("stderr missing quarantine message:\n%s", stderr.String())
+	}
+}
+
+func TestConvoyListJSONSkipsConvoyWithCorruptChildren(t *testing.T) {
+	goodStore := beads.NewMemStore()
+	_, _ = goodStore.Create(beads.Bead{Title: "healthy convoy", Type: "convoy"}) // gc-1
+	_, _ = goodStore.Create(beads.Bead{Title: "healthy task", ParentID: "gc-1"})
+
+	convoys := []convoyWithStore{
+		{store: goodStore, bead: beads.Bead{ID: "gc-1", Title: "healthy convoy"}},
+		{store: unavailableStore{err: fmt.Errorf("corrupt metadata")}, bead: beads.Bead{ID: "gcy-corrupt", Title: "corrupt convoy"}},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := writeConvoyListJSON(convoys, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("writeConvoyListJSON = %d, want 0 (should not hard-fail on corrupt convoy)", code)
+	}
+	if !strings.Contains(stderr.String(), "quarantined") {
+		t.Errorf("stderr missing quarantine message:\n%s", stderr.String())
+	}
+	// The healthy convoy must still appear in JSON output.
+	if !strings.Contains(stdout.String(), "healthy convoy") {
+		t.Errorf("stdout missing healthy convoy:\n%s", stdout.String())
+	}
+}

@@ -2669,3 +2669,81 @@ prefix = "fe"
 		t.Fatalf("SQL query = %q, want %q", strings.TrimSpace(string(query)), wantQuery)
 	}
 }
+
+func TestParseBdResetMetadataArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantID  string
+		wantKVs map[string]string
+		wantOK  bool
+		wantErr bool
+	}{
+		{
+			name:    "not update subcommand",
+			args:    []string{"list", "--reset-metadata"},
+			wantOK:  false,
+			wantErr: false,
+		},
+		{
+			name:    "update without --reset-metadata",
+			args:    []string{"update", "gc-1", "--set-metadata", "k=v"},
+			wantOK:  false,
+			wantErr: false,
+		},
+		{
+			name:    "reset with kv pairs",
+			args:    []string{"update", "gc-1", "--reset-metadata", "merged_sha=abc123", "merged_target=main"},
+			wantID:  "gc-1",
+			wantKVs: map[string]string{"merged_sha": "abc123", "merged_target": "main"},
+			wantOK:  true,
+		},
+		{
+			name:    "reset with no kv pairs (clear metadata)",
+			args:    []string{"update", "gc-1", "--reset-metadata"},
+			wantID:  "gc-1",
+			wantKVs: map[string]string{},
+			wantOK:  true,
+		},
+		{
+			name:    "missing bead ID",
+			args:    []string{"update", "--reset-metadata", "k=v"},
+			wantOK:  true,
+			wantErr: true,
+		},
+		{
+			name:    "malformed kv (no equals)",
+			args:    []string{"update", "gc-1", "--reset-metadata", "notakv"},
+			wantOK:  true,
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, kvs, ok, err := parseBdResetMetadataArgs(tc.args)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if tc.wantErr && err == nil {
+				t.Fatal("err = nil, want non-nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if !tc.wantOK || tc.wantErr {
+				return
+			}
+			if id != tc.wantID {
+				t.Fatalf("id = %q, want %q", id, tc.wantID)
+			}
+			for k, v := range tc.wantKVs {
+				if kvs[k] != v {
+					t.Fatalf("kvs[%q] = %q, want %q", k, kvs[k], v)
+				}
+			}
+			if len(kvs) != len(tc.wantKVs) {
+				t.Fatalf("len(kvs) = %d, want %d", len(kvs), len(tc.wantKVs))
+			}
+		})
+	}
+}
