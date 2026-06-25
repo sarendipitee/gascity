@@ -1555,10 +1555,21 @@ func (m *Manager) infoFromBead(b beads.Bead) Info {
 	state := normalizeInfoState(State(b.Metadata["state"]))
 	if closed {
 		state = "" // closed beads have no runtime state
-	} else if m.sp != nil && state == StateActive && !m.sp.IsRunning(sessName) {
-		// Surface stale "awake" / "active" beads as dormant immediately.
-		// The controller also heals metadata on the next tick.
-		state = StateAsleep
+	} else if m.sp != nil && sessName != "" {
+		switch state {
+		case StateActive:
+			if !m.sp.IsRunning(sessName) {
+				// Surface stale "awake" / "active" beads as dormant immediately.
+				// The controller also heals metadata on the next tick.
+				state = StateAsleep
+			}
+		case StateAsleep:
+			if strings.TrimSpace(b.Metadata["sleep_reason"]) != "drained" && m.sp.IsRunning(sessName) {
+				// Surface live runtime truth even when reconciler-owned metadata is
+				// stale (for example, state=asleep after a controller restart).
+				state = StateActive
+			}
+		}
 	}
 
 	info := Info{

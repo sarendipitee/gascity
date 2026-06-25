@@ -1744,6 +1744,29 @@ func TestPeek(t *testing.T) {
 	}
 }
 
+func TestPeekAllowsStaleAsleepMetadataWhenRuntimeIsLive(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := NewManager(store, sp)
+
+	info, err := mgr.Create(context.Background(), "helper", "", "claude", "/tmp", "claude", nil, ProviderResume{}, runtime.Config{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetMetadata(info.ID, "state", string(StateAsleep)); err != nil {
+		t.Fatalf("SetMetadata(state): %v", err)
+	}
+	sp.SetPeekOutput(info.SessionName, "still live")
+
+	out, err := mgr.Peek(info.ID, 50)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if out != "still live" {
+		t.Fatalf("Peek output = %q, want %q", out, "still live")
+	}
+}
+
 func TestPeekSuspended(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := runtime.NewFake()
@@ -2729,6 +2752,28 @@ func TestPruneDetailedSkipsAsleepByDefault(t *testing.T) {
 	}
 	if got.State != StateAsleep {
 		t.Errorf("session state = %q, want %q (asleep should be untouched)", got.State, StateAsleep)
+	}
+}
+
+func TestGetSurfacesStaleAsleepMetadataAsActiveWhenRuntimeIsLive(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := NewManager(store, sp)
+
+	info, err := mgr.Create(context.Background(), "default", "Live", "echo d", "/tmp", "test", nil, ProviderResume{}, runtime.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadata(info.ID, "state", string(StateAsleep)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mgr.Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateActive {
+		t.Errorf("session state = %q, want %q because runtime is live", got.State, StateActive)
 	}
 }
 
