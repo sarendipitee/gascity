@@ -282,6 +282,39 @@ test-only mechanism — it requires `GC_NATIVE_DOLTLITE_BEADS=true` and is
 not a supported operator path. Use Dolt server mode instead.
 </Note>
 
+## `dolt_mode_safe` Preflight Gate Fails
+
+The native in-process store is unavailable after `gc start`, and the supervisor
+log shows:
+
+```
+native_store_unavailable gate=dolt_mode_safe reason="dolt_mode=embedded; native store requires Dolt server mode (bd context must report dolt_mode=server) — falling back to per-call bd. See troubleshooting."
+```
+
+`gc status --json | jq .beads` reports `"preflight_gate":"dolt_mode_safe"` with
+`"native_store_eligible":false`.
+
+The `dolt_mode_safe` gate keys off the `dolt_mode` value that `bd context`
+reports; a value of `embedded` fails the gate. The gate reads this from
+`bd context`, not from `.beads/config.yaml`, so hand-editing the config file is
+not the supported repair. Confirm what `bd` currently reports:
+
+```bash
+bd context --json | jq .dolt_mode   # should print "server"
+```
+
+**Remedy:** This is the same native-store fallback covered under
+[Native Store Falls Back Because Dolt Is in Embedded Mode](#native-store-falls-back-because-dolt-is-in-embedded-mode).
+Follow that section to run `bd` against a Dolt SQL server so `bd context`
+reports `dolt_mode=server`, then apply and re-check:
+
+```bash
+gc restart
+```
+
+Do not bypass or disable the `dolt_mode_safe` check — it guards the store-mode
+contract that keeps `bd` and gc in agreement.
+
 ## flock Not Found (macOS)
 
 macOS does not ship `flock`. Install it via Homebrew:
