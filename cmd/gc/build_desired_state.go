@@ -565,7 +565,6 @@ func buildDesiredStateWithSessionBeads(
 		runningSessions := 0
 		for _, sb := range allOpenSessionBeads {
 			if isPoolManagedSessionBead(sb) && poolSessionIsLive(sb) {
-			if isPoolManagedSessionBead(sb) && poolSessionIsLive(sb) {
 				// Match the qualified template by identity equivalence.
 				// allOpenSessionBeads is aggregated across the city + every rig
 				// store, and pool session beads store the qualified name
@@ -965,21 +964,20 @@ func buildDesiredStateWithSessionBeads(
 	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
 
 	return DesiredStateResult{
-		State:                           desired,
-		BaseState:                       baseDesired,
-		ScaleCheckCounts:                scaleCheckCounts,
-		ScaleCheckPartialTemplates:      scaleCheckPartialTemplates,
-		PoolScaleCheckPartialTemplates:  poolScaleCheckPartialTemplates,
-		NamedScaleCheckPartialTemplates: namedScaleCheckPartialTemplates,
-		AssignedWorkBeads:               assignedWorkBeads,
-		AssignedWorkStores:              assignedWorkStores,
-		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
-		ReadyAssigned:                   readyAssigned,
-		NamedSessionDemand:                  namedWorkReady,
-		ReadyAssigned:                       readyAssigned,
-		StoreQueryPartial:                   storePartial,
-		BeaconTime:                          beaconTime,
-		StrandedNamedSessionRoutingBeads:    strandedNamedSessionRoutingBeads,
+		State:                            desired,
+		BaseState:                        baseDesired,
+		ScaleCheckCounts:                 scaleCheckCounts,
+		ScaleCheckPartialTemplates:       scaleCheckPartialTemplates,
+		PoolScaleCheckPartialTemplates:   poolScaleCheckPartialTemplates,
+		NamedScaleCheckPartialTemplates:  namedScaleCheckPartialTemplates,
+		AssignedWorkBeads:                assignedWorkBeads,
+		AssignedWorkStores:               assignedWorkStores,
+		AssignedWorkStoreRefs:            assignedWorkStoreRefs,
+		ReadyAssigned:                    readyAssigned,
+		NamedSessionDemand:               namedWorkReady,
+		StoreQueryPartial:                storePartial,
+		BeaconTime:                       beaconTime,
+		StrandedNamedSessionRoutingBeads: strandedNamedSessionRoutingBeads,
 	}
 }
 
