@@ -1964,7 +1964,7 @@ func TestSendMailNotifyWithProviderStartsCodexPollerWhenQueueingRunningSession(t
 	target := nudgeTarget{
 		cityPath:    dir,
 		agent:       config.Agent{Name: "mayor", MaxActiveSessions: intPtrNudge(1)},
-		resolved:    &config.ResolvedProvider{Name: "codex"},
+		resolved:    &config.ResolvedProvider{Name: "pi"},
 		sessionName: "sess-mayor",
 	}
 
@@ -2042,7 +2042,7 @@ func TestSendMailNotifyWithWorkerStartsPollerBySessionIDForAliasedTarget(t *test
 		alias:       "mayor",
 		agent:       config.Agent{Name: "mayor", MaxActiveSessions: intPtrNudge(1)},
 		sessionID:   info.ID,
-		resolved:    &config.ResolvedProvider{Name: "codex"},
+		resolved:    &config.ResolvedProvider{Name: "pi"},
 		sessionName: info.SessionName,
 	}
 
