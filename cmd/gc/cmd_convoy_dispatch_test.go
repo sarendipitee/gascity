@@ -3012,7 +3012,7 @@ func TestWorkflowServeControlReadyQueryIncludesCanonicalRoutedControlWork(t *tes
 	}, `#!/bin/sh
 set -eu
 case "$*" in
-  "--readonly --sandbox ready --metadata-field gc.routed_to=gascity/control-dispatcher --unassigned --exclude-type=epic --json --sort oldest --limit=20")
+  "--readonly --sandbox ready --metadata-field gc.routed_to=gascity/control-dispatcher --unassigned --exclude-type=epic --json --sort priority --limit=20")
     printf '[{"id":"ga-control-routed","metadata":{"gc.routed_to":"gascity/control-dispatcher","gc.kind":"workflow-finalize"}}]'
     ;;
   *)
