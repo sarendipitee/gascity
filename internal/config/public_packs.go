@@ -8,7 +8,7 @@ const (
 
 	// PublicGastownPackVersion pins fresh init output to the registry release
 	// content commit from gastownhall/gascity-packs main.
-	PublicGastownPackVersion = "sha:4212acb7046c11f6f633df73307006493185233a"
+	PublicGastownPackVersion = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 
 	// PublicGascityPackSource is the concrete durable source for the
 	// gascity planning/implementation skills pack.
@@ -62,6 +62,7 @@ var SupersededPublicGastownPackVersions = []string{
 	"sha:342bcfb0775ad79d2c67df3b235edf70a0a7e372",
 	"sha:2cd3360f36b2ff55f6c306546841963cbca1ed69",
 	"sha:92a9e8558b86854264ccc082fe9f27d48db3c749",
+	"sha:4212acb7046c11f6f633df73307006493185233a",
 }
 
 // SupersededPublicGascityPackVersions is the gascity-pack counterpart of
@@ -75,4 +76,5 @@ var SupersededPublicGascityPackVersions = []string{
 	"sha:7aedf80cfa39905bee4104095bfae8a02c67aaa1",
 	"sha:20ac017f5417b82a300f0bfdfa7cddab3773cb07",
 	"sha:ef528014c0fd6ec9d2bd6eded4fe800cf61758bc",
+	"sha:99464ed9240b1f6e6b7ab1d351f67016e1a973ff",
 }
