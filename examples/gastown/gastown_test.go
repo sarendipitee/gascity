@@ -879,7 +879,7 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	assertContainsInOrder(t, fallback,
 		`if [ -n "" ]; then`,
 		`else`,
-		`timeout 30m make test`,
+		`make test`,
 	)
 
 	configured := cookPolecatSelfReviewDescription(t, map[string]string{
@@ -892,9 +892,9 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	}
 	assertContainsInOrder(t, configured,
 		`if [ -n "scripts/affected-tests.sh" ]; then`,
-		`timeout 30m scripts/affected-tests.sh`,
+		`scripts/affected-tests.sh`,
 		`else`,
-		`timeout 30m make test`,
+		`make test`,
 	)
 }
 
@@ -4019,7 +4019,6 @@ func TestWitnessPatrolNextIterationBurnIsIdempotentSafe(t *testing.T) {
 		t.Error("witness next-iteration has no clean exit after burn")
 	}
 }
-
 // TestRefineryPromptUsesCanonicalAgentIdentity verifies the refinery
 // prompt's wisp lookup and assignment commands use $GC_AGENT, which the
 // session harness guarantees (internal/session/lifecycle.go). $GC_ALIAS
@@ -4134,7 +4133,7 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			cmd.Stderr = &stderrBuf
 			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("%s expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
+				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
 			}
 			if got, want := strings.TrimSpace(string(out)), "<--rig=gascity>"; got != want {
 				t.Fatalf("%s non-empty expansion = %q, want %q", shell, got, want)
@@ -4147,7 +4146,7 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			cmd.Stderr = &stderrBuf
 			out, err = cmd.Output()
 			if err != nil {
-				t.Fatalf("%s empty expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
+				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
 			}
 			if got := strings.TrimSpace(string(out)); got != "" {
 				t.Fatalf("%s empty expansion = %q, want empty", shell, got)
