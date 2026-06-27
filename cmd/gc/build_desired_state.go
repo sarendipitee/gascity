@@ -520,20 +520,33 @@ func buildDesiredStateWithSessionBeads(
 		template := cfg.Agents[i].QualifiedName()
 		runningSessions := 0
 		for _, sb := range allOpenSessionBeads {
-			if isPoolManagedSessionBead(sb) {
-				// Match the qualified template by identity equivalence.
-				// allOpenSessionBeads is aggregated across the city + every rig
-				// store, and pool session beads store the qualified name
-				// (agent.QualifiedName(), see session_sleep.go); adopted beads may
-				// still carry a legacy bound form of the same identity, which must
-				// count here or the cold-wake probe over-wakes a pool that already
-				// has a live session. Equivalence preserves the cross-rig guarantee:
-				// an unqualified base name never normalizes to a dir-scoped agent,
-				// and a same-base-name pool in another rig (e.g. rigB/planner)
-				// normalizes to itself, so neither inflates this rig's count.
-				if agentTemplateIdentitiesEquivalent(cfg, sb.Metadata["template"], template) {
-					runningSessions++
-				}
+			if !isPoolManagedSessionBead(sb) {
+				continue
+			}
+			// Count only LIVE workers. A dormant (asleep/drained) session cannot
+			// claim or service routed demand, and an asleep ephemeral pool
+			// session is replaced by a fresh spawn rather than restarted (see
+			// selectOrPlanPoolSessionBead). Counting dormant sessions kept a
+			// min=0 pool from ever registering as cold (gc-blo): isCold stayed
+			// false, the cold-wake demand probe below never ran, and
+			// newly-routed work sat unclaimed forever while the dormant sessions
+			// masked the demand. The over-wake concern below only cares about a
+			// real live session, so excluding dormant ones is safe.
+			if isDormantSessionBead(sb) {
+				continue
+			}
+			// Match the qualified template by identity equivalence.
+			// allOpenSessionBeads is aggregated across the city + every rig
+			// store, and pool session beads store the qualified name
+			// (agent.QualifiedName(), see session_sleep.go); adopted beads may
+			// still carry a legacy bound form of the same identity, which must
+			// count here or the cold-wake probe over-wakes a pool that already
+			// has a live session. Equivalence preserves the cross-rig guarantee:
+			// an unqualified base name never normalizes to a dir-scoped agent,
+			// and a same-base-name pool in another rig (e.g. rigB/planner)
+			// normalizes to itself, so neither inflates this rig's count.
+			if agentTemplateIdentitiesEquivalent(cfg, sb.Metadata["template"], template) {
+				runningSessions++
 			}
 		}
 
@@ -864,19 +877,19 @@ func buildDesiredStateWithSessionBeads(
 	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
 
 	return DesiredStateResult{
-		State:                           desired,
-		BaseState:                       baseDesired,
-		ScaleCheckCounts:                scaleCheckCounts,
-		ScaleCheckPartialTemplates:      scaleCheckPartialTemplates,
-		PoolScaleCheckPartialTemplates:  poolScaleCheckPartialTemplates,
-		NamedScaleCheckPartialTemplates: namedScaleCheckPartialTemplates,
-		AssignedWorkBeads:               assignedWorkBeads,
-		AssignedWorkStores:              assignedWorkStores,
-		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
-		NamedSessionDemand:                  namedWorkReady,
-		StoreQueryPartial:                   storePartial,
-		BeaconTime:                          beaconTime,
-		StrandedNamedSessionRoutingBeads:    strandedNamedSessionRoutingBeads,
+		State:                            desired,
+		BaseState:                        baseDesired,
+		ScaleCheckCounts:                 scaleCheckCounts,
+		ScaleCheckPartialTemplates:       scaleCheckPartialTemplates,
+		PoolScaleCheckPartialTemplates:   poolScaleCheckPartialTemplates,
+		NamedScaleCheckPartialTemplates:  namedScaleCheckPartialTemplates,
+		AssignedWorkBeads:                assignedWorkBeads,
+		AssignedWorkStores:               assignedWorkStores,
+		AssignedWorkStoreRefs:            assignedWorkStoreRefs,
+		NamedSessionDemand:               namedWorkReady,
+		StoreQueryPartial:                storePartial,
+		BeaconTime:                       beaconTime,
+		StrandedNamedSessionRoutingBeads: strandedNamedSessionRoutingBeads,
 	}
 }
 
