@@ -26,7 +26,6 @@ func isDrainedSessionBead(session beads.Bead) bool {
 func poolSessionIsLive(session beads.Bead) bool {
 	return !isDormantSessionBead(session)
 }
-
 // isDormantSessionBead reports whether a session bead represents a dormant
 // worker — asleep (any sleep_reason) or drained — that cannot currently claim
 // or service routed demand. An asleep ephemeral pool session is replaced by a
