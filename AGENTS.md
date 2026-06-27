@@ -371,6 +371,38 @@ becoming more useful as models improve — it becomes LESS useful instead.
   `make test-cmd-gc-process-parallel`, `make test-integration-shards-parallel`,
   `make test-local-full-parallel`) over raw `go test`.
 
+## 🛑 Rebuilding the deployable `gc` binary — MUST be self-contained
+
+**This has broken the running town ~10 times.** Always the same mistake: a `gc`
+binary built without an **ICU `rpath`** baked in. It is then NOT self-contained
+— it finds ICU only via the Flox env's `LD_LIBRARY_PATH`.
+
+- It looks fine to you (`gc version` / `gc doctor` pass — your shell has Flox).
+- But `gascity-supervisor` (systemd) spawns **agent** children WITHOUT that env,
+  so every agent silently boot-fails on `libicui18n.so.76`. Symptom: town-wide
+  stall, all sessions `asleep` with no tmux, supervisor logs
+  `op=start outcome=success` (spawn "succeeds", child dies instantly).
+
+**RULES (no exceptions):**
+1. Build a deployable binary with **`make build` ONLY** — it bakes
+   `-Wl,-rpath,<nix-icu>/lib` (see `Makefile` ~L46–67). Raw `go build` does
+   NOT add the rpath; use it only for throwaway/test binaries you will not
+   install.
+2. **Run this gate and require it to PASS before installing or restarting the
+   supervisor:**
+
+```bash
+readelf -d bin/gc | grep -i runpath \
+  || { echo "FATAL: no RUNPATH — NOT self-contained. DO NOT DEPLOY."; exit 1; }
+env -i HOME="$HOME" PATH=/usr/bin:/bin bin/gc version \
+  || { echo "FATAL: clean-env boot failed — agents will die. DO NOT DEPLOY."; exit 1; }
+```
+
+Full recipe (ICU paths, install, supervisor restart, zombie cleanup) lives in
+the HQ `AGENTS.md` → "Building the `gc` binary". The `gc` tmux socket is
+`/tmp/tmux-$UID/gc`, not the default — checking the wrong one makes a live pool
+look dead.
+
 ## Build Cache Conventions
 
 **Hard ban: never run `go clean -cache`** in any script, hook, or agent session.
@@ -389,7 +421,10 @@ GOCACHE=$(mktemp -d) go build ./cmd/gc/
 ```
 
 This isolates the cache to a throwaway directory without touching the shared
-pool. Clean up with `rm -rf` after if disk space matters.
+pool. Clean up with `rm -rf` after if disk space matters. **NOTE:** this raw
+`go build` is for cache-isolated *compile checks* only — it produces a binary
+WITHOUT the ICU rpath. Never install/deploy it. See "🛑 Rebuilding the
+deployable `gc` binary" above.
 
 **Exception:** `go clean -testcache` is explicitly allowed. It clears only the
 test-result cache, not the compiled-object cache, and does not corrupt
