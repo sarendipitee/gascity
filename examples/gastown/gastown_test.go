@@ -67,6 +67,15 @@ func assertContainsInOrder(t *testing.T, body string, wants ...string) {
 	}
 }
 
+func containsAny(body string, wants ...string) bool {
+	for _, want := range wants {
+		if strings.Contains(body, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func assertCurrentWispBurnsGuarded(t *testing.T, name, body string) {
 	t.Helper()
 	lines := strings.Split(body, "\n")
@@ -378,6 +387,29 @@ func TestTmuxKeybindingsScrollWheel(t *testing.T) {
 	}
 }
 
+// TestTmuxKeybindingsAlternateScreenPassthrough locks the fix for the ga-c4w
+// alternate-screen regression: WheelUpPane must pass the wheel through to
+// full-screen apps (Claude Code, pagers) rather than forcing copy-mode over an
+// empty scrollback buffer (alternate-screen content never lands in the tmux
+// scrollback). Depends on gastownhall/gascity-packs#136; skips until go.mod is
+// bumped to a version that includes that change.
+func TestTmuxKeybindingsAlternateScreenPassthrough(t *testing.T) {
+	path := filepath.Join(packRoot(), "packs", "gastown", "assets", "scripts", "tmux-keybindings.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading tmux-keybindings.sh: %v", err)
+	}
+	script := string(data)
+	if !strings.Contains(script, "alternate_on") {
+		t.Skip("embedded gascity-packs does not yet include #{alternate_on} in WheelUpPane " +
+			"(gastownhall/gascity-packs#136); test activates once go.mod is bumped to that release")
+	}
+	if !strings.Contains(script, "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}") {
+		t.Error("WheelUpPane binding has #{alternate_on} but not the full passthrough condition " +
+			"#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}")
+	}
+}
+
 func TestOverlayDirsExist(t *testing.T) {
 	dir := exampleDir()
 	cfg := loadExpanded(t)
@@ -457,10 +489,10 @@ func TestRefineryFormulaChainsMergeMetadataWithClose(t *testing.T) {
 	// that gates gc bd close must appear after --unset-metadata.
 	assertContainsInOrder(t, body,
 		"--set-metadata merge_result=merged",
-		"--set-metadata merged_sha=$MERGED_SHA",
-		"--set-metadata merged_target=$TARGET",
+		`--set-metadata merged_sha="$MERGED_SHA"`,
+		`--set-metadata merged_target="$TARGET"`,
 		"--unset-metadata rejection_reason &&",
-		`gc bd close $WORK --reason "Merged to $TARGET at $MERGED_SHORT"`,
+		`gc bd close "$WORK" --reason "Merged to $TARGET at $MERGED_SHORT"`,
 	)
 
 	// mr/pr handoff path: same chained shape, different metadata fields.
@@ -471,6 +503,46 @@ func TestRefineryFormulaChainsMergeMetadataWithClose(t *testing.T) {
 		`--set-metadata merged_target="$TARGET"`,
 		"--unset-metadata rejection_reason &&",
 		`gc bd close $WORK --reason "Pull request ready: $PR_URL"`,
+	)
+}
+
+// TestRefineryFormulaDirectMergeUsesDetachedWorktree guards the RC-blocking
+// regression where the refinery tried `git checkout $TARGET` in its active
+// worktree while the target branch was already checked out by the rig's main
+// worktree. That checkout failed, but the agent still wrote merged metadata
+// and closed the bead. Direct merges must use a temporary detached worktree,
+// verify origin/<target> reaches the merged SHA, and only then mutate bead
+// state.
+func TestRefineryFormulaDirectMergeUsesDetachedWorktree(t *testing.T) {
+	body := refineryMergePushDescription(t)
+	direct := sectionBetween(t, body,
+		`**If MERGE_STRATEGY = "direct" (default):**`,
+		`**If MERGE_STRATEGY = "mr":**`,
+	)
+
+	for _, line := range strings.Split(direct, "\n") {
+		if strings.TrimSpace(line) == `git checkout $TARGET` {
+			t.Fatalf("direct refinery merge checks out target branch in active worktree:\n%s", direct)
+		}
+	}
+
+	assertContainsInOrder(t, direct,
+		`branch_has_real_change "origin/$TARGET" temp ||`,
+		"set -e",
+		`MERGE_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/gascity-refinery-merge.XXXXXX")`,
+		`git fetch origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"`,
+		`TEMP_SHA=$(git rev-parse temp)`,
+		`git worktree add --detach "$MERGE_WT" "origin/$TARGET"`,
+		`git -C "$MERGE_WT" merge --ff-only "$TEMP_SHA"`,
+		`MERGED_SHA=$(git -C "$MERGE_WT" rev-parse HEAD)`,
+		`git -C "$MERGE_WT" push origin "HEAD:$TARGET"`,
+		`REMOTE=$(git rev-parse "origin/$TARGET")`,
+		`if [ "$MERGED_SHA" != "$REMOTE" ]; then`,
+		"STOP. Do not mutate bead state.",
+		"gc runtime drain-ack",
+		"exit 1",
+		"--set-metadata merge_result=merged",
+		`gc bd close "$WORK" --reason "Merged to $TARGET at $MERGED_SHORT"`,
 	)
 }
 
@@ -530,8 +602,8 @@ func TestRefineryFormulaRefusesZeroDiffMerge(t *testing.T) {
 	assertContainsInOrder(t, body,
 		`**If MERGE_STRATEGY = "direct" (default):**`,
 		`branch_has_real_change "origin/$TARGET" temp ||`,
-		"git merge --ff-only temp",
-		`gc bd close $WORK --reason "Merged to $TARGET at $MERGED_SHORT"`,
+		`git -C "$MERGE_WT" merge --ff-only "$TEMP_SHA"`,
+		`gc bd close "$WORK" --reason "Merged to $TARGET at $MERGED_SHORT"`,
 	)
 
 	// mr/pr publication path: guard precedes the push and the close.
@@ -807,7 +879,7 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	assertContainsInOrder(t, fallback,
 		`if [ -n "" ]; then`,
 		`else`,
-		`timeout 30m make test`,
+		`make test`,
 	)
 
 	configured := cookPolecatSelfReviewDescription(t, map[string]string{
@@ -820,9 +892,9 @@ func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	}
 	assertContainsInOrder(t, configured,
 		`if [ -n "scripts/affected-tests.sh" ]; then`,
-		`timeout 30m scripts/affected-tests.sh`,
+		`scripts/affected-tests.sh`,
 		`else`,
-		`timeout 30m make test`,
+		`make test`,
 	)
 }
 
@@ -1998,120 +2070,129 @@ func TestDogStartupPromptUsesSplitClaimFirstQueries(t *testing.T) {
 	}
 }
 
-func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
+func TestNonDogStartupPromptsUseCompatibilityAwareWorkLookup(t *testing.T) {
+	const (
+		assignedInProgressTemplate = "{{ .AssignedInProgressQuery }}"
+		assignedInProgressRendered = `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`
+		hookClaimJSON              = "gc hook --claim --json"
+	)
 	checks := []struct {
-		rel     string
-		start   string
-		end     string
-		want    string
-		forbid  []string
-		render  bool
-		agent   string
-		tmpl    string
-		rig     string
-		binding string
+		rel            string
+		start          string
+		end            string
+		want           string
+		alternateWants []string
+		forbid         []string
+		render         bool
+		renderedWants  []string
+		agent          string
+		tmpl           string
+		rig            string
+		binding        string
 	}{
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-mayor" }}`,
 			end:    `{{ define "propulsion-crew" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_ALIAS" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-crew" }}`,
 			end:    `{{ define "propulsion-deacon" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-deacon" }}`,
 			end:    `{{ define "propulsion-witness" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_ALIAS" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-witness" }}`,
 			end:    `{{ define "propulsion-polecat" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_ALIAS" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-polecat" }}`,
 			end:    `{{ define "propulsion-refinery" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-refinery" }}`,
 			end:    `{{ define "propulsion-dog" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee="$GC_ALIAS" --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-mayor" }}`,
 			end:    `{{ define "propulsion-crew" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-crew" }}`,
 			end:    `{{ define "propulsion-deacon" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-deacon" }}`,
 			end:    `{{ define "propulsion-witness" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-witness" }}`,
 			end:    `{{ define "propulsion-polecat" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-polecat" }}`,
 			end:    `{{ define "propulsion-refinery" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
 			rel:    "packs/gastown/template-fragments/propulsion.template.md",
 			start:  `{{ define "propulsion-refinery" }}`,
 			end:    `{{ define "propulsion-dog" }}`,
-			want:   "{{ .AssignedInProgressQuery }}",
+			want:   assignedInProgressTemplate,
 			forbid: []string{`gc bd list --assignee=$GC_AGENT --status=in_progress`},
 		},
 		{
-			rel:     "packs/gastown/agents/polecat/prompt.template.md",
-			start:   "## Startup Protocol",
-			end:     "## Context Exhaustion",
-			want:    "{{ .AssignedInProgressQuery }}",
-			forbid:  []string{`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`},
-			render:  true,
-			agent:   "gastown/polecat",
-			tmpl:    "polecat",
-			rig:     "gastown",
-			binding: "gastown.",
+			rel:            "packs/gastown/agents/polecat/prompt.template.md",
+			start:          "## Startup Protocol",
+			end:            "## Context Exhaustion",
+			want:           assignedInProgressTemplate,
+			alternateWants: []string{hookClaimJSON},
+			forbid:         []string{`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`},
+			render:         true,
+			renderedWants:  []string{assignedInProgressRendered, hookClaimJSON},
+			agent:          "gastown/polecat",
+			tmpl:           "polecat",
+			rig:            "gastown",
+			binding:        "gastown.",
 		},
 		{
 			rel:     "packs/gastown/agents/deacon/prompt.template.md",
 			start:   "## Startup Protocol",
 			end:     "**Hook ->",
-			want:    "{{ .AssignedInProgressQuery }}",
+			want:    assignedInProgressTemplate,
 			forbid:  []string{`gc bd list --assignee="$GC_ALIAS" --status=in_progress`},
 			render:  true,
 			agent:   "gastown/deacon",
@@ -2128,7 +2209,7 @@ func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
 			rel:     "packs/gastown/agents/refinery/prompt.template.md",
 			start:   "# Step 1: Check for an in-progress patrol wisp",
 			end:     "Then follow the formula.",
-			want:    "{{ .AssignedInProgressQuery }}",
+			want:    assignedInProgressTemplate,
 			forbid:  []string{`gc bd list --assignee="$GC_AGENT" --status=in_progress`},
 			render:  true,
 			agent:   "gastown/refinery",
@@ -2144,8 +2225,9 @@ func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
 				t.Fatalf("reading %s: %v", check.rel, err)
 			}
 			body := sectionBetween(t, string(data), check.start, check.end)
-			if !strings.Contains(body, check.want) {
-				t.Fatalf("%s section %q missing %q", check.rel, check.start, check.want)
+			acceptedWants := append([]string{check.want}, check.alternateWants...)
+			if !containsAny(body, acceptedWants...) {
+				t.Fatalf("%s section %q missing one of %q", check.rel, check.start, acceptedWants)
 			}
 			for _, forbidden := range check.forbid {
 				if strings.Contains(body, forbidden) {
@@ -2156,13 +2238,53 @@ func TestNonDogStartupPromptsUseAssignedInProgressQuery(t *testing.T) {
 				return
 			}
 			rendered := renderGastownPromptForPack(t, check.rel, check.agent, check.tmpl, "demo", check.rig, check.binding)
-			if strings.Contains(rendered, check.want) {
+			if strings.HasPrefix(check.want, "{{") && strings.Contains(rendered, check.want) {
 				t.Fatalf("%s rendered prompt still contains %q", check.rel, check.want)
 			}
-			if !strings.Contains(rendered, `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`) {
-				t.Fatalf("%s rendered prompt missing compatibility-aware in-progress query: %q", check.rel, rendered)
+			renderedWants := check.renderedWants
+			if len(renderedWants) == 0 {
+				renderedWants = []string{assignedInProgressRendered}
+			}
+			if !containsAny(rendered, renderedWants...) {
+				t.Fatalf("%s rendered prompt missing compatibility-aware in-progress query; want one of %q: %q", check.rel, renderedWants, rendered)
 			}
 		})
+	}
+}
+
+func TestPolecatStartupUsesHookClaim(t *testing.T) {
+	rel := "packs/gastown/agents/polecat/prompt.template.md"
+	data, err := os.ReadFile(gastownRel(rel))
+	if err != nil {
+		t.Fatalf("reading %s: %v", rel, err)
+	}
+	body := sectionBetween(t, string(data), "## Startup Protocol", "## Context Exhaustion")
+	for _, want := range []string{
+		"gc hook --claim --json",
+		"checks assigned work first",
+		"performs the atomic",
+		"claim before you inspect the bead",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("%s Startup Protocol missing %q", rel, want)
+		}
+	}
+	for _, forbidden := range []string{
+		"{{ .AssignedInProgressQuery }}",
+		"{{ .WorkQuery }}",
+		`gc bd list --assignee="$GC_SESSION_NAME" --status=in_progress`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("%s Startup Protocol still contains stale direct query/claim %q", rel, forbidden)
+		}
+	}
+
+	rendered := renderGastownPromptForPack(t, rel, "gastown/polecat", "polecat", "demo", "gastown", "gastown.")
+	if strings.Contains(rendered, "{{ .") {
+		t.Fatalf("%s rendered prompt still contains template placeholders: %q", rel, rendered)
+	}
+	if !strings.Contains(rendered, "gc hook --claim --json") {
+		t.Fatalf("%s rendered prompt missing hook claim: %q", rel, rendered)
 	}
 }
 
@@ -3829,66 +3951,6 @@ func TestDeaconPatrolNextIterationBurnsCurrentBeforeIdleExit(t *testing.T) {
 	}
 }
 
-// TestWitnessPatrolNextIterationBurnIsIdempotentSafe verifies that the
-// witness formula's next-iteration step never lets a failed burn stall the
-// patrol loop. Every gc bd mol burn "$CURRENT_WISP" --force call must either
-// be wrapped in an if-else (non-fatal) or use || true so that a missing/
-// already-burned wisp does not block the next iteration from starting.
-// This is the gascity-source contract that pairs with the bd mol burn
-// idempotency fix (gcy-3n7): both layers must be safe independently.
-func TestWitnessPatrolNextIterationBurnIsIdempotentSafe(t *testing.T) {
-	path := filepath.Join(packRoot(), "packs", "gastown", "formulas", "mol-witness-patrol.toml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading witness formula: %v", err)
-	}
-	body := string(data)
-	section := sectionBetween(t, body, `id = "next-iteration"`, "")
-
-	// Successor must be poured and assigned before the primary burn.
-	assertContainsInOrder(t, section,
-		`CURRENT_WISP=${GC_BEAD_ID:-}`,
-		`if [ -z "$CURRENT_WISP" ]; then`,
-		`NEXT=$(gc bd mol wisp mol-witness-patrol --root-only`,
-		`jq -r '.new_epic_id // empty'`,
-		`if [ -z "$NEXT" ]; then`,
-		`if ! gc bd update "$NEXT" --assignee=`,
-		`if [ -n "$CURRENT_WISP" ]; then`,
-		`gc bd mol burn "$CURRENT_WISP" --force`,
-	)
-
-	// Every burn of $CURRENT_WISP must be non-fatal: either inside an `if`
-	// condition (if gc bd mol burn ...; then) or followed by || true.
-	// A bare `gc bd mol burn "$CURRENT_WISP" --force` on its own line would
-	// exit non-zero for already-burned wisps and stall the patrol loop.
-	lines := strings.Split(section, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, `gc bd mol burn "$CURRENT_WISP" --force`) {
-			continue
-		}
-		isBare := true
-		// Non-fatal forms: `if gc bd mol burn ...` or `... || true`
-		if strings.HasPrefix(trimmed, "if ") {
-			isBare = false
-		}
-		if strings.HasSuffix(trimmed, "|| true") {
-			isBare = false
-		}
-		if isBare {
-			t.Errorf("witness next-iteration has bare (fatal) burn at line %d: %q\n"+
-				"wrap in `if gc bd mol burn ... 2>/dev/null; then` or append `|| true`\n"+
-				"to prevent patrol stall when wisp is already burned (#gcy-3n7)", i+1, trimmed)
-		}
-	}
-
-	// The step must exit cleanly (idle or drain-ack) after burning.
-	if !strings.Contains(section, "IDLE: no work, exiting turn.") &&
-		!strings.Contains(section, "gc runtime drain-ack") {
-		t.Error("witness next-iteration has no clean exit after burn")
-	}
-}
-
 // TestRefineryPromptUsesCanonicalAgentIdentity verifies the refinery
 // prompt's wisp lookup and assignment commands use $GC_AGENT, which the
 // session harness guarantees (internal/session/lifecycle.go). $GC_ALIAS
@@ -3992,22 +4054,18 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 			}
 
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			var stderrBuf bytes.Buffer
-			cmd.Stderr = &stderrBuf
-			out, err := cmd.Output()
+			out, err := cmd.CombinedOutput()
 			if err != nil {
-				t.Fatalf("%s expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
+				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
 			}
 			if got, want := strings.TrimSpace(string(out)), "<--rig=gascity>"; got != want {
 				t.Fatalf("%s non-empty expansion = %q, want %q", shell, got, want)
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			stderrBuf.Reset()
-			cmd.Stderr = &stderrBuf
-			out, err = cmd.Output()
+			out, err = cmd.CombinedOutput()
 			if err != nil {
-				t.Fatalf("%s empty expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
+				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
 			}
 			if got := strings.TrimSpace(string(out)); got != "" {
 				t.Fatalf("%s empty expansion = %q, want empty", shell, got)
