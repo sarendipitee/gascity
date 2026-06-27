@@ -7,7 +7,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/gastownhall/gascity-packs v0.3.1-0.20260616121229-21f69af188c1
+	github.com/gastownhall/gascity-packs v0.3.1-0.20260617013242-33d3a430a67d
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
@@ -244,7 +244,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-// Witness burn-failsafe fix (gcy-3n7): live branch commits not yet synced to upstream.
-// Remove replace once github.com/gastownhall/gascity-packs includes the fix.
-replace github.com/gastownhall/gascity-packs => /home/saren/projects/gastownhall/gascity-packs
