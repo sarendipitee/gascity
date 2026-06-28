@@ -101,11 +101,15 @@ func Members(store beads.Store, convoyID string, includeClosed bool) ([]beads.Be
 		}
 		item, err := store.Get(dep.DependsOnID)
 		if err != nil {
-			if errors.Is(err, beads.ErrNotFound) {
-				add(unresolvedTrackedItem(dep.DependsOnID))
-				continue
-			}
-			return nil, fmt.Errorf("getting tracked item %s: %w", dep.DependsOnID, err)
+			// A tracked bead that cannot be loaded must not abort the whole
+			// convoy pass. Missing rows and rows that exist but fail to
+			// materialize (e.g. corrupt metadata JSON that the SQL/JSON layer
+			// can't parse) are both surfaced as unresolved tracked items with
+			// unknown (non-terminal) status. This keeps convoy check/list/
+			// status and the auto-close pass tolerant: one corrupt row degrades
+			// to a dangling track instead of DoS-ing every convoy operation.
+			add(unresolvedTrackedItem(dep.DependsOnID))
+			continue
 		}
 		add(item)
 	}
