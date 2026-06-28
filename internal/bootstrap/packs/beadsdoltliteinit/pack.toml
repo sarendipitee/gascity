@@ -1,0 +1,11 @@
+# Bundled with the gc binary and served from the user-global pack cache
+# via the pinned bundled import.
+#
+# This pack is intentionally small. It marks a city as having first-class
+# DoltLite backend init support while the operational DoltLite tools live in
+# the external gascity-packs/beads-doltlite pack.
+[pack]
+name = "beads-doltlite-init"
+version = "0.1.0"
+schema = 2
+description = "Minimal builtin support for initializing DoltLite-backed Gas City bead stores."

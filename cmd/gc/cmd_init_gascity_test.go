@@ -97,6 +97,46 @@ func TestDoInitExplicitMinimalTemplateDoesNotImportGascityPack(t *testing.T) {
 	}
 }
 
+func TestDoInitDoltliteBackendImportsBeadsDoltlitePack(t *testing.T) {
+	f := fsys.NewFake()
+
+	var stdout, stderr bytes.Buffer
+	code := doInit(f, "/bright-lights", wizardConfig{
+		configName:      "gastown",
+		defaultProvider: "codex",
+		providers:       []string{"codex"},
+		beadsBackend:    "doltlite",
+	}, "", &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("doInit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	cityData := f.Files[filepath.Join("/bright-lights", "city.toml")]
+	if !strings.Contains(string(cityData), "backend = \"doltlite\"") {
+		t.Fatalf("city.toml missing doltlite backend:\n%s", cityData)
+	}
+	if !strings.Contains(string(cityData), "bd_compatibility = \"bd-1.0.5\"") {
+		t.Fatalf("city.toml missing bd compatibility:\n%s", cityData)
+	}
+
+	packData := f.Files[filepath.Join("/bright-lights", "pack.toml")]
+	packCfg, err := config.Parse(packData)
+	if err != nil {
+		t.Fatalf("parsing pack.toml: %v", err)
+	}
+	for _, name := range []string{"core", "bd", "beads-doltlite-init", "beads-doltlite"} {
+		if _, ok := packCfg.Imports[name]; !ok {
+			t.Fatalf("pack.toml imports = %v, want %s entry:\n%s", packCfg.Imports, name, packData)
+		}
+	}
+	if got := packCfg.Imports["beads-doltlite"].Source; got != config.PublicBeadsDoltlitePackSource {
+		t.Fatalf("beads-doltlite source = %q, want %q", got, config.PublicBeadsDoltlitePackSource)
+	}
+	if got := packCfg.Imports["beads-doltlite"].Version; got != config.PublicBeadsDoltlitePackVersion {
+		t.Fatalf("beads-doltlite version = %q, want %q", got, config.PublicBeadsDoltlitePackVersion)
+	}
+}
+
 // TestDoInitWithGascityTemplate pins the gascity wizard template: a minimal
 // mayor city whose pack.toml imports the public gascity skills pack pinned
 // to the registry release, written alongside the explicit builtin includes.
