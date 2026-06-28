@@ -2086,6 +2086,52 @@ func TestNudgeSession_WithRetry(t *testing.T) {
 	}
 }
 
+// TestNudgeSessionSubmitsMessage is the Bug B regression guard: a nudge must
+// not only type its text into the pane but actually SUBMIT it (deliver Enter)
+// so the running agent acts on it. The live failure was idle polecats whose
+// next command was typed into the input box but never submitted, so the pool
+// stayed parked. We prove submission end-to-end against a real shell: the
+// nudged command writes a marker file, which only appears if Enter was
+// delivered. If the submit Enter is dropped, the command sits unexecuted in
+// the input buffer and the file never appears.
+func TestNudgeSessionSubmitsMessage(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	tm := testTmux()
+	sessionName := "gt-test-nudge-submit-" + fmt.Sprintf("%d", time.Now().UnixNano()%100000)
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "nudge-submitted.marker")
+
+	_ = tm.KillSession(sessionName)
+	if err := tm.NewSession(sessionName, dir); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer func() { _ = tm.KillSession(sessionName) }()
+
+	// Let the shell finish initializing so the paste is not dropped pre-prompt.
+	time.Sleep(300 * time.Millisecond)
+
+	if err := tm.NudgeSession(sessionName, "touch "+marker); err != nil {
+		t.Fatalf("NudgeSession: %v", err)
+	}
+
+	// Poll for the marker — its existence proves the command was submitted and
+	// executed, not merely typed into the input line.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return // submitted
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	pane, _ := tm.CapturePaneAll(sessionName)
+	t.Fatalf("nudge was not submitted: marker %s never created (Enter dropped?)\npane:\n%s", marker, pane)
+}
+
 func TestNudgeSessionSkipsEscapeForCodex(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")
