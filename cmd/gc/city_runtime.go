@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -57,6 +58,7 @@ type CityRuntime struct {
 	cityName     string
 	configName   string
 	tomlPath     string
+	startedAt    time.Time // when this runtime started; used as grace period for liveness checks
 	watchTargets []config.WatchTarget
 	configRev    string
 	configDirty  *atomic.Bool
@@ -100,8 +102,9 @@ type CityRuntime struct {
 	standaloneRigStores map[string]beads.Store
 
 	// Bead-driven reconciler state (Phase 2f).
-	sessionDrains      *drainTracker       // in-memory drain tracker; nil when bead reconciler disabled
-	providerHealthGate *providerHealthGate // ADR-0013 A1 M3a; nil until bead reconciler initialized
+	sessionDrains      *drainTracker          // in-memory drain tracker; nil when bead reconciler disabled
+	providerHealthGate *providerHealthGate    // ADR-0013 A1 M3a; nil until bead reconciler initialized
+	livenessTracker    sessionLivenessTracker // nil when no session_liveness_checks configured
 	asyncStartLimiter  *asyncStartLimiter
 	asyncStarts        asyncStartTracker
 	asyncStops         asyncStartTracker
@@ -334,6 +337,7 @@ func newCityRuntime(p CityRuntimeParams) *CityRuntime {
 		managedDoltHealth: managedDoltHealth,
 		managedDoltOwned:  managedDoltOwned,
 		managedDoltPort:   managedDoltPort,
+		startedAt:         time.Now(),
 		logPrefix:         logPrefix,
 		stdout:            p.Stdout,
 		stderr:            p.Stderr,
@@ -407,6 +411,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 		cr.sessionDrains = newDrainTracker()
 		cr.providerHealthGate = newProviderHealthGate()
 	}
+	cr.livenessTracker = newSessionLivenessTracker(len(cr.cfg.Daemon.SessionLivenessChecks) > 0)
 	if ctx.Err() != nil {
 		return
 	}
@@ -1283,6 +1288,7 @@ func (cr *CityRuntime) dispatchOrders(ctx context.Context, cityRoot string) {
 	cr.runOrderTrackingSweepWatchdog(now)
 	cr.runOrderTrackingRetentionWatchdog(now)
 	cr.runNudgeMailSweepWatchdog(now)
+	cr.runSessionLivenessChecks(now)
 	if cr.od != nil {
 		cr.od.dispatch(ctx, cityRoot, now)
 	}
@@ -1521,6 +1527,67 @@ func (cr *CityRuntime) runNudgeMailSweepWatchdog(now time.Time) {
 	total := result.NudgeClosed + result.MailClosed
 	if total > 0 && cr.stderr != nil {
 		fmt.Fprintf(cr.stderr, "%s: nudge-mail-sweep watchdog closed %d nudge bead(s), %d mail bead(s)\n", cr.logPrefix, result.NudgeClosed, result.MailClosed) //nolint:errcheck // best-effort stderr
+	}
+}
+
+// runSessionLivenessChecks evaluates every entry in
+// [daemon.session_liveness_checks] on each patrol tick. For any session whose
+// last activity exceeds its freshness_window, a session.liveness_stale event
+// is emitted exactly once per stale episode. If escalate_to is set, the named
+// session is also nudged. Escalation clears when the session becomes active
+// again (next patrol tick where activity is within the window).
+//
+// This provides the controller-supervised, bounded-cadence patrol that replaces
+// reliance on pack formula self-scheduling (e.g., a deacon ScheduleWakeup that
+// can fail silently and produce multi-hour gaps).
+func (cr *CityRuntime) runSessionLivenessChecks(now time.Time) {
+	if cr.livenessTracker == nil {
+		return
+	}
+	for i := range cr.cfg.Daemon.SessionLivenessChecks {
+		check := &cr.cfg.Daemon.SessionLivenessChecks[i]
+		window := check.FreshnessWindowDuration()
+		if window <= 0 {
+			continue
+		}
+		for _, sessionName := range check.Sessions {
+			sn := sessionName // capture for closure
+			chk := check      // capture for closure
+			cr.livenessTracker.checkFreshness(
+				sn,
+				window,
+				cr.sp,
+				now,
+				cr.startedAt,
+				func(episodeID string, staleSince time.Time, lastActivity time.Time) {
+					if cr.rec != nil {
+						p := events.SessionLivenessStalePayload{
+							Session:         sn,
+							EpisodeID:       episodeID,
+							StaleSince:      staleSince,
+							FreshnessWindow: chk.FreshnessWindow,
+							LastActivity:    lastActivity,
+							EscalateTo:      chk.EscalateTo,
+						}
+						payload, _ := json.Marshal(p)
+						cr.rec.Record(events.Event{
+							Type:    events.SessionLivenessStale,
+							Ts:      staleSince.UTC(),
+							Actor:   "gc",
+							Subject: sn,
+							Message: fmt.Sprintf("session %s stale for %s (last activity: %s)",
+								sn, chk.FreshnessWindow, lastActivity.UTC().Format(time.RFC3339)),
+							Payload: payload,
+						})
+					}
+					if chk.EscalateTo != "" {
+						if err := cr.sp.Nudge(chk.EscalateTo, runtime.TextContent("session.liveness_stale: "+sn+" is stale")); err != nil && cr.stderr != nil {
+							fmt.Fprintf(cr.stderr, "%s: session liveness check: nudge %s: %v\n", cr.logPrefix, chk.EscalateTo, err) //nolint:errcheck // best-effort stderr
+						}
+					}
+				},
+			)
+		}
 	}
 }
 
@@ -1985,6 +2052,8 @@ func (cr *CityRuntime) reloadConfigTraced(
 		cr.sessionDrains = newDrainTracker()
 		cr.providerHealthGate = newProviderHealthGate()
 	}
+	// Rebuild liveness tracker when session_liveness_checks changes.
+	cr.livenessTracker = newSessionLivenessTracker(len(nextCfg.Daemon.SessionLivenessChecks) > 0)
 	cr.configRev = result.Revision
 	cr.watchTargets = config.WatchTargets(result.Prov, nextCfg, cityRoot)
 	cr.restartConfigWatcher()
@@ -2119,6 +2188,16 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 			fmt.Fprintf(cr.stderr, "released orphaned pool work: %s\n", r.ID) //nolint:errcheck
 		}
 		assignedWorkBeads, assignedWorkStoreRefs = filterReleasedAssignedWorkSnapshot(assignedWorkBeads, assignedWorkStoreRefs, released)
+	}
+	// Warn on stranded named-session routing: open, unassigned beads whose
+	// gc.routed_to targets a known named session satisfy the demand probe
+	// (waking the session) but are invisible to the session's assignee-based
+	// work-discovery query. The session wakes and idles repeatedly while the
+	// polecat pool sees zero demand — silently idling the town (gcy-esq).
+	// The witness should detect this via gc bd list --status open --no-assignee
+	// --metadata-field gc.routed_to=<named-session> and re-route the bead.
+	if len(result.StrandedNamedSessionRoutingBeads) > 0 {
+		fmt.Fprintf(cr.stderr, "%s: WARNING: stranded named-session routing detected for beads %s — open+unassigned beads with gc.routed_to targeting a named session will cause silent idle; re-route to pool target or clear gc.routed_to\n", cr.logPrefix, strings.Join(result.StrandedNamedSessionRoutingBeads, ",")) //nolint:errcheck
 	}
 	// Squatter guard (gastownhall/gascity#2930): a foreign Dolt that has bound
 	// this city's managed port returns zero demand, indistinguishable from a

@@ -101,7 +101,9 @@ func Members(store beads.Store, convoyID string, includeClosed bool) ([]beads.Be
 		}
 		item, err := store.Get(dep.DependsOnID)
 		if err != nil {
-			if errors.Is(err, beads.ErrNotFound) {
+			if errors.Is(err, beads.ErrNotFound) || errors.Is(err, beads.ErrMetadataParse) {
+				// Convoy membership is an edge inventory. Keep the edge visible
+				// even when the target bead cannot be projected into a Bead.
 				add(unresolvedTrackedItem(dep.DependsOnID))
 				continue
 			}

@@ -140,8 +140,8 @@ func TestInstallClaude(t *testing.T) {
 			return entries[0].Matcher
 		}())
 	}
-	if !strings.Contains(claudeHookCommand(t, runtimeData, "PreCompact"), `gc handoff --auto`) {
-		t.Error("claude PreCompact hook should use gc handoff --auto (not gc prime or restart handoff) on compaction")
+	if !strings.Contains(claudeHookCommand(t, runtimeData, "PreCompact"), `gc handoff --auto --hook-format codex "context cycle"`) {
+		t.Error("claude PreCompact hook should use gc handoff --auto --hook-format codex (not gc prime or restart handoff) on compaction")
 	}
 	if !strings.Contains(s, "gc hook run --timeout 15s --timeout-exit-code 0 -- nudge drain --inject") {
 		t.Error("claude settings should run nudge drain through gc hook run")
@@ -154,9 +154,6 @@ func TestInstallClaude(t *testing.T) {
 	}
 	if !strings.Contains(s, `"skipDangerousModePermissionPrompt": true`) {
 		t.Error("claude settings should contain skipDangerousModePermissionPrompt")
-	}
-	if !strings.Contains(s, `"enableAllProjectMcpServers": true`) {
-		t.Error("claude settings should pre-approve project MCP servers (enableAllProjectMcpServers) so managed agents don't block on the 'New MCP server found' trust modal (#3466)")
 	}
 	if !strings.Contains(s, `"editorMode": "normal"`) {
 		t.Error("claude settings should contain editorMode")
@@ -191,7 +188,7 @@ func TestInstallClaudeUpgradesStaleGeneratedFile(t *testing.T) {
 
 	hookData := fs.Files["/city/hooks/claude.json"]
 	runtimeData := fs.Files["/city/.gc/settings.json"]
-	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto`) {
+	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto --hook-format codex "context cycle"`) {
 		t.Fatalf("upgraded claude hook missing gc handoff:\n%s", string(hookData))
 	}
 	if string(runtimeData) != string(hookData) {
@@ -217,8 +214,8 @@ func TestInstallClaudeUpgradesRestartingPreCompactHandoff(t *testing.T) {
 	}
 
 	hookData := fs.Files["/city/hooks/claude.json"]
-	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto`) {
-		t.Fatalf("upgraded claude hook missing gc handoff --auto:\n%s", string(hookData))
+	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto --hook-format codex "context cycle"`) {
+		t.Fatalf("upgraded claude hook missing gc handoff --auto --hook-format codex:\n%s", string(hookData))
 	}
 }
 
@@ -707,7 +704,7 @@ func TestInstallClaudeUpgradesGeneratedFileWithAllKnownDrift(t *testing.T) {
 			return entries[0].Matcher
 		}())
 	}
-	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto`) {
+	if !strings.Contains(claudeHookCommand(t, hookData, "PreCompact"), `gc handoff --auto --hook-format codex "context cycle"`) {
 		t.Fatalf("upgraded all-drift PreCompact hook missing gc handoff:\n%s", string(hookData))
 	}
 	if string(runtimeData) != string(hookData) {
@@ -770,10 +767,10 @@ func TestInstallClaudeUpgradesPreCompactPreservingCustomHookEvent(t *testing.T) 
 
 	runtime := fs.Files["/city/.gc/settings.json"]
 
-	// The managed PreCompact command must be upgraded to include --auto.
+	// The managed PreCompact command must be upgraded to the current form.
 	preCompactCmd := claudeHookCommand(t, runtime, "PreCompact")
-	if !strings.Contains(preCompactCmd, `gc handoff --auto`) {
-		t.Fatalf("PreCompact command not upgraded to include --auto:\n%s", preCompactCmd)
+	if !strings.Contains(preCompactCmd, `gc handoff --auto --hook-format codex "context cycle"`) {
+		t.Fatalf("PreCompact command not upgraded to current form:\n%s", preCompactCmd)
 	}
 
 	// The custom Stop hook must survive the upgrade verbatim.

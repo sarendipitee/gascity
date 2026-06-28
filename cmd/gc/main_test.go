@@ -319,6 +319,11 @@ func newTestscriptParams(t *testing.T, files ...string) testscript.Params {
 			}
 			env.Setenv("GC_HOME", gcHome)
 			env.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+			for _, key := range []string{"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"} {
+				if value := os.Getenv(key); value != "" {
+					env.Setenv(key, value)
+				}
+			}
 			return nil
 		},
 	}
