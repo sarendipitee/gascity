@@ -745,6 +745,7 @@ func TestUpgradeCodexHooksSkipsWhenDesiredPreCompactUnavailable(t *testing.T) {
 	existing := []byte(`{
   "hooks": {
     "SessionStart": [{
+      "matcher": "startup",
       "hooks": [{
         "type": "command",
         "command": "GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex"

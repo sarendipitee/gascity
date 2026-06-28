@@ -18,6 +18,7 @@ import (
 
 	"github.com/gastownhall/gascity/examples/bd"
 	"github.com/gastownhall/gascity/examples/bd/dolt"
+	beadsdoltliteinit "github.com/gastownhall/gascity/internal/bootstrap/packs/beadsdoltliteinit"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
 	"github.com/gastownhall/gascity/internal/fsys"
 	gitutil "github.com/gastownhall/gascity/internal/git"
@@ -64,6 +65,7 @@ type Pack struct {
 func All() []Pack {
 	return []Pack{
 		{Name: "core", Subpath: "internal/bootstrap/packs/core", FS: core.PackFS},
+		{Name: "beads-doltlite-init", Subpath: "internal/bootstrap/packs/beadsdoltliteinit", FS: beadsdoltliteinit.PackFS},
 		{Name: "bd", Subpath: "examples/bd", FS: bd.PackFS},
 		{Name: "dolt", Subpath: "examples/bd/dolt", FS: dolt.PackFS},
 		{Name: "gastown", Subpath: "examples/gastown/packs/gastown", FS: gascitypacks.Gastown()},

@@ -239,6 +239,7 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 // Returns (deferred bool, err). deferred=true means the bd provider
 // skipped init — the caller should tell the user it's deferred to gc start.
 func initDirIfReady(cityPath, dir, prefix string) (deferred bool, err error) {
+	backend := resolveBeadsBackend(cityPath)
 	provider := beadsProvider(cityPath)
 	if cityUsesManagedDoltBeadsLifecycle(cityPath) {
 		if gcDoltSkip() {
@@ -260,6 +261,12 @@ func initDirIfReady(cityPath, dir, prefix string) (deferred bool, err error) {
 			return false, nil
 		}
 		if err := initDirIfReadyManagedDolt(cityPath, dir, prefix, provider); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if !backend.NeedsManagedServer() {
+		if err := initDirIfReadyInitAndHookDir(cityPath, dir, prefix); err != nil {
 			return false, err
 		}
 		return false, nil
