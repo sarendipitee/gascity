@@ -7,19 +7,22 @@ import "github.com/gastownhall/gascity/internal/api/genclient"
 // sessionResponse fields that the CLI formatter reads so cmd/gc/ never
 // imports genclient directly.
 type SessionView struct {
-	ID          string `json:"id"`
-	Template    string `json:"template"`
-	State       string `json:"state"`
-	Reason      string `json:"reason"`
-	Title       string `json:"title"`
-	Alias       string `json:"alias"`
-	SessionName string `json:"session_name"`
-	WorkDir     string `json:"work_dir"`
-	CreatedAt   string `json:"created_at"`
-	LastActive  string `json:"last_active"`
-	Attached    bool   `json:"attached"`
-	Running     bool   `json:"running"`
-	LastOutput  string `json:"last_output"`
+	ID                       string `json:"id"`
+	Template                 string `json:"template"`
+	State                    string `json:"state"`
+	Reason                   string `json:"reason"`
+	Title                    string `json:"title"`
+	Alias                    string `json:"alias"`
+	SessionName              string `json:"session_name"`
+	WorkDir                  string `json:"work_dir"`
+	CreatedAt                string `json:"created_at"`
+	LastActive               string `json:"last_active"`
+	CreatingSince            string `json:"creating_since"`
+	ConsecutiveReadyFailures int    `json:"consecutive_ready_failures"`
+	LastCreateError          string `json:"last_create_error"`
+	Attached                 bool   `json:"attached"`
+	Running                  bool   `json:"running"`
+	LastOutput               string `json:"last_output"`
 }
 
 // sessionViewFromGen translates one genclient.SessionResponse into a
@@ -46,6 +49,13 @@ func sessionViewFromGen(g genclient.SessionResponse) SessionView {
 	}
 	if g.LastActive != nil {
 		out.LastActive = *g.LastActive
+	}
+	if g.CreatingSince != nil {
+		out.CreatingSince = *g.CreatingSince
+	}
+	out.ConsecutiveReadyFailures = int(g.ConsecutiveReadyFailures)
+	if g.LastCreateError != nil {
+		out.LastCreateError = *g.LastCreateError
 	}
 	if g.LastOutput != nil {
 		out.LastOutput = *g.LastOutput

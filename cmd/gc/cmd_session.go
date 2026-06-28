@@ -996,28 +996,31 @@ func doSessionListFallback(stateFilter, templateFilter string, jsonOutput bool, 
 }
 
 type sessionListJSONRow struct {
-	ID                   string        `json:"id"`
-	Name                 string        `json:"name,omitempty"`
-	Template             string        `json:"template"`
-	Provider             string        `json:"provider,omitempty"`
-	State                session.State `json:"state"`
-	Title                string        `json:"title,omitempty"`
-	Rig                  string        `json:"rig,omitempty"`
-	Alias                string        `json:"alias,omitempty"`
-	AgentName            string        `json:"agent_name,omitempty"`
-	Transport            string        `json:"transport,omitempty"`
-	Command              string        `json:"command,omitempty"`
-	WorkDir              string        `json:"work_dir,omitempty"`
-	SessionName          string        `json:"session_name,omitempty"`
-	SessionKey           string        `json:"session_key,omitempty"`
-	ResumeFlag           string        `json:"resume_flag,omitempty"`
-	ResumeStyle          string        `json:"resume_style,omitempty"`
-	ResumeCommand        string        `json:"resume_command,omitempty"`
-	CreatedAt            time.Time     `json:"created_at"`
-	LastActive           time.Time     `json:"last_active"`
-	LastNudgeDeliveredAt *time.Time    `json:"last_nudge_delivered_at,omitempty"`
-	Attached             bool          `json:"attached"`
-	Closed               bool          `json:"closed"`
+	ID                       string        `json:"id"`
+	Name                     string        `json:"name,omitempty"`
+	Template                 string        `json:"template"`
+	Provider                 string        `json:"provider,omitempty"`
+	State                    session.State `json:"state"`
+	Title                    string        `json:"title,omitempty"`
+	Rig                      string        `json:"rig,omitempty"`
+	Alias                    string        `json:"alias,omitempty"`
+	AgentName                string        `json:"agent_name,omitempty"`
+	Transport                string        `json:"transport,omitempty"`
+	Command                  string        `json:"command,omitempty"`
+	WorkDir                  string        `json:"work_dir,omitempty"`
+	SessionName              string        `json:"session_name,omitempty"`
+	SessionKey               string        `json:"session_key,omitempty"`
+	ResumeFlag               string        `json:"resume_flag,omitempty"`
+	ResumeStyle              string        `json:"resume_style,omitempty"`
+	ResumeCommand            string        `json:"resume_command,omitempty"`
+	CreatedAt                time.Time     `json:"created_at"`
+	LastActive               time.Time     `json:"last_active"`
+	CreatingSince            *time.Time    `json:"creating_since,omitempty"`
+	ConsecutiveReadyFailures int           `json:"consecutive_ready_failures"`
+	LastCreateError          string        `json:"last_create_error,omitempty"`
+	LastNudgeDeliveredAt     *time.Time    `json:"last_nudge_delivered_at,omitempty"`
+	Attached                 bool          `json:"attached"`
+	Closed                   bool          `json:"closed"`
 }
 
 type sessionListJSON struct {
@@ -1090,27 +1093,33 @@ func sessionListJSONRows(sessions []session.Info) []sessionListJSONRow {
 	rows := make([]sessionListJSONRow, len(sessions))
 	for i, s := range sessions {
 		rows[i] = sessionListJSONRow{
-			ID:            s.ID,
-			Name:          sessionListJSONName(s),
-			Template:      s.Template,
-			State:         s.State,
-			Closed:        s.Closed,
-			Title:         s.Title,
-			Rig:           sessionListJSONRig(s),
-			Alias:         s.Alias,
-			AgentName:     s.AgentName,
-			Provider:      s.Provider,
-			Transport:     s.Transport,
-			Command:       s.Command,
-			WorkDir:       s.WorkDir,
-			SessionName:   s.SessionName,
-			SessionKey:    s.SessionKey,
-			ResumeFlag:    s.ResumeFlag,
-			ResumeStyle:   s.ResumeStyle,
-			ResumeCommand: s.ResumeCommand,
-			CreatedAt:     s.CreatedAt,
-			LastActive:    s.LastActive,
-			Attached:      s.Attached,
+			ID:                       s.ID,
+			Name:                     sessionListJSONName(s),
+			Template:                 s.Template,
+			State:                    s.State,
+			Closed:                   s.Closed,
+			Title:                    s.Title,
+			Rig:                      sessionListJSONRig(s),
+			Alias:                    s.Alias,
+			AgentName:                s.AgentName,
+			Provider:                 s.Provider,
+			Transport:                s.Transport,
+			Command:                  s.Command,
+			WorkDir:                  s.WorkDir,
+			SessionName:              s.SessionName,
+			SessionKey:               s.SessionKey,
+			ResumeFlag:               s.ResumeFlag,
+			ResumeStyle:              s.ResumeStyle,
+			ResumeCommand:            s.ResumeCommand,
+			CreatedAt:                s.CreatedAt,
+			LastActive:               s.LastActive,
+			ConsecutiveReadyFailures: s.ConsecutiveReadyFailures,
+			LastCreateError:          s.LastCreateError,
+			Attached:                 s.Attached,
+		}
+		if !s.CreatingSince.IsZero() {
+			stamp := s.CreatingSince.UTC()
+			rows[i].CreatingSince = &stamp
 		}
 		if !s.LastNudgeDeliveredAt.IsZero() {
 			stamp := s.LastNudgeDeliveredAt.UTC()

@@ -20,19 +20,22 @@ import (
 
 // sessionResponse is the JSON representation of a chat session.
 type sessionResponse struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind,omitempty"`
-	Template    string `json:"template"`
-	State       string `json:"state"`
-	Reason      string `json:"reason,omitempty"`
-	Title       string `json:"title"`
-	Alias       string `json:"alias,omitempty"`
-	Provider    string `json:"provider"`
-	DisplayName string `json:"display_name,omitempty"`
-	SessionName string `json:"session_name"`
-	WorkDir     string `json:"work_dir,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	LastActive  string `json:"last_active,omitempty"`
+	ID                       string `json:"id"`
+	Kind                     string `json:"kind,omitempty"`
+	Template                 string `json:"template"`
+	State                    string `json:"state"`
+	Reason                   string `json:"reason,omitempty"`
+	Title                    string `json:"title"`
+	Alias                    string `json:"alias,omitempty"`
+	Provider                 string `json:"provider"`
+	DisplayName              string `json:"display_name,omitempty"`
+	SessionName              string `json:"session_name"`
+	WorkDir                  string `json:"work_dir,omitempty"`
+	CreatedAt                string `json:"created_at"`
+	LastActive               string `json:"last_active,omitempty"`
+	CreatingSince            string `json:"creating_since,omitempty"`
+	ConsecutiveReadyFailures int    `json:"consecutive_ready_failures"`
+	LastCreateError          string `json:"last_create_error,omitempty"`
 	// LastNudgeDeliveredAt is the most recent successful nudge delivery
 	// timestamp for this session.
 	LastNudgeDeliveredAt string `json:"last_nudge_delivered_at,omitempty"`
@@ -95,18 +98,19 @@ func sessionToResponse(info session.Info, cfg *config.City) sessionResponse {
 	}
 	rig, _ := config.ParseQualifiedName(info.Template)
 	r := sessionResponse{
-		ID:          info.ID,
-		Template:    info.Template,
-		State:       string(info.State),
-		Title:       info.Title,
-		Alias:       info.Alias,
-		Provider:    provider,
-		DisplayName: displayName,
-		SessionName: info.SessionName,
-		WorkDir:     info.WorkDir,
-		CreatedAt:   info.CreatedAt.Format(time.RFC3339),
-		Attached:    info.Attached,
-		Rig:         rig,
+		ID:                       info.ID,
+		Template:                 info.Template,
+		State:                    string(info.State),
+		Title:                    info.Title,
+		Alias:                    info.Alias,
+		Provider:                 provider,
+		DisplayName:              displayName,
+		SessionName:              info.SessionName,
+		WorkDir:                  info.WorkDir,
+		CreatedAt:                info.CreatedAt.Format(time.RFC3339),
+		Attached:                 info.Attached,
+		Rig:                      rig,
+		ConsecutiveReadyFailures: info.ConsecutiveReadyFailures,
 	}
 	// Populate pool and agent_kind from config lookup. The pool field is
 	// the agent's base name (e.g., "polecat"), useful for dashboard type
@@ -122,6 +126,12 @@ func sessionToResponse(info session.Info, cfg *config.City) sessionResponse {
 	}
 	if !info.LastActive.IsZero() {
 		r.LastActive = info.LastActive.Format(time.RFC3339)
+	}
+	if !info.CreatingSince.IsZero() {
+		r.CreatingSince = info.CreatingSince.Format(time.RFC3339)
+	}
+	if info.LastCreateError != "" {
+		r.LastCreateError = info.LastCreateError
 	}
 	if !info.LastNudgeDeliveredAt.IsZero() {
 		r.LastNudgeDeliveredAt = info.LastNudgeDeliveredAt.Format(time.RFC3339)
