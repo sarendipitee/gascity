@@ -1340,6 +1340,10 @@ func TestRigAnywhere_ResolveRigToContext(t *testing.T) {
 		t.Setenv("GC_CITY_PATH", "")
 		t.Setenv("GC_CITY_ROOT", "")
 		t.Setenv("GC_DIR", "")
+		// Isolate cwd so the upward local-city search can't discover an
+		// ambient city (e.g. when tests run from a worktree nested under a
+		// real Gas City tree), which would surface that city's import-cache
+		// state instead of the intended "not registered" result.
 		setCwd(t, t.TempDir())
 
 		_, err := resolveRigToContext("nonexistent-rig")
@@ -1432,6 +1436,10 @@ func TestRigAnywhere_ResolveRigToContext(t *testing.T) {
 		t.Setenv("GC_CITY_PATH", "")
 		t.Setenv("GC_CITY_ROOT", "")
 		t.Setenv("GC_DIR", "")
+		// Isolate cwd so the upward local-city search can't discover an
+		// ambient city (e.g. when tests run from a worktree nested under a
+		// real Gas City tree) and surface its bindings instead of the
+		// intended "not registered" result.
 		setCwd(t, t.TempDir())
 
 		cityPath := setupCity(t, "legacy-city")
