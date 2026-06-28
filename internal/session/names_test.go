@@ -406,6 +406,39 @@ func TestEnsureAliasAvailable_AllowsClosedSessionNameReuse(t *testing.T) {
 	}
 }
 
+// TestEnsureAliasAvailable_AllowsClosedAliasReuse is the Bug A regression
+// guard: a CLOSED pool session bead that still carries metadata.alias for a
+// roster identity (e.g. "chatehr/gastown.toast") must NOT block a freshly
+// spawned polecat from re-acquiring that alias. Before the closed-status skip
+// in ensureSessionAliasAvailable, dozens of closed session beads accumulated
+// squatting every roster name, so new polecats failed EnsureAliasAvailable
+// with `alias ... already belongs to <closed-id>` and the pool wedged asleep.
+func TestEnsureAliasAvailable_AllowsClosedAliasReuse(t *testing.T) {
+	store := beads.NewMemStore()
+	alias := "chatehr/gastown.toast"
+	bead, err := store.Create(beads.Bead{
+		Type:   BeadType,
+		Labels: []string{LabelSession},
+		Metadata: map[string]string{
+			"session_name": "toast",
+			"alias":        alias,
+			"agent_name":   alias,
+			"pool_managed": "true",
+			"pool_slot":    "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Close(bead.ID); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := EnsureAliasAvailable(store, alias, ""); err != nil {
+		t.Fatalf("EnsureAliasAvailable(closed alias collision) = %v, want nil", err)
+	}
+}
+
 func TestEnsureAliasAvailable_RejectsLiveSessionNameCollision(t *testing.T) {
 	store := beads.NewMemStore()
 	_, err := store.Create(beads.Bead{
