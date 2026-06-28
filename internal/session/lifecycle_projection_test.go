@@ -700,6 +700,13 @@ func TestLifecycleDisplayReasonUsesOnlyActiveLifecycleReasons(t *testing.T) {
 			want: "user-hold",
 		},
 		{
+			name: "create backoff is visible",
+			meta: map[string]string{
+				"create_backoff_until": future,
+			},
+			want: "create-backoff",
+		},
+		{
 			name: "expired user hold is not visible",
 			meta: map[string]string{
 				"held_until": past,

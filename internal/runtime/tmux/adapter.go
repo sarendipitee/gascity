@@ -1194,6 +1194,10 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 			if deadErr := failIfSessionDiedDuringStartupProbe(ops, name); deadErr != nil {
 				return deadErr
 			}
+			if strings.Contains(err.Error(), "timeout waiting for runtime prompt") {
+				_ = ops.killSession(name) // best-effort; readiness timed out while runtime stayed alive
+				return err
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return ignoreDeadlineIfSessionAlive(ops, name, err)

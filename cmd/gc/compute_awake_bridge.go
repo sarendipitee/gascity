@@ -126,6 +126,9 @@ func buildAwakeInputFromReconciler(
 		bead.HeldUntil = lifecycle.HeldUntil
 		bead.QuarantinedUntil = lifecycle.QuarantinedUntil
 		bead.CreatedAt = b.CreatedAt
+		if t, err := time.Parse(time.RFC3339, b.Metadata["create_backoff_until"]); err == nil && !t.IsZero() {
+			bead.CreateBackoffUntil = t
+		}
 		if t, err := time.Parse(time.RFC3339, b.Metadata["detached_at"]); err == nil && !t.IsZero() {
 			bead.IdleSince = t
 		}

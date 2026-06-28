@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +91,11 @@ type Info struct {
 	ResumeCommand string // explicit resume command template ({{.SessionKey}})
 	CreatedAt     time.Time
 	LastActive    time.Time
+	CreatingSince time.Time
+	// ConsecutiveReadyFailures counts startup readiness timeouts since the last
+	// confirmed ready session start.
+	ConsecutiveReadyFailures int
+	LastCreateError          string
 	// LastNudgeDeliveredAt records the wall-clock time of the most recent
 	// successful nudge delivery to this session. Zero when no nudge has
 	// been delivered yet (or the metadata predates the stamping path).
@@ -1567,23 +1573,34 @@ func (m *Manager) infoFromBead(b beads.Bead) Info {
 	}
 
 	info := Info{
-		ID:            b.ID,
-		Template:      b.Metadata["template"],
-		State:         state,
-		Closed:        closed,
-		Title:         b.Title,
-		Alias:         b.Metadata["alias"],
-		AgentName:     b.Metadata["agent_name"],
-		Provider:      b.Metadata["provider"],
-		Transport:     transport,
-		Command:       b.Metadata["command"],
-		WorkDir:       b.Metadata["work_dir"],
-		SessionName:   sessName,
-		SessionKey:    b.Metadata["session_key"],
-		ResumeFlag:    b.Metadata["resume_flag"],
-		ResumeStyle:   b.Metadata["resume_style"],
-		ResumeCommand: b.Metadata["resume_command"],
-		CreatedAt:     b.CreatedAt,
+		ID:              b.ID,
+		Template:        b.Metadata["template"],
+		State:           state,
+		Closed:          closed,
+		Title:           b.Title,
+		Alias:           b.Metadata["alias"],
+		AgentName:       b.Metadata["agent_name"],
+		Provider:        b.Metadata["provider"],
+		Transport:       transport,
+		Command:         b.Metadata["command"],
+		WorkDir:         b.Metadata["work_dir"],
+		SessionName:     sessName,
+		SessionKey:      b.Metadata["session_key"],
+		ResumeFlag:      b.Metadata["resume_flag"],
+		ResumeStyle:     b.Metadata["resume_style"],
+		ResumeCommand:   b.Metadata["resume_command"],
+		CreatedAt:       b.CreatedAt,
+		LastCreateError: strings.TrimSpace(b.Metadata["last_create_error"]),
+	}
+	if raw := strings.TrimSpace(b.Metadata["creating_since"]); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			info.CreatingSince = parsed
+		}
+	}
+	if raw := strings.TrimSpace(b.Metadata["consecutive_ready_failures"]); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			info.ConsecutiveReadyFailures = parsed
+		}
 	}
 	if raw := strings.TrimSpace(b.Metadata[MetadataLastNudgeDeliveredAt]); raw != "" {
 		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {

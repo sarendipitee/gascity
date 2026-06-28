@@ -6695,6 +6695,10 @@
           "configured_named_session": {
             "type": "boolean"
           },
+          "consecutive_ready_failures": {
+            "format": "int64",
+            "type": "integer"
+          },
           "context_pct": {
             "format": "int64",
             "type": "integer"
@@ -6704,6 +6708,9 @@
             "type": "integer"
           },
           "created_at": {
+            "type": "string"
+          },
+          "creating_since": {
             "type": "string"
           },
           "display_name": {
@@ -6716,6 +6723,9 @@
             "type": "string"
           },
           "last_active": {
+            "type": "string"
+          },
+          "last_create_error": {
             "type": "string"
           },
           "last_nudge_delivered_at": {
@@ -6781,6 +6791,7 @@
           "provider",
           "session_name",
           "created_at",
+          "consecutive_ready_failures",
           "attached",
           "running"
         ],

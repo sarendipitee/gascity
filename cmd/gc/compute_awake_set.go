@@ -71,6 +71,7 @@ type AwakeSessionBead struct {
 	WaitHold                  bool      // user-issued gc wait in progress
 	HeldUntil                 time.Time // zero = not held
 	QuarantinedUntil          time.Time // zero = not quarantined
+	CreateBackoffUntil        time.Time // zero = no ready-failure backoff
 	IdleSince                 time.Time // zero = unknown/not idle
 	CreatedAt                 time.Time // bead creation time (for grace period checks)
 	RestartRequested          bool      // restart_requested metadata is still active
@@ -498,6 +499,13 @@ func ComputeAwakeSet(input AwakeInput) map[string]AwakeDecision {
 			decision.Reason = "quarantined"
 		}
 
+		// Ready-failure create backoff suppresses automatic wake retries after a
+		// session repeatedly times out in startup. Explicit wake still overrides.
+		if !bead.ExplicitWake && !bead.CreateBackoffUntil.IsZero() && input.Now.Before(bead.CreateBackoffUntil) {
+			decision.ShouldWake = false
+			decision.Reason = "create-backoff"
+		}
+
 		// NOTE: Dependency ordering is NOT enforced here. The reconciler's
 		// executePlannedStarts handles dependency-aware wave ordering via
 		// allDependenciesAliveForTemplate at wave boundaries. Applying
@@ -603,7 +611,8 @@ func isMinActivePoolBead(b AwakeSessionBead, template string) bool {
 func minActiveHardBlocked(b AwakeSessionBead, now time.Time) bool {
 	return b.WaitHold ||
 		(!b.HeldUntil.IsZero() && now.Before(b.HeldUntil)) ||
-		(!b.QuarantinedUntil.IsZero() && now.Before(b.QuarantinedUntil))
+		(!b.QuarantinedUntil.IsZero() && now.Before(b.QuarantinedUntil)) ||
+		(!b.CreateBackoffUntil.IsZero() && now.Before(b.CreateBackoffUntil))
 }
 
 // countMinActiveCovered counts pool session beads for template that already

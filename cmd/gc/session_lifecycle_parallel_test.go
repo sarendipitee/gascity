@@ -4163,6 +4163,144 @@ func TestCommitStartResult_AtomicBatchLandsStateAndClaimClearTogether(t *testing
 	}
 }
 
+func TestCommitStartResult_ReadyTimeoutPersistsFailureStreakAndBackoff(t *testing.T) {
+	store := beads.NewMemStore()
+	clkTime := time.Date(2026, 6, 28, 19, 0, 0, 0, time.UTC)
+	bead, err := store.Create(beads.Bead{
+		ID:     "gc-refinery",
+		Title:  "refinery",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":               "rig--refinery",
+			"template":                   "rig/refinery",
+			"pending_create_claim":       "true",
+			"pending_create_started_at":  clkTime.Add(-12 * time.Second).Format(time.RFC3339),
+			"last_woke_at":               clkTime.Add(-12 * time.Second).Format(time.RFC3339),
+			"consecutive_ready_failures": "2",
+			"creating_since":             clkTime.Add(-2 * time.Minute).Format(time.RFC3339),
+			"create_backoff_until":       "",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &bead,
+				tp: TemplateParams{
+					SessionName:  "rig--refinery",
+					TemplateName: "rig/refinery",
+				},
+			},
+		},
+		err:             errors.New("timeout waiting for runtime prompt"),
+		outcome:         "provider_error",
+		started:         clkTime.Add(-12 * time.Second),
+		finished:        clkTime,
+		rollbackPending: true,
+	}
+
+	if commitStartResult(result, store, &clock.Fake{Time: clkTime}, events.Discard, 0, ioDiscard{}, ioDiscard{}) {
+		t.Fatal("ready-timeout create failure should not count as committed success")
+	}
+
+	got, err := store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "open" {
+		t.Fatalf("status = %q, want open", got.Status)
+	}
+	if got.Metadata["state"] != "asleep" {
+		t.Fatalf("state = %q, want asleep", got.Metadata["state"])
+	}
+	if got.Metadata["state_reason"] != "ready-timeout" {
+		t.Fatalf("state_reason = %q, want ready-timeout", got.Metadata["state_reason"])
+	}
+	if got.Metadata["creating_since"] != clkTime.Add(-2*time.Minute).Format(time.RFC3339) {
+		t.Fatalf("creating_since = %q, want preserved first-failure time", got.Metadata["creating_since"])
+	}
+	if got.Metadata["consecutive_ready_failures"] != "3" {
+		t.Fatalf("consecutive_ready_failures = %q, want 3", got.Metadata["consecutive_ready_failures"])
+	}
+	if got.Metadata["last_create_error"] != "timeout waiting for runtime prompt" {
+		t.Fatalf("last_create_error = %q, want readiness timeout", got.Metadata["last_create_error"])
+	}
+	if got.Metadata["pending_create_claim"] != "" {
+		t.Fatalf("pending_create_claim = %q, want cleared", got.Metadata["pending_create_claim"])
+	}
+	if got.Metadata["pending_create_started_at"] != "" {
+		t.Fatalf("pending_create_started_at = %q, want cleared", got.Metadata["pending_create_started_at"])
+	}
+	if got.Metadata["last_woke_at"] != "" {
+		t.Fatalf("last_woke_at = %q, want cleared", got.Metadata["last_woke_at"])
+	}
+	backoffUntil, err := time.Parse(time.RFC3339, got.Metadata["create_backoff_until"])
+	if err != nil {
+		t.Fatalf("create_backoff_until parse: %v", err)
+	}
+	wantBackoff := clkTime.Add(30 * time.Second)
+	if !backoffUntil.Equal(wantBackoff) {
+		t.Fatalf("create_backoff_until = %s, want %s", backoffUntil.Format(time.RFC3339), wantBackoff.Format(time.RFC3339))
+	}
+}
+
+func TestCommitStartResult_SuccessClearsReadyFailureFields(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Title:  "helper",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":               "sky",
+			"pending_create_claim":       "true",
+			"state":                      "creating",
+			"creating_since":             "2026-06-28T18:55:00Z",
+			"consecutive_ready_failures": "5",
+			"last_create_error":          "timeout waiting for runtime prompt",
+			"create_backoff_until":       "2026-06-28T19:05:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &bead,
+				tp: TemplateParams{
+					SessionName:  "sky",
+					TemplateName: "helper",
+				},
+			},
+			coreHash: "core",
+			liveHash: "live",
+		},
+		outcome:  "success",
+		started:  time.Date(2026, 6, 28, 19, 5, 0, 0, time.UTC),
+		finished: time.Date(2026, 6, 28, 19, 5, 1, 0, time.UTC),
+	}
+
+	if !commitStartResult(result, store, &clock.Fake{Time: time.Date(2026, 6, 28, 19, 5, 1, 0, time.UTC)}, events.Discard, 0, ioDiscard{}, ioDiscard{}) {
+		t.Fatal("commitStartResult returned false for successful start")
+	}
+
+	got, err := store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"creating_since", "last_create_error", "create_backoff_until"} {
+		if got.Metadata[key] != "" {
+			t.Fatalf("%s = %q, want cleared", key, got.Metadata[key])
+		}
+	}
+	if got.Metadata["consecutive_ready_failures"] != "0" {
+		t.Fatalf("consecutive_ready_failures = %q, want 0", got.Metadata["consecutive_ready_failures"])
+	}
+}
+
 func TestExecutePlannedStarts_UsesLogicalTemplateForDependencyRechecks(t *testing.T) {
 	maxWakes := 8
 	dropAfter := 3

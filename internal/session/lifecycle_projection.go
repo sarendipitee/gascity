@@ -243,7 +243,7 @@ func LifecycleDisplayReason(status string, metadata map[string]string, now time.
 		Metadata: metadata,
 		Now:      now,
 	})
-	return lifecycleDisplayReasonFromView(view, metadata)
+	return lifecycleDisplayReasonFromView(view, metadata, now)
 }
 
 // LifecycleDisplayReasonWithLiveness returns the lifecycle display reason,
@@ -260,7 +260,7 @@ func LifecycleDisplayReasonWithLiveness(status string, metadata map[string]strin
 	if lifecycleResetPendingReasonVisible(view, metadata, sessionName, isRunning) {
 		return LifecycleReasonResetPending
 	}
-	return lifecycleDisplayReasonFromView(view, metadata)
+	return lifecycleDisplayReasonFromView(view, metadata, now)
 }
 
 // LifecycleResetPendingReasonVisible reports whether reset-pending should
@@ -277,7 +277,7 @@ func LifecycleResetPendingReasonVisible(status string, metadata map[string]strin
 	return lifecycleResetPendingReasonVisible(view, metadata, sessionName, isRunning)
 }
 
-func lifecycleDisplayReasonFromView(view LifecycleView, metadata map[string]string) string {
+func lifecycleDisplayReasonFromView(view LifecycleView, metadata map[string]string, now time.Time) string {
 	if view.Terminal {
 		return ""
 	}
@@ -306,6 +306,9 @@ func lifecycleDisplayReasonFromView(view LifecycleView, metadata map[string]stri
 	}
 	if view.HasBlocker(BlockerHeld) {
 		return "user-hold"
+	}
+	if until, err := time.Parse(time.RFC3339, strings.TrimSpace(metadata["create_backoff_until"])); err == nil && !until.IsZero() && now.Before(until) {
+		return "create-backoff"
 	}
 	return ""
 }

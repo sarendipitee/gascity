@@ -2810,13 +2810,16 @@ export type SessionResponse = {
     alias?: string;
     attached: boolean;
     configured_named_session?: boolean;
+    consecutive_ready_failures: number;
     context_pct?: number;
     context_window?: number;
     created_at: string;
+    creating_since?: string;
     display_name?: string;
     id: string;
     kind?: string;
     last_active?: string;
+    last_create_error?: string;
     last_nudge_delivered_at?: string;
     last_output?: string;
     metadata?: {

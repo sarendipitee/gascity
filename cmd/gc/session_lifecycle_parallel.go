@@ -1990,6 +1990,18 @@ func commitStartFailure(result startResult, store beads.Store, clk clock.Clock, 
 		return
 	}
 	if result.rollbackPending {
+		if isReadyTimeoutStartError(result.err) {
+			if err := recordReadyTimeoutCreateFailure(session, store, clk.Now().UTC(), result.err); err != nil {
+				fmt.Fprintf(stderr, "session reconciler: recording ready-timeout create failure for %s: %v\n", name, err) //nolint:errcheck
+				rollbackPendingCreate(session, store, clk.Now().UTC(), stderr)
+			} else if trace != nil {
+				trace.recordOperation("reconciler.start.ready_timeout_backoff", tp.TemplateName, name, "", "start", result.outcome, traceRecordPayload{
+					"error": formatLifecycleError(result.err),
+				}, "")
+			}
+			logLifecycleOutcome(stderr, "start", wave, name, tp.TemplateName, result.outcome, result.started, result.finished, result.err, result.phases)
+			return
+		}
 		if errors.Is(result.err, context.DeadlineExceeded) {
 			rec.Record(events.Event{
 				Type:    events.SessionColdStartTimeout,
@@ -2185,6 +2197,78 @@ func rollbackPendingCreateClearingClaim(session *beads.Bead, store beads.Store, 
 	}
 	session.Metadata["pending_create_claim"] = ""
 	session.Metadata["pending_create_started_at"] = ""
+}
+
+const (
+	readyTimeoutErrorText           = "timeout waiting for runtime prompt"
+	readyFailureBackoffThreshold    = 3
+	readyFailureBackoffBaseDuration = 30 * time.Second
+	readyFailureBackoffMaxDuration  = 5 * time.Minute
+)
+
+func isReadyTimeoutStartError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), readyTimeoutErrorText)
+}
+
+func recordReadyTimeoutCreateFailure(session *beads.Bead, store beads.Store, now time.Time, startErr error) error {
+	if session == nil || store == nil {
+		return nil
+	}
+	if session.Metadata == nil {
+		session.Metadata = make(map[string]string)
+	}
+	failures, _ := strconv.Atoi(strings.TrimSpace(session.Metadata["consecutive_ready_failures"]))
+	failures++
+	creatingSince := strings.TrimSpace(session.Metadata["creating_since"])
+	if creatingSince == "" {
+		creatingSince = strings.TrimSpace(session.Metadata["pending_create_started_at"])
+	}
+	if creatingSince == "" {
+		creatingSince = now.UTC().Format(time.RFC3339)
+	}
+	patch := map[string]string{
+		"state":                      string(sessionpkg.StateAsleep),
+		"state_reason":               "ready-timeout",
+		"sleep_reason":               "",
+		"creating_since":             creatingSince,
+		"consecutive_ready_failures": strconv.Itoa(failures),
+		"last_create_error":          formatLifecycleError(startErr),
+		"pending_create_claim":       "",
+		"pending_create_started_at":  "",
+		"last_woke_at":               "",
+	}
+	if until := computeReadyFailureBackoffUntil(now, failures); !until.IsZero() {
+		patch["create_backoff_until"] = until.UTC().Format(time.RFC3339)
+	} else {
+		patch["create_backoff_until"] = ""
+	}
+	if err := store.SetMetadataBatch(session.ID, patch); err != nil {
+		return err
+	}
+	for key, value := range patch {
+		session.Metadata[key] = value
+	}
+	return nil
+}
+
+func computeReadyFailureBackoffUntil(now time.Time, failures int) time.Time {
+	if failures < readyFailureBackoffThreshold {
+		return time.Time{}
+	}
+	step := failures - readyFailureBackoffThreshold
+	delay := readyFailureBackoffBaseDuration
+	for i := 0; i < step; i++ {
+		if delay >= readyFailureBackoffMaxDuration {
+			delay = readyFailureBackoffMaxDuration
+			break
+		}
+		delay *= 2
+		if delay > readyFailureBackoffMaxDuration {
+			delay = readyFailureBackoffMaxDuration
+			break
+		}
+	}
+	return now.UTC().Add(delay)
 }
 
 func executePlannedStarts(

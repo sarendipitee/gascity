@@ -2772,35 +2772,38 @@ type SessionRespondOutputBody struct {
 
 // SessionResponse defines model for SessionResponse.
 type SessionResponse struct {
-	ActiveBead             *string                 `json:"active_bead,omitempty"`
-	Activity               *string                 `json:"activity,omitempty"`
-	AgentKind              *string                 `json:"agent_kind,omitempty"`
-	Alias                  *string                 `json:"alias,omitempty"`
-	Attached               bool                    `json:"attached"`
-	ConfiguredNamedSession *bool                   `json:"configured_named_session,omitempty"`
-	ContextPct             *int64                  `json:"context_pct,omitempty"`
-	ContextWindow          *int64                  `json:"context_window,omitempty"`
-	CreatedAt              string                  `json:"created_at"`
-	DisplayName            *string                 `json:"display_name,omitempty"`
-	Id                     string                  `json:"id"`
-	Kind                   *string                 `json:"kind,omitempty"`
-	LastActive             *string                 `json:"last_active,omitempty"`
-	LastNudgeDeliveredAt   *string                 `json:"last_nudge_delivered_at,omitempty"`
-	LastOutput             *string                 `json:"last_output,omitempty"`
-	Metadata               *map[string]string      `json:"metadata,omitempty"`
-	Model                  *string                 `json:"model,omitempty"`
-	Options                *map[string]string      `json:"options,omitempty"`
-	Pool                   *string                 `json:"pool,omitempty"`
-	Provider               string                  `json:"provider"`
-	Reason                 *string                 `json:"reason,omitempty"`
-	Rig                    *string                 `json:"rig,omitempty"`
-	Running                bool                    `json:"running"`
-	SessionName            string                  `json:"session_name"`
-	State                  string                  `json:"state"`
-	SubmissionCapabilities *SubmissionCapabilities `json:"submission_capabilities,omitempty"`
-	Template               string                  `json:"template"`
-	Title                  string                  `json:"title"`
-	WorkDir                *string                 `json:"work_dir,omitempty"`
+	ActiveBead               *string                 `json:"active_bead,omitempty"`
+	Activity                 *string                 `json:"activity,omitempty"`
+	AgentKind                *string                 `json:"agent_kind,omitempty"`
+	Alias                    *string                 `json:"alias,omitempty"`
+	Attached                 bool                    `json:"attached"`
+	ConfiguredNamedSession   *bool                   `json:"configured_named_session,omitempty"`
+	ConsecutiveReadyFailures int64                   `json:"consecutive_ready_failures"`
+	ContextPct               *int64                  `json:"context_pct,omitempty"`
+	ContextWindow            *int64                  `json:"context_window,omitempty"`
+	CreatedAt                string                  `json:"created_at"`
+	CreatingSince            *string                 `json:"creating_since,omitempty"`
+	DisplayName              *string                 `json:"display_name,omitempty"`
+	Id                       string                  `json:"id"`
+	Kind                     *string                 `json:"kind,omitempty"`
+	LastActive               *string                 `json:"last_active,omitempty"`
+	LastCreateError          *string                 `json:"last_create_error,omitempty"`
+	LastNudgeDeliveredAt     *string                 `json:"last_nudge_delivered_at,omitempty"`
+	LastOutput               *string                 `json:"last_output,omitempty"`
+	Metadata                 *map[string]string      `json:"metadata,omitempty"`
+	Model                    *string                 `json:"model,omitempty"`
+	Options                  *map[string]string      `json:"options,omitempty"`
+	Pool                     *string                 `json:"pool,omitempty"`
+	Provider                 string                  `json:"provider"`
+	Reason                   *string                 `json:"reason,omitempty"`
+	Rig                      *string                 `json:"rig,omitempty"`
+	Running                  bool                    `json:"running"`
+	SessionName              string                  `json:"session_name"`
+	State                    string                  `json:"state"`
+	SubmissionCapabilities   *SubmissionCapabilities `json:"submission_capabilities,omitempty"`
+	Template                 string                  `json:"template"`
+	Title                    string                  `json:"title"`
+	WorkDir                  *string                 `json:"work_dir,omitempty"`
 }
 
 // SessionStrandedPayload defines model for SessionStrandedPayload.

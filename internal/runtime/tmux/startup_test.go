@@ -1082,6 +1082,36 @@ func TestDoStartSession_ReadyDelayOnly(t *testing.T) {
 	}
 }
 
+func TestDoStartSession_ReadyTimeoutKillsSessionAndFailsStart(t *testing.T) {
+	ops := &fakeStartOps{
+		hasSessionResult:       true,
+		isSessionRunningResult: boolPtr(true),
+		waitReadyErr:           errors.New("timeout waiting for runtime prompt"),
+	}
+
+	cfg := runtime.Config{
+		Command:           "codex",
+		ReadyPromptPrefix: "> ",
+	}
+
+	err := doStartSession(context.Background(), ops, "test", cfg, DefaultConfig().SetupTimeout)
+	if err == nil {
+		t.Fatal("doStartSession error = nil, want readiness timeout")
+	}
+	if !strings.Contains(err.Error(), "timeout waiting for runtime prompt") {
+		t.Fatalf("doStartSession error = %v, want readiness timeout", err)
+	}
+	assertCallSequence(t, ops, []string{
+		"createSession",
+		"setRemainOnExit",
+		"disableMouseAndActivity",
+		"waitForReady",
+		"hasSession",
+		"isSessionRunning",
+		"killSession",
+	})
+}
+
 func TestDoStartSession_TreatsDeadlineAfterReadyAsSuccessWhenSessionAlive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()

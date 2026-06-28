@@ -115,6 +115,41 @@ func TestNamedAlways_Quarantined(t *testing.T) {
 	assertAsleep(t, result, "deacon")
 }
 
+func TestNamedAlways_CreateBackoffSuppressesAutomaticWake(t *testing.T) {
+	result := ComputeAwakeSet(AwakeInput{
+		Agents:        []AwakeAgent{{QualifiedName: "deacon"}},
+		NamedSessions: []AwakeNamedSession{{Identity: "deacon", Template: "deacon", Mode: "always"}},
+		SessionBeads: []AwakeSessionBead{{
+			ID:                 "mc-1",
+			SessionName:        "deacon",
+			Template:           "deacon",
+			State:              "asleep",
+			NamedIdentity:      "deacon",
+			CreateBackoffUntil: now.Add(5 * time.Minute),
+		}},
+		Now: now,
+	})
+	assertAsleep(t, result, "deacon")
+	assertReason(t, result, "deacon", "create-backoff")
+}
+
+func TestNamedAlways_ExplicitWakeOverridesCreateBackoff(t *testing.T) {
+	result := ComputeAwakeSet(AwakeInput{
+		Agents: []AwakeAgent{{QualifiedName: "deacon"}},
+		SessionBeads: []AwakeSessionBead{{
+			ID:                 "mc-1",
+			SessionName:        "deacon",
+			Template:           "deacon",
+			State:              "asleep",
+			ExplicitWake:       true,
+			CreateBackoffUntil: now.Add(5 * time.Minute),
+		}},
+		Now: now,
+	})
+	assertAwake(t, result, "deacon")
+	assertReason(t, result, "deacon", "explicit-wake")
+}
+
 // TestNamedAlways_MissingConfiguredIdentityWakesViaRuntimeNameFallback pins
 // the #1493 fallback: a configured_named_session bead whose NamedIdentity is
 // missing must still wake when its SessionName matches the deterministic

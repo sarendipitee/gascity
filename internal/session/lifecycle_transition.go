@@ -212,9 +212,13 @@ func ClearExpiredQuarantinePatch(sleepReason string) MetadataPatch {
 // bead whose last_woke_at was later cleared by crash/churn recovery.
 func ConfirmStartedPatch(now time.Time) MetadataPatch {
 	return MetadataPatch{
-		"state":                string(StateActive),
-		"state_reason":         "creation_complete",
-		"creation_complete_at": now.UTC().Format(time.RFC3339),
+		"state":                      string(StateActive),
+		"state_reason":               "creation_complete",
+		"creation_complete_at":       now.UTC().Format(time.RFC3339),
+		"creating_since":             "",
+		"consecutive_ready_failures": "0",
+		"last_create_error":          "",
+		"create_backoff_until":       "",
 		// awake_started_at is the immutable start of this awake interval. Unlike
 		// last_woke_at (a wake-attempt lease cleared by many teardown paths) it
 		// is never cleared, so a compute usage fact can recover the interval
@@ -266,6 +270,10 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 		"started_provision_hash":     input.ProvisionHash,
 		"started_launch_hash":        input.LaunchHash,
 		"continuation_reset_pending": "",
+		"creating_since":             "",
+		"consecutive_ready_failures": "0",
+		"last_create_error":          "",
+		"create_backoff_until":       "",
 	}
 	if input.CoreBreakdown != "" {
 		patch["core_hash_breakdown"] = input.CoreBreakdown

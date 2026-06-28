@@ -4111,14 +4111,18 @@ export interface components {
             attached: boolean;
             configured_named_session?: boolean;
             /** Format: int64 */
+            consecutive_ready_failures: number;
+            /** Format: int64 */
             context_pct?: number;
             /** Format: int64 */
             context_window?: number;
             created_at: string;
+            creating_since?: string;
             display_name?: string;
             id: string;
             kind?: string;
             last_active?: string;
+            last_create_error?: string;
             last_nudge_delivered_at?: string;
             last_output?: string;
             metadata?: {
