@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -54,10 +55,17 @@ exit 1
 	}
 	testMakefile := filepath.Join(tmp, "Makefile")
 	makefileText := string(makefile)
-	if !strings.Contains(makefileText, "\ninstall: build\n") {
-		t.Fatal("Makefile install target no longer depends on build as expected")
+	// The install target's prerequisite varies (historically `install: build`,
+	// now `install: check-self-contained` — the ICU rpath self-containment gate).
+	// This test exercises only the install recipe's fail-closed-on-cp-failure
+	// behavior, so neutralize whatever single prerequisite the target declares to
+	// avoid running build/gate steps. Matching either keeps the test green on both
+	// main (install: build) and live (install: check-self-contained).
+	installTarget := regexp.MustCompile(`\ninstall:[^\n]*\n`)
+	if !installTarget.MatchString(makefileText) {
+		t.Fatal("Makefile no longer defines an install target as expected")
 	}
-	makefileContent := strings.Replace(makefileText, "\ninstall: build\n", "\ninstall:\n", 1)
+	makefileContent := installTarget.ReplaceAllString(makefileText, "\ninstall:\n")
 	if err := os.WriteFile(testMakefile, []byte(makefileContent), 0o644); err != nil {
 		t.Fatalf("write test Makefile: %v", err)
 	}
