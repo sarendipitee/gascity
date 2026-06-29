@@ -2097,6 +2097,8 @@ export interface components {
                 [key: string]: string;
             };
             OverlayDir: string | null;
+            Pack: string | null;
+            PackRoot: string | null;
             Pool: components["schemas"]["PoolOverride"];
             PreStart: string[] | null;
             PreStartAppend: string[] | null;
@@ -2117,6 +2119,7 @@ export interface components {
             StartCommand: string | null;
             Suspended: boolean | null;
             TmuxAlias: string | null;
+            Upstream: string | null;
             WakeMode: string | null;
             WorkDir: string | null;
         };
@@ -2226,6 +2229,8 @@ export interface components {
             /** Format: date-time */
             defer_until?: string;
             dependencies?: components["schemas"]["Dep"][] | null;
+            /** Format: int64 */
+            dependency_count?: number;
             description?: string;
             ephemeral?: boolean;
             from?: string;
@@ -2250,6 +2255,11 @@ export interface components {
         BeadAssignInputBody: {
             /** @description Assignee name. */
             assignee?: string;
+        };
+        BeadClaimRejectedPayload: {
+            attempted_claimant: string;
+            bead_id: string;
+            existing_claimant: string;
         };
         BeadCreateInputBody: {
             /** @description Assigned agent. */
@@ -2343,6 +2353,7 @@ export interface components {
          */
         BindingStatus: "active" | "ended";
         BoundEventPayload: {
+            agent_name?: string;
             conversation_id: string;
             provider: string;
             session_id: string;
@@ -2753,14 +2764,18 @@ export interface components {
             provider: string;
         };
         ExtMsgBindInputBody: {
+            /** @description Configured agent identity to bind; its live session is resolved at delivery time, cold-waking one when none is live (mutually exclusive with session_id). */
+            agent_name?: string;
             /** @description Conversation to bind. */
             conversation?: components["schemas"]["ConversationRef"];
             /** @description Optional binding metadata. */
             metadata?: {
                 [key: string]: string;
             };
-            /** @description Session ID to bind. */
-            session_id: string;
+            /** @description Rebind (handoff) a conversation whose active binding targets someone else instead of returning a conflict. */
+            replace?: boolean;
+            /** @description Session ID to bind (mutually exclusive with agent_name). */
+            session_id?: string;
         };
         ExtMsgGroupEnsureInputBody: {
             /** @description Default handle for the group. */
@@ -2832,10 +2847,12 @@ export interface components {
             unbound: components["schemas"]["SessionBindingRecord"][] | null;
         };
         ExtMsgUnbindInputBody: {
-            /** @description Conversation to unbind (nil = all). */
+            /** @description Configured agent identity to unbind. */
+            agent_name?: string;
+            /** @description Conversation to unbind (nil = filter by session_id/agent_name). */
             conversation?: components["schemas"]["ConversationRef"];
             /** @description Session ID to unbind. */
-            session_id: string;
+            session_id?: string;
         };
         ExternalActor: {
             display_name: string;
@@ -3013,12 +3030,14 @@ export interface components {
             actor: string;
             conversation_id: string;
             provider: string;
+            target_agent?: string;
             target_session: string;
         };
         InboundResult: {
             Binding: components["schemas"]["SessionBindingRecord"];
             GroupRoute: components["schemas"]["GroupRouteDecision"];
             Message: components["schemas"]["ExternalInboundMessage"];
+            TargetAgentName: string;
             TargetSessionID: string;
             TranscriptEntry: components["schemas"]["ConversationTranscriptRecord"];
         };
@@ -3472,6 +3491,12 @@ export interface components {
             items: components["schemas"]["MonitorFeedItemResponse"][] | null;
             partial: boolean;
             partial_errors?: string[] | null;
+        };
+        OutboundChannelMismatchPayload: {
+            conversation_id: string;
+            owner_session: string;
+            posting_session: string;
+            provider: string;
         };
         OutboundEventPayload: {
             conversation_id: string;
@@ -3928,6 +3953,7 @@ export interface components {
             agents: components["schemas"]["AgentMapping"][] | null;
         };
         SessionBindingRecord: {
+            AgentName: string;
             /** Format: int64 */
             BindingGeneration: number;
             /** Format: date-time */
@@ -4105,6 +4131,7 @@ export interface components {
             submission_capabilities?: components["schemas"]["SubmissionCapabilities"];
             template: string;
             title: string;
+            work_dir?: string;
         };
         SessionStrandedPayload: {
             /** @description Canonical session bead ID for the stranded pool session (also the envelope Subject). */
@@ -5048,6 +5075,23 @@ export interface components {
              * @enum {string}
              */
             type: "extmsg.outbound";
+            workflow?: components["schemas"]["WorkflowEventProjection"];
+        };
+        /** TypedEventStreamEnvelope extmsg.outbound_channel_mismatch */
+        TypedEventStreamEnvelopeExtmsgOutboundChannelMismatch: {
+            actor: string;
+            message?: string;
+            payload: components["schemas"]["OutboundChannelMismatchPayload"];
+            /** Format: int64 */
+            seq: number;
+            subject?: string;
+            /** Format: date-time */
+            ts: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "extmsg.outbound_channel_mismatch";
             workflow?: components["schemas"]["WorkflowEventProjection"];
         };
         /** TypedEventStreamEnvelope extmsg.unbound */
@@ -6270,6 +6314,24 @@ export interface components {
             type: "extmsg.outbound";
             workflow?: components["schemas"]["WorkflowEventProjection"];
         };
+        /** TypedTaggedEventStreamEnvelope extmsg.outbound_channel_mismatch */
+        TypedTaggedEventStreamEnvelopeExtmsgOutboundChannelMismatch: {
+            actor: string;
+            city: string;
+            message?: string;
+            payload: components["schemas"]["OutboundChannelMismatchPayload"];
+            /** Format: int64 */
+            seq: number;
+            subject?: string;
+            /** Format: date-time */
+            ts: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "extmsg.outbound_channel_mismatch";
+            workflow?: components["schemas"]["WorkflowEventProjection"];
+        };
         /** TypedTaggedEventStreamEnvelope extmsg.unbound */
         TypedTaggedEventStreamEnvelopeExtmsgUnbound: {
             actor: string;
@@ -7137,12 +7199,16 @@ export interface components {
             provider?: string;
             queued?: boolean;
             result: string;
+            /** @description Run-root identifier for rolling this operation up to a workflow/molecule/chat run (best-effort). */
+            run_id?: string;
             session_id?: string;
             session_name?: string;
             /** Format: date-time */
             started_at: string;
             template?: string;
             transport?: string;
+            /** @description True when tokens were observed but no price resolved (best-effort tri-state; absent = not evaluated). */
+            unpriced?: boolean;
         };
         WorkflowAttemptSummary: {
             /** Format: int64 */

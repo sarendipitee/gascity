@@ -1911,6 +1911,10 @@ Pass --preserve-existing to keep any pre-authored pack.toml, city.toml, or
 agent prompt files in the target directory (useful when bootstrapping a
 committed workspace — e.g. from a bootstrap.sh shipped in the repo).
 
+Use --beads-backend to configure the bead store backend. "dolt" uses the
+managed Dolt SQL server (default). "doltlite" uses embedded DoltLite
+databases with no server process.
+
 ```
 gc init [path] [flags]
 ```
@@ -1924,6 +1928,8 @@ gc init --default-provider codex ~/my-city
 gc init --template gastown --default-provider codex ~/my-city
 gc init --providers claude,codex --default-provider codex ~/my-city
 gc init --default-provider codex --bootstrap-profile k8s-cell /city
+gc init --beads-backend doltlite ~/my-city
+gc init --template gastown --beads-backend doltlite ~/my-city
 gc init --name my-city
 gc init --from ~/elan --name elan /city
 gc init --file ./my-city.toml ~/bright-lights
@@ -1932,6 +1938,7 @@ gc init --file city.toml --preserve-existing .
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--beads-backend` | string |  | bead store backend: "dolt" (managed Dolt server) or "doltlite" (embedded DoltLite); default: dolt |
 | `--bootstrap-profile` | string |  | bootstrap profile to apply for hosted/container defaults |
 | `--default-provider` | string |  | default readiness-aware provider to select from --providers |
 | `--file` | string |  | path to a TOML file to use as city.toml |
@@ -3579,7 +3586,6 @@ gc session new helper --no-attach
 | `--no-attach` | bool |  | create session without attaching |
 | `--title` | string |  | human-readable session title |
 | `--title-hint` | string |  | text to auto-generate a session title from |
-| `--wait-timeout` | duration | `2m0s` | max time to wait for the reconciler to start the session before attaching |
 
 ## gc session nudge
 
