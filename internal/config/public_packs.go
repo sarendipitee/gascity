@@ -30,7 +30,7 @@ const (
 
 	// PublicBeadsDoltlitePackVersion pins fresh DoltLite init output to the
 	// forked pack publication commit until beads-doltlite lands upstream.
-	PublicBeadsDoltlitePackVersion = "sha:b61c2201b9d073ea6a06a590ff728b932d2a108e"
+	PublicBeadsDoltlitePackVersion = "sha:ef68f743643aacf9cc261945540ce670abadc99a"
 
 	// BundledPackImportVersion pins the [imports.core]/[imports.bd] entries
 	// gc init writes for the gascity.git packs bundled with the binary.
