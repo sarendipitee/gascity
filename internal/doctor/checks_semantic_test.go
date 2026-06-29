@@ -492,6 +492,12 @@ func TestWorktreeDiskSizeCheck_OverErrorThreshold(t *testing.T) {
 		measureDir: fakeMeasure(map[string]int64{
 			rig: 100 * 1024 * 1024 * 1024, // 100 GB
 		}, nil),
+		measureFilesystem: func(string) (filesystemCapacity, error) {
+			return filesystemCapacity{
+				freeBytes:  10,
+				totalBytes: 100,
+			}, nil
+		},
 	}
 	r := c.Run(&CheckContext{CityPath: dir})
 	if r.Status != StatusError {
@@ -499,6 +505,68 @@ func TestWorktreeDiskSizeCheck_OverErrorThreshold(t *testing.T) {
 	}
 	if !strings.Contains(r.Details[0], "error threshold") {
 		t.Errorf("details should mention error threshold; got %q", r.Details[0])
+	}
+}
+
+func TestWorktreeDiskSizeCheck_OverErrorThresholdLowFilesystemPressureIsAdvisory(t *testing.T) {
+	dir := t.TempDir()
+	rig := filepath.Join(dir, ".gc", "worktrees", "huge")
+	if err := os.MkdirAll(rig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &WorktreeDiskSizeCheck{
+		cfg: config.DoctorConfig{WorktreeRigWarnSize: "5GB", WorktreeRigErrorSize: "20GB"},
+		measureDir: fakeMeasure(map[string]int64{
+			rig: 100 * 1024 * 1024 * 1024,
+		}, nil),
+		measureFilesystem: func(string) (filesystemCapacity, error) {
+			return filesystemCapacity{
+				freeBytes:  33,
+				totalBytes: 100,
+			}, nil
+		},
+	}
+	r := c.Run(&CheckContext{CityPath: dir})
+	if r.Status != StatusWarning {
+		t.Fatalf("status = %d, want Warning; msg=%s details=%v", r.Status, r.Message, r.Details)
+	}
+	if r.Severity != SeverityAdvisory {
+		t.Fatalf("severity = %d, want SeverityAdvisory", r.Severity)
+	}
+	if !strings.Contains(r.Message, "filesystem pressure is low") {
+		t.Fatalf("message = %q, want low-pressure advisory wording", r.Message)
+	}
+	if !strings.Contains(r.Details[0], "67.0% used") {
+		t.Fatalf("details = %v, want filesystem usage context", r.Details)
+	}
+}
+
+func TestWorktreeDiskSizeCheck_OverWarnThresholdLowFilesystemPressureIsAdvisory(t *testing.T) {
+	dir := t.TempDir()
+	rig := filepath.Join(dir, ".gc", "worktrees", "rig-a")
+	if err := os.MkdirAll(rig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &WorktreeDiskSizeCheck{
+		cfg: config.DoctorConfig{WorktreeRigWarnSize: "5GB", WorktreeRigErrorSize: "50GB"},
+		measureDir: fakeMeasure(map[string]int64{
+			rig: 8 * 1024 * 1024 * 1024,
+		}, nil),
+		measureFilesystem: func(string) (filesystemCapacity, error) {
+			return filesystemCapacity{
+				freeBytes:  40,
+				totalBytes: 100,
+			}, nil
+		},
+	}
+	r := c.Run(&CheckContext{CityPath: dir})
+	if r.Status != StatusWarning {
+		t.Fatalf("status = %d, want Warning; msg=%s details=%v", r.Status, r.Message, r.Details)
+	}
+	if r.Severity != SeverityAdvisory {
+		t.Fatalf("severity = %d, want SeverityAdvisory", r.Severity)
 	}
 }
 

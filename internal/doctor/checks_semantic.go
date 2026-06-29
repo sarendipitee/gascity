@@ -200,6 +200,13 @@ type rigSize struct {
 	bytes int64
 }
 
+const worktreeDiskPressureAlertUsedPct = 85.0
+
+type filesystemCapacity struct {
+	freeBytes  int64
+	totalBytes int64
+}
+
 // WorktreeDiskSizeCheck warns when a per-rig footprint under
 // .gc/worktrees/<rig>/ exceeds the configured threshold. Build
 // artifacts, nested task worktrees, and accumulated state can grow
@@ -209,6 +216,9 @@ type WorktreeDiskSizeCheck struct {
 	// measureDir is injectable so tests can avoid shelling out to du.
 	// Production uses duDirBytes from checks.go.
 	measureDir func(string) (int64, bool, error)
+	// measureFilesystem is injectable so tests can control the pressure gate.
+	// Production uses worktreeFilesystemCapacity.
+	measureFilesystem func(string) (filesystemCapacity, error)
 }
 
 // NewWorktreeDiskSizeCheck creates a worktree disk-footprint check.
@@ -225,7 +235,7 @@ func NewWorktreeDiskSizeCheck(cfg config.DoctorConfig) *WorktreeDiskSizeCheck {
 		}
 		return n, ok, nil
 	}
-	return &WorktreeDiskSizeCheck{cfg: cfg, measureDir: measure}
+	return &WorktreeDiskSizeCheck{cfg: cfg, measureDir: measure, measureFilesystem: worktreeFilesystemCapacity}
 }
 
 // Name returns the check identifier.
@@ -291,6 +301,17 @@ func (c *WorktreeDiskSizeCheck) Run(ctx *CheckContext) *CheckResult {
 
 	warn := c.cfg.WorktreeRigWarnBytes()
 	errBytes := c.cfg.WorktreeRigErrorBytes()
+	measureFilesystem := c.measureFilesystem
+	if measureFilesystem == nil {
+		measureFilesystem = worktreeFilesystemCapacity
+	}
+	fsCap, fsCapErr := measureFilesystem(wtRoot)
+	fsPressureLow := false
+	fsUsedPct := 0.0
+	if fsCapErr == nil && fsCap.totalBytes > 0 {
+		fsUsedPct = filesystemUsedPct(fsCap)
+		fsPressureLow = fsUsedPct < worktreeDiskPressureAlertUsedPct
+	}
 
 	var details []string
 	var overThreshold int
@@ -298,15 +319,29 @@ func (c *WorktreeDiskSizeCheck) Run(ctx *CheckContext) *CheckResult {
 	for _, s := range sizes {
 		switch {
 		case s.bytes >= errBytes:
-			details = append(details, fmt.Sprintf("rig %q: %s (exceeds %s error threshold)",
-				s.name, humanSize(s.bytes), humanSize(errBytes)))
+			detail := fmt.Sprintf("rig %q: %s (exceeds %s error threshold)",
+				s.name, humanSize(s.bytes), humanSize(errBytes))
+			if fsPressureLow {
+				detail += fmt.Sprintf("; advisory only because filesystem pressure is low at %.1f%% used (< %.1f%% alert threshold)",
+					fsUsedPct, worktreeDiskPressureAlertUsedPct)
+			}
+			details = append(details, detail)
 			overThreshold++
-			if status < StatusError {
+			if fsPressureLow {
+				if status < StatusWarning {
+					status = StatusWarning
+				}
+			} else if status < StatusError {
 				status = StatusError
 			}
 		case s.bytes >= warn:
-			details = append(details, fmt.Sprintf("rig %q: %s (exceeds %s warn threshold)",
-				s.name, humanSize(s.bytes), humanSize(warn)))
+			detail := fmt.Sprintf("rig %q: %s (exceeds %s warn threshold)",
+				s.name, humanSize(s.bytes), humanSize(warn))
+			if fsPressureLow {
+				detail += fmt.Sprintf("; advisory because filesystem pressure is low at %.1f%% used (< %.1f%% alert threshold)",
+					fsUsedPct, worktreeDiskPressureAlertUsedPct)
+			}
+			details = append(details, detail)
 			overThreshold++
 			if status < StatusWarning {
 				status = StatusWarning
@@ -321,6 +356,10 @@ func (c *WorktreeDiskSizeCheck) Run(ctx *CheckContext) *CheckResult {
 	}
 
 	r.Status = status
+	advisoryThreshold := fsPressureLow && overThreshold > 0
+	if advisoryThreshold {
+		r.Severity = SeverityAdvisory
+	}
 	switch status {
 	case StatusError:
 		r.Message = fmt.Sprintf("%d rig(s) over worktree size threshold (largest: %q at %s)",
@@ -328,11 +367,16 @@ func (c *WorktreeDiskSizeCheck) Run(ctx *CheckContext) *CheckResult {
 		r.Details = details
 		r.FixHint = "investigate .gc/worktrees/<rig>/ for build-artifact accumulation; consider routing builds out of worktrees, periodic clean steps, or running `gc doctor --fix` to remove safely-prunable nested worktrees"
 	case StatusWarning:
-		if overThreshold > 0 {
+		switch {
+		case advisoryThreshold:
+			r.Message = fmt.Sprintf("%d rig(s) over worktree size threshold but filesystem pressure is low (largest: %q at %s; filesystem %.1f%% used)",
+				overThreshold, sizes[0].name, humanSize(sizes[0].bytes), fsUsedPct)
+			r.FixHint = "monitor .gc/worktrees/<rig>/ growth and clean up nested worktrees before the filesystem approaches capacity"
+		case overThreshold > 0:
 			r.Message = fmt.Sprintf("%d rig(s) approaching worktree size limit (largest: %q at %s)",
 				overThreshold, sizes[0].name, humanSize(sizes[0].bytes))
 			r.FixHint = "see fix hint for nested-worktree-prune; tune [doctor].worktree_rig_warn_size if 10 GB is too tight for this install"
-		} else {
+		default:
 			r.Message = fmt.Sprintf("could not measure %d rig worktree path(s) (largest measured: %q at %s)",
 				len(measureErrs), sizes[0].name, humanSize(sizes[0].bytes))
 			r.FixHint = "check filesystem permissions on .gc/worktrees/<rig>/"
@@ -353,6 +397,17 @@ func (c *WorktreeDiskSizeCheck) CanFix() bool { return false }
 
 // Fix is a no-op; see CanFix.
 func (c *WorktreeDiskSizeCheck) Fix(_ *CheckContext) error { return nil }
+
+func filesystemUsedPct(fsCap filesystemCapacity) float64 {
+	if fsCap.totalBytes <= 0 {
+		return 0
+	}
+	used := fsCap.totalBytes - fsCap.freeBytes
+	if used < 0 {
+		used = 0
+	}
+	return (float64(used) / float64(fsCap.totalBytes)) * 100
+}
 
 // --- Nested-worktree prune check ---
 
