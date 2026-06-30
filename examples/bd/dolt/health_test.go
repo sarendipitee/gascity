@@ -1625,3 +1625,61 @@ func TestHealthScriptJSONAlwaysExitsZero(t *testing.T) {
 		t.Errorf("JSON payload missing expected `\"reachable\": false`; got:\n%s", out)
 	}
 }
+
+func TestHealthScriptDoltliteSkipsRuntimePortResolution(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"),
+		[]byte(`{"database":"doltlite","backend":"doltlite","dolt_database":"hq"}`), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	root := repoRoot(t)
+	script := filepath.Join(root, healthScript)
+	cmd := exec.Command("sh", script, "--json")
+	cmd.Env = append(filteredEnv(
+		"GC_DOLT_HOST",
+		"GC_DOLT_PORT",
+		"GC_DOLT_USER",
+		"GC_DOLT_PASSWORD",
+		"GC_BEADS_BACKEND",
+	),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN=1",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health.sh --json failed for doltlite backend: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "cannot resolve runtime port") {
+		t.Fatalf("health.sh --json tried to resolve runtime port for doltlite backend:\n%s", out)
+	}
+
+	var report struct {
+		Server struct {
+			Required  bool `json:"required"`
+			Reachable bool `json:"reachable"`
+			Running   bool `json:"running"`
+			Port      int  `json:"port"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("parse health JSON: %v\n%s", err, out)
+	}
+	if report.Server.Required {
+		t.Fatalf("server.required = true, want false for doltlite backend\n%s", out)
+	}
+	if !report.Server.Reachable {
+		t.Fatalf("server.reachable = false, want true for doltlite backend\n%s", out)
+	}
+	if report.Server.Running {
+		t.Fatalf("server.running = true, want false for doltlite backend\n%s", out)
+	}
+	if report.Server.Port != 0 {
+		t.Fatalf("server.port = %d, want 0 for doltlite backend\n%s", report.Server.Port, out)
+	}
+}
