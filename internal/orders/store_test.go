@@ -3,6 +3,7 @@ package orders
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/beadstest"
@@ -228,5 +229,44 @@ func TestRecentRunsReadsHistory(t *testing.T) {
 		if r.Scoped != "rig/agent" || r.CreatedAt.IsZero() {
 			t.Errorf("run = %+v, want scoped rig/agent with cooldown clock", r)
 		}
+	}
+}
+
+type orderRunListerStub struct {
+	beads.Store
+	called bool
+	rows   []beads.Bead
+}
+
+func (s *orderRunListerStub) ListOrderRunBeads(_ string, _ int) ([]beads.Bead, error) {
+	s.called = true
+	return s.rows, nil
+}
+
+func TestRecentRunsPrefersSpecializedOrderRunReader(t *testing.T) {
+	now := time.Date(2026, 6, 30, 14, 0, 0, 0, time.UTC)
+	store := &orderRunListerStub{
+		Store: beads.NewMemStore(),
+		rows: []beads.Bead{
+			{ID: "gc-2", Status: "open", CreatedAt: now},
+			{ID: "gc-1", Status: "closed", CreatedAt: now.Add(-time.Minute)},
+		},
+	}
+
+	runs, err := NewStore(beads.OrdersStore{Store: store}).RecentRuns("rig/agent", 2)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+	if !store.called {
+		t.Fatal("RecentRuns did not use specialized order-run reader")
+	}
+	if len(runs) != 2 {
+		t.Fatalf("RecentRuns = %d entries, want 2", len(runs))
+	}
+	if runs[0].ID != "gc-2" || !runs[0].Open {
+		t.Fatalf("runs[0] = %+v, want open gc-2", runs[0])
+	}
+	if runs[1].ID != "gc-1" || runs[1].Open {
+		t.Fatalf("runs[1] = %+v, want closed gc-1", runs[1])
 	}
 }

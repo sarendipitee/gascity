@@ -169,6 +169,16 @@ func (c *CachingStore) CachedList(query ListQuery) ([]Bead, bool) {
 	return cached, true
 }
 
+// ListOrderRunBeads forwards specialized order-run history reads to the backing
+// store when that optimized path is available.
+func (c *CachingStore) ListOrderRunBeads(scoped string, limit int) ([]Bead, error) {
+	reader, ok := c.backing.(OrderRunBeadLister)
+	if !ok {
+		return nil, fmt.Errorf("listing order run beads: backing store: %w", ErrCountUnsupported)
+	}
+	return reader.ListOrderRunBeads(scoped, limit)
+}
+
 func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, items []Bead) []Bead {
 	refreshedParents := make(map[string]Bead)
 	removedParents := make(map[string]struct{})

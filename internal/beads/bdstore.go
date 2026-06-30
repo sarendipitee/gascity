@@ -2333,6 +2333,71 @@ func (s *BdStore) listBothTiers(query ListQuery) ([]Bead, error) {
 	return mergeListTierResults(query, "bd list both tiers", listResult, listErr, ephemeralResult, ephemeralErr)
 }
 
+// ListOrderRunBeads returns order-tracking beads for one scoped order newest-first
+// without routing through bd list's count-heavy JSON hydration.
+func (s *BdStore) ListOrderRunBeads(scoped string, limit int) ([]Bead, error) {
+	label := "order-run:" + strings.TrimSpace(scoped)
+	if label == "order-run:" {
+		return nil, nil
+	}
+	query := bdOrderRunBeadsSQL(label, limit, true)
+	out, err := s.runBDTransientRead("sql", "--json", query)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "wisps") {
+		out, err = s.runBDTransientRead("sql", "--json", bdOrderRunBeadsSQL(label, limit, false))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("bd order runs: %w", err)
+	}
+	var rows []struct {
+		ID        string `json:"id"`
+		CreatedAt string `json:"created_at"`
+		Status    string `json:"status"`
+	}
+	if err := json.Unmarshal(extractJSON(out), &rows); err != nil {
+		return nil, fmt.Errorf("bd order runs: parsing SQL result: %w", err)
+	}
+	result := make([]Bead, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, Bead{
+			ID:        row.ID,
+			Status:    mapBdStatus(row.Status),
+			CreatedAt: parseBDSQLTime(row.CreatedAt).Truncate(time.Second),
+		})
+	}
+	return result, nil
+}
+
+func bdOrderRunBeadsSQL(label string, limit int, includeWisps bool) string {
+	parts := []string{
+		"SELECT i.id, i.created_at, i.status FROM issues i",
+		"JOIN labels l ON l.issue_id = i.id",
+		"WHERE l.label = " + bdSQLStringLiteral(label),
+	}
+	if includeWisps {
+		parts = append(parts,
+			"UNION ALL",
+			"SELECT w.id, w.created_at, w.status FROM wisps w",
+			"JOIN wisp_labels wl ON wl.issue_id = w.id",
+			"WHERE wl.label = "+bdSQLStringLiteral(label),
+		)
+	}
+	sqlText := "SELECT id, created_at, status FROM (" + strings.Join(parts, " ") + ") order_runs ORDER BY created_at DESC"
+	if limit > 0 {
+		sqlText += " LIMIT " + strconv.Itoa(limit)
+	}
+	return sqlText
+}
+
+func parseBDSQLTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
 func mergeListTierResults(query ListQuery, op string, primary []Bead, primaryErr error, ephemeral []Bead, ephemeralErr error) ([]Bead, error) {
 	if primaryErr != nil && ephemeralErr != nil {
 		return nil, errors.Join(primaryErr, ephemeralErr)

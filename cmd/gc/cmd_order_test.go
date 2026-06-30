@@ -2830,10 +2830,10 @@ dolt.auto-start: false
 func TestOrderHistory(t *testing.T) {
 	store := beads.NewBdStore(t.TempDir(), func(_, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "--label=order-run:digest") {
+		if strings.Contains(joined, "order-run:digest") {
 			return []byte(`[{"id":"WP-42","title":"digest wisp","status":"closed","issue_type":"task","created_at":"2026-02-27T10:00:00Z","labels":["order-run:digest"]}]`), nil
 		}
-		if strings.Contains(joined, "--label=order-run:cleanup") {
+		if strings.Contains(joined, "order-run:cleanup") {
 			return []byte(`[{"id":"WP-99","title":"cleanup wisp","status":"open","issue_type":"task","created_at":"2026-02-27T11:00:00Z","labels":["order-run:cleanup"]}]`), nil
 		}
 		return []byte(`[]`), nil
@@ -2874,7 +2874,7 @@ func TestOrderHistory(t *testing.T) {
 
 func TestOrderHistoryJSON(t *testing.T) {
 	store := beads.NewBdStore(t.TempDir(), func(_, _ string, args ...string) ([]byte, error) {
-		if strings.Contains(strings.Join(args, " "), "--label=order-run:digest") {
+		if strings.Contains(strings.Join(args, " "), "order-run:digest") {
 			return []byte(`[{"id":"WP-42","title":"digest wisp","status":"closed","issue_type":"task","created_at":"2026-02-27T10:00:00Z","labels":["order-run:digest"]}]`), nil
 		}
 		return []byte(`[]`), nil
@@ -2908,7 +2908,7 @@ func TestOrderHistoryJSON(t *testing.T) {
 func TestOrderHistoryNamed(t *testing.T) {
 	store := beads.NewBdStore(t.TempDir(), func(_, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "--label=order-run:digest") {
+		if strings.Contains(joined, "order-run:digest") {
 			return []byte(`[{"id":"WP-42","title":"digest wisp","status":"closed","issue_type":"task","created_at":"2026-02-27T10:00:00Z","labels":["order-run:digest"]}]`), nil
 		}
 		return []byte(`[]`), nil

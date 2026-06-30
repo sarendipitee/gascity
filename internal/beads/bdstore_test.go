@@ -219,6 +219,42 @@ func TestBdStoreCreateError(t *testing.T) {
 	}
 }
 
+func TestBdStoreListOrderRunBeadsUsesSQL(t *testing.T) {
+	var gotArgs []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		if name != "bd" {
+			t.Fatalf("name = %q, want bd", name)
+		}
+		gotArgs = append([]string(nil), args...)
+		return []byte(`[
+			{"id":"gc-2","created_at":"2026-06-30T14:00:00Z","status":"open"},
+			{"id":"gc-1","created_at":"2026-06-30T13:59:00Z","status":"closed"}
+		]`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	rows, err := s.ListOrderRunBeads("rig/agent", 2)
+	if err != nil {
+		t.Fatalf("ListOrderRunBeads: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0].ID != "gc-2" || rows[0].Status != "open" {
+		t.Fatalf("rows[0] = %+v, want open gc-2", rows[0])
+	}
+	if rows[1].ID != "gc-1" || rows[1].Status != "closed" {
+		t.Fatalf("rows[1] = %+v, want closed gc-1", rows[1])
+	}
+	got := strings.Join(gotArgs, " ")
+	if !strings.HasPrefix(got, "sql --json ") {
+		t.Fatalf("args = %q, want bd sql --json", got)
+	}
+	if !strings.Contains(got, "order-run:rig/agent") || !strings.Contains(got, "LIMIT 2") {
+		t.Fatalf("args = %q, want label filter and limit", got)
+	}
+}
+
 func TestBdStoreCreateBadJSON(t *testing.T) {
 	runner := func(_, _ string, _ ...string) ([]byte, error) {
 		return []byte(`{not json`), nil

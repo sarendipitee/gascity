@@ -1,6 +1,7 @@
 package orders
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -134,6 +135,10 @@ type Store struct {
 	store beads.OrdersStore
 }
 
+type orderRunBeadLister interface {
+	ListOrderRunBeads(scoped string, limit int) ([]beads.Bead, error)
+}
+
 // NewStore wraps a strongly-typed orders-class store as the order front door.
 func NewStore(store beads.OrdersStore) *Store {
 	return &Store{store: store}
@@ -255,6 +260,15 @@ func (s *Store) CreateRunClosed(scoped string, outcome RunOutcome, cursor *Event
 func (s *Store) RecentRuns(scoped string, limit int) ([]OrderRun, error) {
 	if s.store.Store == nil {
 		return nil, nil
+	}
+	if reader, ok := s.store.Store.(orderRunBeadLister); ok {
+		beadsList, err := reader.ListOrderRunBeads(scoped, limit)
+		if err != nil && !errors.Is(err, beads.ErrCountUnsupported) {
+			return decodeRuns(scoped, beadsList), err
+		}
+		if err == nil {
+			return decodeRuns(scoped, beadsList), nil
+		}
 	}
 	beadsList, err := s.store.List(beads.ListQuery{
 		Label:         labelOrderRunPrefix + scoped,
