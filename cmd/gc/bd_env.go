@@ -1090,6 +1090,7 @@ func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) 
 		if env == nil {
 			env = map[string]string{}
 		}
+		adjustBdReadEnvForDoltlite(cityPath, dir, name, args, env)
 		ensureProjectedDoltEnvExplicit(env)
 		ensureProjectedPostgresEnvExplicit(env)
 		runner := beadsExecCommandRunnerWithEnv(env)
@@ -1124,11 +1125,25 @@ func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) 
 		if retryEnvErr != nil {
 			return nil, retryEnvErr
 		}
+		adjustBdReadEnvForDoltlite(cityPath, dir, name, args, retryEnv)
 		ensureProjectedDoltEnvExplicit(retryEnv)
 		ensureProjectedPostgresEnvExplicit(retryEnv)
 		retryRunner := beadsExecCommandRunnerWithEnv(retryEnv)
 		return retryRunner(dir, name, args...)
 	}
+}
+
+func adjustBdReadEnvForDoltlite(cityPath, dir, name string, args []string, env map[string]string) {
+	if name != "bd" || len(args) == 0 || args[0] != "list" {
+		return
+	}
+	if !scopeBackendIsDoltlite(cityPath, dir) {
+		return
+	}
+	// Doltlite-backed `bd list` resolves correctly from the scope cwd alone.
+	// Pinning BEADS_DIR here routes through a count/scan path that crashes on
+	// rows whose compaction_level is NULL (gc-7kj / hq-qyoexw).
+	delete(env, "BEADS_DIR")
 }
 
 func applyResolvedCityDoltEnv(env map[string]string, cityPath string, allowRecovery bool) error {
