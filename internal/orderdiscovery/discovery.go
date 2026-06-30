@@ -3,8 +3,10 @@ package orderdiscovery
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
@@ -122,7 +124,47 @@ func ScanAll(cityPath string, cfg *config.City, opts ScanOptions) ([]orders.Orde
 	if err != nil {
 		return nil, err
 	}
+	allOrders = filterUnsupportedOrders(cfg, allOrders)
 	return allOrders, nil
+}
+
+func filterUnsupportedOrders(cfg *config.City, allOrders []orders.Order) []orders.Order {
+	if cityUsesManagedDoltLifecycle(cfg) {
+		return allOrders
+	}
+
+	filtered := allOrders[:0]
+	for _, order := range allOrders {
+		if isManagedDoltPackOrder(order) {
+			continue
+		}
+		filtered = append(filtered, order)
+	}
+	return filtered
+}
+
+func cityUsesManagedDoltLifecycle(cfg *config.City) bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND")), "doltlite") {
+		return false
+	}
+	backend := "dolt"
+	if cfg != nil && strings.TrimSpace(cfg.Beads.Backend) != "" {
+		backend = cfg.Beads.Backend
+	}
+	return !strings.EqualFold(strings.TrimSpace(backend), "doltlite")
+}
+
+func isManagedDoltPackOrder(order orders.Order) bool {
+	source := filepath.ToSlash(filepath.Clean(order.Source))
+	for _, suffix := range []string{
+		"/examples/bd/dolt/orders/",
+		"/examples/dolt/orders/",
+	} {
+		if strings.Contains(source, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateOrders(allOrders []orders.Order, extraValidate OrderValidator, onError ValidateErrorHandler) ([]orders.Order, error) {
