@@ -2126,6 +2126,60 @@ func TestBdCommandRunnerForCityPinsCityStoreEnv(t *testing.T) {
 	}
 }
 
+func TestBdCommandRunnerForCityDropsBeadsDirForDoltliteBdList(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "metadata.json"), []byte(`{"backend":"doltlite","database":"doltlite","dolt_database":"hq"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "config.yaml"), []byte(`issue_prefix: city
+gc.endpoint_origin: managed_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origRunner := beadsExecCommandRunnerWithEnv
+	t.Cleanup(func() { beadsExecCommandRunnerWithEnv = origRunner })
+
+	var captured map[string]string
+	beadsExecCommandRunnerWithEnv = func(env map[string]string) beads.CommandRunner {
+		captured = map[string]string{}
+		for key, value := range env {
+			captured[key] = value
+		}
+		return func(_ string, _ string, _ ...string) ([]byte, error) {
+			return []byte("[]"), nil
+		}
+	}
+
+	runner := bdCommandRunnerForCity(cityDir)
+	if _, err := runner(cityDir, "bd", "list", "--json"); err != nil {
+		t.Fatalf("runner err = %v, want nil", err)
+	}
+	if _, ok := captured["BEADS_DIR"]; ok {
+		t.Fatalf("BEADS_DIR present for doltlite bd list: %#v", captured)
+	}
+
+	if _, err := runner(cityDir, "bd", "show", "--json", "gc-1"); err != nil {
+		t.Fatalf("runner show err = %v, want nil", err)
+	}
+	if got := captured["BEADS_DIR"]; got != filepath.Join(cityDir, ".beads") {
+		t.Fatalf("BEADS_DIR for non-list = %q, want %q", got, filepath.Join(cityDir, ".beads"))
+	}
+}
+
 func TestBdCommandRunnerForCityClearsAmbientDoltEnvWhenManagedRuntimeUnavailable(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("GC_DOLT_HOST", "ambient.invalid")
