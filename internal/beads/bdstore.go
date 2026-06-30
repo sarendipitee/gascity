@@ -2095,6 +2095,9 @@ func (s *BdStore) List(query ListQuery) ([]Bead, error) {
 	if !query.HasFilter() && !query.AllowScan {
 		return nil, fmt.Errorf("bd list: %w", ErrQueryRequiresScan)
 	}
+	if useBDOrderRunHistorySQL(query) {
+		return s.listOrderRunHistoryViaSQL(query)
+	}
 
 	switch query.TierMode {
 	case TierWisps:
@@ -2103,6 +2106,99 @@ func (s *BdStore) List(query ListQuery) ([]Bead, error) {
 		return s.listBothTiers(query)
 	}
 	return s.listViaBDList(query)
+}
+
+type bdOrderRunHistoryRow struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	IssueType string `json:"issue_type"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Assignee  string `json:"assignee"`
+}
+
+func useBDOrderRunHistorySQL(query ListQuery) bool {
+	if !strings.HasPrefix(query.Label, "order-run:") {
+		return false
+	}
+	if !query.IncludeClosed {
+		return false
+	}
+	if query.TierMode != TierBoth && query.TierMode != TierIssues {
+		return false
+	}
+	return query.Assignee == "" &&
+		len(query.Assignees) == 0 &&
+		query.Status == "" &&
+		query.Type == "" &&
+		query.ParentID == "" &&
+		len(query.Metadata) == 0 &&
+		query.UpdatedBefore.IsZero()
+}
+
+func (s *BdStore) listOrderRunHistoryViaSQL(query ListQuery) ([]Bead, error) {
+	sqlText := bdOrderRunHistorySQL(query)
+	out, err := s.runBDTransientRead("sql", "--json", sqlText)
+	if err != nil {
+		return nil, fmt.Errorf("bd sql order-run history: %w", err)
+	}
+	var rows []bdOrderRunHistoryRow
+	if err := json.Unmarshal(extractJSON(out), &rows); err != nil {
+		return nil, fmt.Errorf("bd sql order-run history: parsing JSON: %w", err)
+	}
+	beads := make([]Bead, 0, len(rows))
+	for _, row := range rows {
+		createdAt := bdParseTimeString(row.CreatedAt)
+		updatedAt := bdParseTimeString(row.UpdatedAt)
+		beads = append(beads, Bead{
+			ID:        row.ID,
+			Title:     row.Title,
+			Status:    mapBdStatus(row.Status),
+			Type:      row.IssueType,
+			CreatedAt: createdAt.Truncate(time.Second),
+			UpdatedAt: updatedAt.Truncate(time.Second),
+			Assignee:  row.Assignee,
+			Labels:    []string{query.Label},
+		})
+	}
+	return applyListQuery(beads, query), nil
+}
+
+func bdOrderRunHistorySQL(query ListQuery) string {
+	label := bdSQLStringLiteral(query.Label)
+	where := " WHERE l.label = " + label
+	if !query.CreatedBefore.IsZero() {
+		cutoff := bdSQLStringLiteral(query.CreatedBefore.Format(time.RFC3339Nano))
+		where += " AND i.created_at < " + cutoff
+	}
+	issuesQuery := "SELECT i.id, COALESCE(i.title, '') AS title, COALESCE(i.status, '') AS status, COALESCE(i.issue_type, '') AS issue_type, " +
+		"COALESCE(i.created_at, '') AS created_at, COALESCE(i.updated_at, '') AS updated_at, COALESCE(i.assignee, '') AS assignee " +
+		"FROM issues i JOIN labels l ON l.issue_id = i.id" + where
+	if query.TierMode == TierIssues {
+		return issuesQuery + " ORDER BY created_at DESC, id DESC"
+	}
+	wispWhere := strings.Replace(where, "i.", "w.", 1)
+	wispsQuery := "SELECT w.id, COALESCE(w.title, '') AS title, COALESCE(w.status, '') AS status, COALESCE(w.issue_type, '') AS issue_type, " +
+		"COALESCE(w.created_at, '') AS created_at, COALESCE(w.updated_at, '') AS updated_at, COALESCE(w.assignee, '') AS assignee " +
+		"FROM wisps w JOIN wisp_labels l ON l.issue_id = w.id" + wispWhere
+	return issuesQuery + " UNION ALL " + wispsQuery + " ORDER BY created_at DESC, id DESC"
+}
+
+func bdParseTimeString(s string) time.Time {
+	s = strings.TrimSpace(s)
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func (s *BdStore) listViaBDList(query ListQuery) ([]Bead, error) {

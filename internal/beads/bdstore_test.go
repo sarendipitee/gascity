@@ -3446,16 +3446,62 @@ func TestBdStoreListByLabel(t *testing.T) {
 	}
 }
 
+func TestBdStoreListOrderRunHistoryUsesSQL(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return []byte(`[
+  {
+    "id": "bd-aaa",
+    "title": "digest run",
+    "status": "closed",
+    "issue_type": "task",
+    "created_at": "2026-02-27T10:00:00Z",
+    "updated_at": "2026-02-27T10:05:00Z",
+    "assignee": ""
+  }
+]`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	got, err := s.List(beads.ListQuery{
+		Label:         "order-run:digest",
+		IncludeClosed: true,
+		Sort:          beads.SortCreatedDesc,
+		TierMode:      beads.TierBoth,
+	})
+	if err != nil {
+		t.Fatalf("List(order-run history): %v", err)
+	}
+	if gotName != "bd" {
+		t.Fatalf("runner name = %q, want bd", gotName)
+	}
+	if len(gotArgs) != 3 || gotArgs[0] != "sql" || gotArgs[1] != "--json" {
+		t.Fatalf("args = %q, want bd sql --json <query>", gotArgs)
+	}
+	if !strings.Contains(gotArgs[2], "FROM issues") || !strings.Contains(gotArgs[2], "FROM wisps") {
+		t.Fatalf("SQL query = %q, want issues/wisps union", gotArgs[2])
+	}
+	if len(got) != 1 || got[0].ID != "bd-aaa" {
+		t.Fatalf("List(order-run history) = %+v, want bd-aaa", got)
+	}
+	if got[0].CreatedAt.Format(time.RFC3339) != "2026-02-27T10:00:00Z" {
+		t.Fatalf("CreatedAt = %s, want 2026-02-27T10:00:00Z", got[0].CreatedAt.Format(time.RFC3339))
+	}
+}
+
 func TestBdStoreListCreatedBeforeForwardsFilter(t *testing.T) {
 	before := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
-	wantCmd := `bd list --json --label=order-run:digest --all --created-before ` +
-		before.Format(time.RFC3339Nano) + ` --include-infra --include-gates --limit 0`
+	wantCmd := `bd sql --json SELECT i.id, COALESCE(i.title, '') AS title, COALESCE(i.status, '') AS status, COALESCE(i.issue_type, '') AS issue_type, COALESCE(i.created_at, '') AS created_at, COALESCE(i.updated_at, '') AS updated_at, COALESCE(i.assignee, '') AS assignee FROM issues i JOIN labels l ON l.issue_id = i.id WHERE l.label = 'order-run:digest' AND i.created_at < '` +
+		before.Format(time.RFC3339Nano) + `' ORDER BY created_at DESC, id DESC`
 	runner := fakeRunner(map[string]struct {
 		out []byte
 		err error
 	}{
 		wantCmd: {
-			out: []byte(`[{"id":"bd-old","title":"digest wisp","status":"closed","issue_type":"task","created_at":"2026-04-20T11:59:00Z","labels":["order-run:digest"]}]`),
+			out: []byte(`[{"id":"bd-old","title":"digest wisp","status":"closed","issue_type":"task","created_at":"2026-04-20T11:59:00Z","updated_at":"2026-04-20T11:59:00Z","assignee":""}]`),
 		},
 	})
 	s := beads.NewBdStore("/city", runner)
@@ -3542,8 +3588,8 @@ func TestBdStoreListByLabelIncludeClosedAddsAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := strings.Join(gotArgs, " ")
-	if !strings.Contains(args, "--all") {
-		t.Fatalf("args = %q, want --all when IncludeClosed is set", args)
+	if !strings.HasPrefix(args, "sql --json ") {
+		t.Fatalf("args = %q, want bd sql path for closed order-run history", args)
 	}
 }
 
@@ -4176,21 +4222,12 @@ func TestBdStoreListBothTiersAppliesCreatedBeforeBeforeMergedLimit(t *testing.T)
 	runner := func(_, name string, args ...string) ([]byte, error) {
 		full := name + " " + strings.Join(args, " ")
 		calls = append(calls, full)
-		if strings.Contains(full, "--include-ephemeral") {
-			t.Fatalf("bd list command = %q, --include-ephemeral is only valid for bd ready", full)
-		}
-		if strings.HasPrefix(full, "bd query ") {
-			return []byte(`[]`), nil
-		}
-		if !strings.HasPrefix(full, "bd list ") {
+		if !strings.HasPrefix(full, "bd sql ") {
 			return nil, fmt.Errorf("unexpected: %s", full)
 		}
-		if !strings.Contains(full, "--limit 0") {
-			return []byte(`[{"id":"bd-new","title":"newer","status":"closed","issue_type":"task","created_at":"2026-05-03T00:00:00Z","ephemeral":true,"labels":["order-run:o"]}]`), nil
-		}
 		return []byte(`[
-			{"id":"bd-new","title":"newer","status":"closed","issue_type":"task","created_at":"2026-05-03T00:00:00Z","ephemeral":true,"labels":["order-run:o"]},
-			{"id":"bd-old","title":"older","status":"closed","issue_type":"task","created_at":"2026-05-01T00:00:00Z","ephemeral":true,"labels":["order-run:o"]}
+			{"id":"bd-new","title":"newer","status":"closed","issue_type":"task","created_at":"2026-05-03T00:00:00Z","updated_at":"2026-05-03T00:00:00Z","assignee":""},
+			{"id":"bd-old","title":"older","status":"closed","issue_type":"task","created_at":"2026-05-01T00:00:00Z","updated_at":"2026-05-01T00:00:00Z","assignee":""}
 		]`), nil
 	}
 	s := beads.NewBdStore("/city", runner)
@@ -4205,9 +4242,9 @@ func TestBdStoreListBothTiersAppliesCreatedBeforeBeforeMergedLimit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	queryCmd := firstCommandWithPrefix(calls, "bd list ")
-	if !strings.Contains(queryCmd, "--limit 0") {
-		t.Fatalf("bd list query = %q, want unlimited --limit 0 before CreatedBefore client filtering", queryCmd)
+	queryCmd := firstCommandWithPrefix(calls, "bd sql ")
+	if !strings.Contains(queryCmd, "wisp_labels") || !strings.Contains(queryCmd, "created_at < '2026-05-02T00:00:00Z'") {
+		t.Fatalf("bd sql query = %q, want both tiers with created-before filter", queryCmd)
 	}
 	if len(got) != 1 || got[0].ID != "bd-old" {
 		t.Fatalf("got = %+v, want only older wisp after CreatedBefore then Limit", got)
