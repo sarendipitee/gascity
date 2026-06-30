@@ -7440,7 +7440,7 @@ func TestGcBeadsBdInitDoltliteInitializesDelegatedBdWrites(t *testing.T) {
 	}
 }
 
-func TestGcBeadsBdStartDoltliteDoesNotStartManagedDolt(t *testing.T) {
+func TestGcBeadsDoltliteBdStartDoesNotStartManagedDolt(t *testing.T) {
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -7449,7 +7449,7 @@ func TestGcBeadsBdStartDoltliteDoesNotStartManagedDolt(t *testing.T) {
 		t.Fatal(err)
 	}
 	materializeBuiltinPacksForTest(t, cityPath)
-	script := gcBeadsBdScriptPath(cityPath)
+	script := gcBeadsDoltliteBdScriptPath(cityPath)
 
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -7470,7 +7470,7 @@ func TestGcBeadsBdStartDoltliteDoesNotStartManagedDolt(t *testing.T) {
 	)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("gc-beads-bd doltlite start failed: %v\n%s", err, out)
+		t.Fatalf("gc-beads-doltlite-bd start failed: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("doltlite start invoked dolt, stat err = %v", err)
