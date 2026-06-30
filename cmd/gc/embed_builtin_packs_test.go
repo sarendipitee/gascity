@@ -423,6 +423,44 @@ func TestBundledBuiltinPackOrdersScanWithoutWarnings(t *testing.T) {
 	}
 }
 
+func TestBundledBuiltinPackOrdersSkipManagedDoltOrdersForDoltliteBackend(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &config.City{
+		Beads: config.BeadsConfig{
+			Backend: "doltlite",
+		},
+		FormulaLayers: config.FormulaLayers{
+			City: []string{
+				filepath.Join(bundledPackDirForTest(t, "core"), "formulas"),
+				filepath.Join(bundledPackDirForTest(t, "dolt"), "formulas"),
+			},
+		},
+	}
+
+	var stderr bytes.Buffer
+	aa, err := scanAllOrders(dir, cfg, &stderr, "gc order list")
+	if err != nil {
+		t.Fatalf("scanAllOrders: %v", err)
+	}
+	if strings.Contains(stderr.String(), "deprecated order path") {
+		t.Fatalf("unexpected deprecation warning while scanning bundled builtin packs:\n%s", stderr.String())
+	}
+
+	names := make(map[string]bool, len(aa))
+	for _, a := range aa {
+		names[a.Name] = true
+	}
+	if !names["gate-sweep"] {
+		t.Fatalf("missing core order gate-sweep; got %v", names)
+	}
+	for _, forbidden := range []string{"dolt-health", "dolt-remotes-patrol", "mol-dog-compactor"} {
+		if names[forbidden] {
+			t.Fatalf("unexpected managed-dolt order %q in doltlite city; got %v", forbidden, names)
+		}
+	}
+}
+
 func TestBundledWorkerPromptsIncludeFilesystemSearchGuidance(t *testing.T) {
 	for _, name := range []string{"pool-worker.md", "graph-worker.md"} {
 		t.Run(name, func(t *testing.T) {
