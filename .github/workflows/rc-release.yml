@@ -100,6 +100,9 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare DoltLite release library
+        run: .github/scripts/prepare-doltlite-release-lib.sh
+
       - name: Run GoReleaser draft prerelease
         uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7
         with:

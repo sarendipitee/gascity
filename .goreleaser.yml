@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/gc
+  - id: gc
+    main: ./cmd/gc
     binary: gc
     env:
       - CGO_ENABLED=0
@@ -13,11 +14,31 @@ builds:
     goarch:
       - amd64
       - arm64
+  - id: gc-doltlite
+    main: ./cmd/gc
+    binary: gc
+    flags:
+      - -tags=gascity_doltlite_lib,libsqlite3
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -s -w -X main.version={{ .Tag }} -X main.commit={{ .Commit }} -X main.date={{ .Date }}
+    goos:
+      - linux
+    goarch:
+      - amd64
 
 archives:
   - id: gc-archive
+    ids:
+      - gc
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: gc-doltlite-archive
+    ids:
+      - gc-doltlite
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-doltlite_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

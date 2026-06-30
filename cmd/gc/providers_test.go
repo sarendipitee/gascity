@@ -78,6 +78,27 @@ func TestRawBeadsProviderNormalizesManagedExecEnv(t *testing.T) {
 	}
 }
 
+func TestRawBeadsProviderNormalizesDoltliteManagedExecEnv(t *testing.T) {
+	cityPath := t.TempDir()
+	t.Setenv("GC_BEADS", "exec:"+gcBeadsDoltliteBdScriptPath(cityPath))
+
+	if got := rawBeadsProvider(cityPath); got != "bd" {
+		t.Fatalf("rawBeadsProvider() = %q, want bd", got)
+	}
+}
+
+func TestBeadsProviderRoutesDoltliteBackendToDoltliteShim(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "exec:" + gcBeadsDoltliteBdScriptPath(cityPath)
+	if got := beadsProvider(cityPath); got != want {
+		t.Fatalf("beadsProvider() = %q, want %q", got, want)
+	}
+}
+
 type apiMailCacheCountingStore struct {
 	*beads.MemStore
 	mu               sync.Mutex
