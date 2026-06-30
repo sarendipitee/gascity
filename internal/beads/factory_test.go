@@ -88,6 +88,41 @@ func TestOpenStoreAtForCityEligibleNativeReturnsInjectedNativeStore(t *testing.T
 	}
 }
 
+func TestOpenStoreAtForCityEligibleNativeReturnsInjectedNativeStoreForDoltlite(t *testing.T) {
+	t.Setenv(nativeForceFallbackEnv, "")
+	scope := "/city"
+	native := NewMemStore()
+
+	result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+		ScopeRoot:        scope,
+		Provider:         "bd",
+		PreflightChecker: factoryPreflightChecker(scope, factoryPreflightDoltliteMetadata(), contract.PreflightBDContext{Backend: "doltlite", DoltMode: "embedded", ProjectID: "gc-local"}),
+		OpenBdStore: func() (Store, error) {
+			t.Fatal("OpenBdStore called for native-eligible doltlite scope")
+			return nil, nil
+		},
+		OpenNativeStore: func() (Store, error) {
+			return native, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenStoreAtForCity() error = %v", err)
+	}
+
+	if result.Store != native {
+		t.Fatalf("Store = %T %#v, want injected native store", result.Store, result.Store)
+	}
+	if result.Diagnostic.Store != storeNameNativeDoltStore {
+		t.Fatalf("diagnostic store = %q, want %q", result.Diagnostic.Store, storeNameNativeDoltStore)
+	}
+	if !result.Diagnostic.NativeStoreEligible {
+		t.Fatal("diagnostic native_store_eligible = false, want true")
+	}
+	if result.Diagnostic.PreflightGate != "" || result.Diagnostic.PreflightReason != "" {
+		t.Fatalf("diagnostic preflight failure = (%q, %q), want empty", result.Diagnostic.PreflightGate, result.Diagnostic.PreflightReason)
+	}
+}
+
 func TestOpenStoreAtForCityIneligibleProviderSkipsPreflight(t *testing.T) {
 	t.Setenv(nativeForceFallbackEnv, "")
 	result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
@@ -410,6 +445,14 @@ func factoryPreflightDoltMetadata() string {
 	return `{
 		"backend": "dolt",
 		"dolt_mode": "server",
+		"dolt_database": "gascity",
+		"project_id": "gc-local"
+	}`
+}
+
+func factoryPreflightDoltliteMetadata() string {
+	return `{
+		"backend": "doltlite",
 		"dolt_database": "gascity",
 		"project_id": "gc-local"
 	}`

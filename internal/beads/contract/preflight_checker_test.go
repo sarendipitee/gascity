@@ -169,6 +169,30 @@ func TestPreflightPassesOnHealthyDolt(t *testing.T) {
 	}
 }
 
+func TestPreflightPassesOnHealthyDoltlite(t *testing.T) {
+	scope := "/city"
+	checker := testPreflightChecker(preflightMetadataJSON(`{
+		"backend": "doltlite",
+		"dolt_database": "gascity",
+		"project_id": "gc-local"
+	}`), PreflightBDContext{Backend: "doltlite", DoltMode: "embedded", ProjectID: "gc-local"}, "")
+
+	result, err := checker.Check(scope)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	assertPreflightVerdict(t, result, PreflightVerdictEligible, true)
+	for _, check := range result.Checks {
+		if check.State != PreflightCheckPass {
+			t.Fatalf("check %s state = %s, want PASS in healthy doltlite case: %+v", check.ID, check.State, result.Checks)
+		}
+	}
+	if result.Fallback != PreflightFallbackNone {
+		t.Fatalf("Fallback = %q, want none", result.Fallback)
+	}
+}
+
 func TestPreflightAcceptsExecGcBeadsBdProviderPath(t *testing.T) {
 	scope := "/city"
 	checker := testPreflightChecker(preflightMetadataJSON(`{

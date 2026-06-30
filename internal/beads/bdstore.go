@@ -2154,6 +2154,9 @@ func (s *BdStore) listViaBDList(query ListQuery) ([]Bead, error) {
 
 	out, err := s.runBDTransientRead(args...)
 	if err != nil {
+		if fallback, ok, fallbackErr := s.tryBDListLabelQueryFallback(query, serverQuery, clientFilteredAssignees, err); ok {
+			return fallback, fallbackErr
+		}
 		return nil, fmt.Errorf("bd list: %w", err)
 	}
 	issues, parseErr := parseIssuesTolerant(extractJSON(out))
@@ -2174,6 +2177,38 @@ func (s *BdStore) listViaBDList(query ListQuery) ([]Bead, error) {
 		return filtered, &PartialResultError{Op: "bd list", Err: parseErr}
 	}
 	return filtered, nil
+}
+
+func (s *BdStore) tryBDListLabelQueryFallback(query, serverQuery ListQuery, clientFilteredAssignees bool, listErr error) ([]Bead, bool, error) {
+	if !isBDListCountScanError(listErr) || serverQuery.Label == "" {
+		return nil, false, nil
+	}
+	clauses, ok := bdQueryClausesForListFallback(serverQuery, clientFilteredAssignees)
+	if !ok {
+		return nil, false, nil
+	}
+	args := []string{"query", "--json", strings.Join(clauses, " AND ")}
+	if serverQuery.IncludeClosed || serverQuery.Status == "closed" {
+		args = append(args, "--all")
+	}
+	args = append(args, "--limit", "0")
+	out, err := s.runBDTransientRead(args...)
+	if err != nil {
+		return nil, true, fmt.Errorf("bd list: %w", listErr)
+	}
+	issues, parseErr := parseIssuesTolerant(extractJSON(out))
+	result := make([]Bead, len(issues))
+	for i := range issues {
+		result[i] = issues[i].toBead()
+	}
+	filtered := applyListQuery(result, query)
+	if parseErr != nil {
+		if len(filtered) == 0 {
+			return nil, true, fmt.Errorf("bd query: %w", parseErr)
+		}
+		return filtered, true, &PartialResultError{Op: "bd query", Err: parseErr}
+	}
+	return filtered, true, nil
 }
 
 func bdListRequiresClientLimit(query, serverQuery ListQuery, clientFilteredAssignees bool) bool {
@@ -2284,6 +2319,32 @@ func isBdQueryUnsupported(err error) bool {
 		strings.Contains(text, "unknown command \"query\"") ||
 		strings.Contains(text, "unknown subcommand query") ||
 		strings.Contains(text, "unknown command query")
+}
+
+func isBDListCountScanError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "scan issue with counts") &&
+		strings.Contains(text, "compaction_level")
+}
+
+func bdQueryClausesForListFallback(query ListQuery, clientFilteredAssignees bool) ([]string, bool) {
+	if clientFilteredAssignees || !query.CreatedBefore.IsZero() || !query.UpdatedBefore.IsZero() || len(query.Metadata) > 0 {
+		return nil, false
+	}
+	clauses := make([]string, 0, 5)
+	serverFilteredOnly := true
+	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "label", query.Label)
+	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "status", query.Status)
+	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "type", query.Type)
+	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "assignee", query.Assignee)
+	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "parent", query.ParentID)
+	if !serverFilteredOnly || len(clauses) == 0 {
+		return nil, false
+	}
+	return clauses, true
 }
 
 func canApplyWispsServerLimit(query ListQuery) bool {

@@ -2011,6 +2011,32 @@ func TestBdStoreListError(t *testing.T) {
 	}
 }
 
+func TestBdStoreListFallsBackToQueryOnLabelCountScanError(t *testing.T) {
+	runner := fakeRunner(map[string]struct {
+		out []byte
+		err error
+	}{
+		`bd list --json --label=order-run:dolt-health --all --include-infra --include-gates --limit 0`: {
+			err: fmt.Errorf(`exit status 1: Error: scan issue with counts: sql: Scan error on column index 20, name "compaction_level": converting NULL to int is unsupported`),
+		},
+		`bd query --json label=order-run:dolt-health --all --limit 0`: {
+			out: []byte(`[{"id":"bd-fallback","title":"fallback","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","labels":["order-run:dolt-health"]}]`),
+		},
+	})
+	s := beads.NewBdStore("/city", runner)
+	got, err := s.List(beads.ListQuery{
+		Label:         "order-run:dolt-health",
+		IncludeClosed: true,
+		AllowScan:     true,
+	})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "bd-fallback" {
+		t.Fatalf("List() = %+v, want fallback row", got)
+	}
+}
+
 func TestBdStoreListReturnsPartialResultsOnCorruptEntries(t *testing.T) {
 	runner := fakeRunner(map[string]struct {
 		out []byte
