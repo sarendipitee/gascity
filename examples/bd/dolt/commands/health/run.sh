@@ -8,8 +8,65 @@
 #              GC_DOLT_PASSWORD, GC_DOLT_RIG_LIST_TIMEOUT_SECS
 set -e
 
-: "${GC_DOLT_USER:=root}"
 PACK_DIR="${GC_PACK_DIR:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}"
+
+beads_backend() {
+  meta="$GC_CITY_PATH/.beads/metadata.json"
+  if [ -f "$meta" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      jq -r '.backend // .database // empty' "$meta" 2>/dev/null || true
+      return
+    fi
+    grep -o '"backend"[[:space:]]*:[[:space:]]*"[^"]*"\|"database"[[:space:]]*:[[:space:]]*"[^"]*"' "$meta" 2>/dev/null \
+      | head -1 | sed 's/.*: *"//;s/"$//' || true
+    return
+  fi
+
+  printf '\n'
+}
+
+health_timestamp() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+backend=$(beads_backend)
+if [ "$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]')" = "doltlite" ]; then
+  timestamp=$(health_timestamp)
+  if [ "${1:-}" = "--json" ] && [ "$#" -eq 1 ]; then
+    cat <<JSONEOF
+{
+  "timestamp": "$timestamp",
+  "server": {
+    "required": false,
+    "running": false,
+    "reachable": true,
+    "pid": 0,
+    "port": 0,
+    "latency_ms": 0,
+    "message": "not required (bd backend=doltlite)"
+  },
+  "databases": [],
+  "backups": {
+    "dolt_freshness": "",
+    "dolt_age_sec": 0,
+    "dolt_stale": false
+  },
+  "orphans": [],
+  "processes": {
+    "zombie_count": 0,
+    "zombie_pids": []
+  }
+}
+JSONEOF
+    exit 0
+  fi
+  if [ "$#" -eq 0 ]; then
+    echo "Server: not required (bd backend=doltlite)"
+    exit 0
+  fi
+fi
+
+: "${GC_DOLT_USER:=root}"
 . "$PACK_DIR/assets/scripts/runtime.sh"
 
 metadata_files() {
