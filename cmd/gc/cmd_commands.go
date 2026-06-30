@@ -147,6 +147,10 @@ func discoveredHelpRequested(args []string) bool {
 }
 
 func runDiscoveredCommand(entry config.DiscoveredCommand, cityPath, cityName string, args []string, stdinR io.Reader, stdout, stderr io.Writer) int {
+	return runDiscoveredCommandWithEnv(nil, entry, cityPath, cityName, args, stdinR, stdout, stderr)
+}
+
+func runDiscoveredCommandWithEnv(extraEnv map[string]string, entry config.DiscoveredCommand, cityPath, cityName string, args []string, stdinR io.Reader, stdout, stderr io.Writer) int {
 	packDir := entry.PackDir
 	if packDir == "" {
 		packDir = packRootFromEntryDir(entry.SourceDir, "commands")
@@ -166,6 +170,9 @@ func runDiscoveredCommand(entry config.DiscoveredCommand, cityPath, cityName str
 		"GC_PACK_NAME="+entry.PackName,
 		"GC_CITY_NAME="+cityName,
 	)
+	for key, value := range extraEnv {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	cmd.Env = mergeCanonicalScopeDoltEnv(cmd.Env, cityPath)
 
 	if err := cmd.Run(); err != nil {

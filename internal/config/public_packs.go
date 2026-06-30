@@ -29,7 +29,7 @@ const (
 	// PublicBeadsDoltlitePackVersion pins fresh DoltLite init output to the
 	// forked pack main commit containing reproducible init build source and
 	// libdoltlite selection.
-	PublicBeadsDoltlitePackVersion = "sha:c2982b75acd88069154b848c9de81a1fda1d2d38"
+	PublicBeadsDoltlitePackVersion = "sha:6775c8f68fa85c0257329a72f4fc266b1ffa0b43"
 
 	// PublicBeadsDoltliteInitPackSource is the durable source for the minimal
 	// DoltLite init support pack when a fresh city chooses the DoltLite beads

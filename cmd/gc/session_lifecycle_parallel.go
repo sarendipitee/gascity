@@ -964,6 +964,9 @@ func buildPreparedStartWithWorkDirResolver(
 	if triggerEnv := sessionTriggerBeadEnv(session); len(triggerEnv) > 0 {
 		agentCfg.Env = mergeEnv(agentCfg.Env, triggerEnv)
 	}
+	if cityUsesDoltliteBackend(cfg) {
+		agentCfg.Env = mergeEnv(agentCfg.Env, doltliteLoaderEnvScrub())
+	}
 	agentCfg = runtime.SyncWorkDirEnv(agentCfg)
 	return &preparedStart{
 		candidate:     candidate,

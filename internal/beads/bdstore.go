@@ -816,15 +816,18 @@ func isBdClaimConflictMessage(msg string) bool {
 		strings.Contains(msg, "claim conflict")
 }
 
-// mapBdStatus maps bd's statuses to Gas City's 3. bd uses: open,
-// in_progress, blocked, review, testing, closed. Gas City uses:
-// open, in_progress, closed.
+// mapBdStatus maps bd's statuses to Gas City's durable status vocabulary.
+// bd uses: open, in_progress, blocked, review, testing, closed. Gas City keeps
+// blocked distinct because older bd list rows may not carry is_blocked, and
+// dependency_count is not an active-blocker signal.
 func mapBdStatus(s string) string {
 	switch s {
 	case "closed":
 		return "closed"
 	case "in_progress":
 		return "in_progress"
+	case "blocked":
+		return "blocked"
 	default:
 		return "open"
 	}
