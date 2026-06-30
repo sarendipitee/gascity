@@ -611,7 +611,9 @@ source = "./packs/custom"
 		t.Fatalf("decode repaired pack.toml: %v\n%s", err, data)
 	}
 	assertInitPackImport(t, got.Imports, "core", builtinImportForInitTest(t, "core"))
-	assertInitPackImport(t, got.Imports, "bd", builtinImportForInitTest(t, "bd"))
+	if _, ok := got.Imports["bd"]; ok {
+		t.Fatalf("doltlite import repair unexpectedly imported managed bd pack: %#v", got.Imports["bd"])
+	}
 	assertInitPackImport(t, got.Imports, "beads-doltlite-init", builtinImportForInitTest(t, "beads-doltlite-init"))
 	assertInitPackImport(t, got.Imports, "beads-doltlite", config.Import{
 		Source:  config.PublicBeadsDoltlitePackSource,

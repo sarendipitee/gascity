@@ -514,7 +514,7 @@ func TestRequiredBuiltinPackNames(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte("[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		assertPackNamesForTest(t, requiredBuiltinPackNames(dir), []string{"core", "bd", "beads-doltlite-init"})
+		assertPackNamesForTest(t, requiredBuiltinPackNames(dir), []string{"core", "beads-doltlite-init"})
 	})
 
 	t.Run("exec_gc_beads_bd_override_adds_dolt", func(t *testing.T) {
@@ -594,8 +594,11 @@ func TestBuiltinImportsForInit(t *testing.T) {
 	t.Run("backend_required_packs", func(t *testing.T) {
 		clearGCEnv(t)
 		imports, ordered := builtinImportsForInit("bd", "doltlite")
-		if got := strings.Join(ordered, ","); got != "core,bd,beads-doltlite-init" {
-			t.Errorf("builtinImportsForInit bd/doltlite = %v, want core,bd,beads-doltlite-init", ordered)
+		if got := strings.Join(ordered, ","); got != "core,beads-doltlite-init" {
+			t.Errorf("builtinImportsForInit bd/doltlite = %v, want core,beads-doltlite-init", ordered)
+		}
+		if _, ok := imports["bd"]; ok {
+			t.Fatalf("builtinImportsForInit bd/doltlite unexpectedly imported managed bd pack: %v", ordered)
 		}
 		imp := imports["beads-doltlite-init"]
 		if imp.Source != config.PublicBeadsDoltliteInitPackSource {
@@ -759,6 +762,128 @@ func TestEnsureBuiltinRuntimeAssetsHydratesCacheAndShim(t *testing.T) {
 	}
 }
 
+func TestEnsureBuiltinRuntimeAssetsHydratesDoltliteShim(t *testing.T) {
+	clearGCEnv(t)
+	city := t.TempDir()
+	if err := os.WriteFile(filepath.Join(city, "city.toml"), []byte("[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	materializeBuiltinPacksForTest(t, city)
+
+	if _, err := os.Stat(gcBeadsBdScriptPath(city)); !os.IsNotExist(err) {
+		t.Errorf("stat managed-Dolt shim err = %v, want IsNotExist for doltlite city", err)
+	}
+	target, err := bundledGcBeadsDoltliteBdScriptTarget()
+	if err != nil {
+		t.Fatalf("bundledGcBeadsDoltliteBdScriptTarget: %v", err)
+	}
+	shimPath := gcBeadsDoltliteBdScriptPath(city)
+	info, err := os.Stat(shimPath)
+	if err != nil {
+		t.Fatalf("Stat(doltlite shim): %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Errorf("doltlite shim not executable: mode %v", info.Mode())
+	}
+	shim, err := os.ReadFile(shimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(doltlite shim): %v", err)
+	}
+	if !strings.Contains(string(shim), target) {
+		t.Errorf("doltlite shim does not exec bundled target %s:\n%s", target, shim)
+	}
+}
+
+func TestEnsureBuiltinRuntimeAssetsPrefersInstalledBeadsDoltliteProvider(t *testing.T) {
+	clearGCEnv(t)
+	root := t.TempDir()
+	city := filepath.Join(root, "city")
+	packDir := filepath.Join(root, "beads-doltlite")
+	fullProvider := filepath.Join(packDir, "assets", "scripts", "gc-beads-doltlite-bd.sh")
+	if err := os.MkdirAll(filepath.Dir(fullProvider), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullProvider, []byte("#!/bin/sh\n# full beads-doltlite provider\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(city, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(city, "city.toml"), []byte("[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(city, "pack.toml"), []byte("[pack]\nname = \"test\"\nschema = 2\n\n[imports.bdl]\nsource = \"../beads-doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	materializeBuiltinPacksForTest(t, city)
+
+	shim, err := os.ReadFile(gcBeadsDoltliteBdScriptPath(city))
+	if err != nil {
+		t.Fatalf("ReadFile(doltlite shim): %v", err)
+	}
+	if !strings.Contains(string(shim), fullProvider) {
+		t.Errorf("doltlite shim does not exec installed provider %s:\n%s", fullProvider, shim)
+	}
+	fallback, err := bundledGcBeadsDoltliteBdScriptTarget()
+	if err != nil {
+		t.Fatalf("bundledGcBeadsDoltliteBdScriptTarget: %v", err)
+	}
+	if strings.Contains(string(shim), fallback) {
+		t.Errorf("doltlite shim used bootstrap fallback despite installed provider:\n%s", shim)
+	}
+}
+
+func TestEnsureBuiltinRuntimeAssetsRewritesDoltliteShimAfterPackInstall(t *testing.T) {
+	clearGCEnv(t)
+	root := t.TempDir()
+	city := filepath.Join(root, "city")
+	if err := os.MkdirAll(city, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(city, "city.toml"), []byte("[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	materializeBuiltinPacksForTest(t, city)
+	fallback, err := bundledGcBeadsDoltliteBdScriptTarget()
+	if err != nil {
+		t.Fatalf("bundledGcBeadsDoltliteBdScriptTarget: %v", err)
+	}
+	initial, err := os.ReadFile(gcBeadsDoltliteBdScriptPath(city))
+	if err != nil {
+		t.Fatalf("ReadFile(initial shim): %v", err)
+	}
+	if !strings.Contains(string(initial), fallback) {
+		t.Fatalf("initial shim does not use bootstrap fallback %s:\n%s", fallback, initial)
+	}
+
+	packDir := filepath.Join(root, "beads-doltlite")
+	fullProvider := filepath.Join(packDir, "assets", "scripts", "gc-beads-doltlite-bd.sh")
+	if err := os.MkdirAll(filepath.Dir(fullProvider), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullProvider, []byte("#!/bin/sh\n# full beads-doltlite provider\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(city, "pack.toml"), []byte("[pack]\nname = \"test\"\nschema = 2\n\n[imports.bdl]\nsource = \"../beads-doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	materializeBuiltinPacksForTest(t, city)
+	updated, err := os.ReadFile(gcBeadsDoltliteBdScriptPath(city))
+	if err != nil {
+		t.Fatalf("ReadFile(updated shim): %v", err)
+	}
+	if !strings.Contains(string(updated), fullProvider) {
+		t.Errorf("updated shim does not exec installed provider %s:\n%s", fullProvider, updated)
+	}
+	if strings.Contains(string(updated), fallback) {
+		t.Errorf("updated shim still uses bootstrap fallback:\n%s", updated)
+	}
+}
+
 func TestEnsureBuiltinRuntimeAssetsSkipsShimForNonBdCity(t *testing.T) {
 	clearGCEnv(t)
 	city := t.TempDir()
@@ -784,7 +909,7 @@ func TestEnsureBuiltinRuntimeAssetsSkipsShimForNonBdCity(t *testing.T) {
 	}
 }
 
-func TestBeadsDoltliteInitPackIsMinimal(t *testing.T) {
+func TestBeadsDoltliteInitPackContainsBootstrapProvider(t *testing.T) {
 	pack := readBundledPackFileForTest(t, "beads-doltlite-init", "pack.toml")
 	for _, want := range []string{
 		`name = "beads-doltlite-init"`,
@@ -792,6 +917,16 @@ func TestBeadsDoltliteInitPackIsMinimal(t *testing.T) {
 	} {
 		if !strings.Contains(pack, want) {
 			t.Fatalf("beads-doltlite-init pack missing %q:\n%s", want, pack)
+		}
+	}
+	script := readBundledPackFileForTest(t, "beads-doltlite-init", "assets/scripts/gc-beads-doltlite-bd.sh")
+	for _, want := range []string{
+		`BEADS_BACKEND="doltlite"`,
+		"BEADS_DOLT_AUTO_START=0",
+		"init --backend doltlite",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("beads-doltlite init provider missing %q:\n%s", want, script)
 		}
 	}
 	if _, ok := builtinpacks.ByName("beads-doltlite"); ok {
