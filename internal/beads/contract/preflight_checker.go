@@ -15,6 +15,7 @@ type PreflightBDContext struct {
 	Backend       string
 	DoltMode      string
 	BDVersion     string
+	ProjectID     string
 	SchemaVersion int
 }
 
@@ -46,7 +47,7 @@ func (c PreflightChecker) Check(scope string) (PreflightResult, error) {
 		c.checkMetadataBackend(metadata),
 		c.checkBDContextAgreement(metadata, bdCtx, bdCtxErr),
 		c.checkDoltModeSafe(metadata, bdCtx, bdCtxErr),
-		c.checkIdentityMatch(scope, metadata),
+		c.checkIdentityMatch(scope, metadata, bdCtx, bdCtxErr),
 		c.checkVersionCompat(bdCtx, bdCtxErr),
 		c.checkContractShape(metadata),
 	}
@@ -122,6 +123,8 @@ func (c PreflightChecker) checkMetadataBackend(metadata preflightMetadata) Prefl
 	switch metadata.Backend {
 	case "dolt":
 		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, "Metadata backend is dolt", details)
+	case "doltlite":
+		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, "Metadata backend is doltlite", details)
 	case "postgres":
 		if hasDSN && !hasSplit {
 			return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckWarn, "Metadata backend is postgres (postgres_dsn form)", details)
@@ -142,6 +145,7 @@ func (c PreflightChecker) readBDContext(scope string) (PreflightBDContext, error
 	ctx.Backend = strings.TrimSpace(ctx.Backend)
 	ctx.DoltMode = strings.TrimSpace(ctx.DoltMode)
 	ctx.BDVersion = strings.TrimSpace(ctx.BDVersion)
+	ctx.ProjectID = strings.TrimSpace(ctx.ProjectID)
 	return ctx, err
 }
 
@@ -189,10 +193,17 @@ func (c PreflightChecker) checkDoltModeSafe(metadata preflightMetadata, ctx Pref
 	}
 }
 
-func (c PreflightChecker) checkIdentityMatch(scope string, metadata preflightMetadata) PreflightCheckResult {
+func (c PreflightChecker) checkIdentityMatch(scope string, metadata preflightMetadata, ctx PreflightBDContext, ctxErr error) PreflightCheckResult {
 	details := PreflightDetails{MetadataProjectID: metadata.ProjectID}
 	if metadata.ProjectID == "" {
 		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckFail, "metadata project_id is missing", details)
+	}
+	if metadata.Backend == "doltlite" && ctxErr == nil && ctx.ProjectID != "" {
+		details.DBProjectID = ctx.ProjectID
+		if metadata.ProjectID != ctx.ProjectID {
+			return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckFail, "project_id mismatch", details)
+		}
+		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckPass, "project_id matches", details)
 	}
 	if c.DatabaseProjectID == nil {
 		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckWarn, "database project_id reader is not configured", details)
@@ -268,6 +279,11 @@ func (c PreflightChecker) checkContractShape(metadata preflightMetadata) Preflig
 			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "dolt metadata contains postgres fields", details)
 		}
 		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, "Metadata uses dolt shape", details)
+	case "doltlite":
+		if hasDSN || hasSplit {
+			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "doltlite metadata contains postgres fields", details)
+		}
+		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, "Metadata uses doltlite shape", details)
 	case "postgres":
 		if hasDSN {
 			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckWarn, "postgres_dsn present; Gas City expects split fields", details)

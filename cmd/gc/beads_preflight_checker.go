@@ -29,6 +29,7 @@ func preflightBDContextReader(cityPath string) func(scope string) (contract.Pref
 			Backend       string `json:"backend"`
 			DoltMode      string `json:"dolt_mode"`
 			BDVersion     string `json:"bd_version"`
+			ProjectID     string `json:"project_id"`
 			SchemaVersion int    `json:"schema_version"`
 		}
 		if err := json.Unmarshal(out, &raw); err != nil {
@@ -38,6 +39,7 @@ func preflightBDContextReader(cityPath string) func(scope string) (contract.Pref
 			Backend:       raw.Backend,
 			DoltMode:      raw.DoltMode,
 			BDVersion:     raw.BDVersion,
+			ProjectID:     raw.ProjectID,
 			SchemaVersion: raw.SchemaVersion,
 		}, nil
 	}
