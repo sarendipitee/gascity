@@ -105,6 +105,12 @@ type ConditionalAssignmentReleaser interface {
 	ReleaseIfCurrent(id, expectedAssignee string) (bool, error)
 }
 
+// OrderRunBeadLister is implemented by stores that can read order-tracking
+// beads directly without routing through the generic list/count hydration path.
+type OrderRunBeadLister interface {
+	ListOrderRunBeads(scoped string, limit int) ([]Bead, error)
+}
+
 // AtomicTxStore is implemented by stores whose Tx commits the whole callback
 // atomically: when the callback returns an error, none of its writes persist.
 // Stores that do not implement it (or whose AtomicTx returns false) may leave

@@ -120,8 +120,8 @@ func (c PreflightChecker) checkMetadataBackend(metadata preflightMetadata) Prefl
 		PostgresPassword:    metadata.PostgresPassword,
 	}
 	switch metadata.Backend {
-	case "dolt":
-		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, "Metadata backend is dolt", details)
+	case "dolt", "doltlite":
+		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, fmt.Sprintf("Metadata backend is %s", metadata.Backend), details)
 	case "postgres":
 		if hasDSN && !hasSplit {
 			return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckWarn, "Metadata backend is postgres (postgres_dsn form)", details)
@@ -263,11 +263,11 @@ func (c PreflightChecker) checkContractShape(metadata preflightMetadata) Preflig
 		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "postgres_dsn and split postgres fields are both present", details)
 	}
 	switch metadata.Backend {
-	case "dolt":
+	case "dolt", "doltlite":
 		if hasDSN || hasSplit {
-			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "dolt metadata contains postgres fields", details)
+			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, fmt.Sprintf("%s metadata contains postgres fields", metadata.Backend), details)
 		}
-		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, "Metadata uses dolt shape", details)
+		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, fmt.Sprintf("Metadata uses %s shape", metadata.Backend), details)
 	case "postgres":
 		if hasDSN {
 			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckWarn, "postgres_dsn present; Gas City expects split fields", details)

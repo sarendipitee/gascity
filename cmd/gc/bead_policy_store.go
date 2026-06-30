@@ -35,7 +35,10 @@ type beadPolicyGraphStore struct {
 	applier beads.GraphApplyStore
 }
 
-var _ beads.ConditionalAssignmentReleaser = (*beadPolicyStore)(nil)
+var (
+	_ beads.ConditionalAssignmentReleaser = (*beadPolicyStore)(nil)
+	_ beads.OrderRunBeadLister            = (*beadPolicyStore)(nil)
+)
 
 func wrapStoreWithBeadPolicies(store beads.Store, cfg *config.City) beads.Store {
 	if store == nil {
@@ -177,6 +180,14 @@ func (s *beadPolicyStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, e
 		return false, beads.ErrConditionalReleaseUnsupported
 	}
 	return releaser.ReleaseIfCurrent(id, expectedAssignee)
+}
+
+func (s *beadPolicyStore) ListOrderRunBeads(scoped string, limit int) ([]beads.Bead, error) {
+	reader, ok := s.Store.(beads.OrderRunBeadLister)
+	if !ok {
+		return nil, fmt.Errorf("listing order run beads: policy-wrapped store: %w", beads.ErrCountUnsupported)
+	}
+	return reader.ListOrderRunBeads(scoped, limit)
 }
 
 func (s *beadPolicyStore) policyForCreate(b beads.Bead) (string, string) {
