@@ -221,6 +221,14 @@ func builtinImportsForNames(names []string) (map[string]config.Import, []string)
 	imports := make(map[string]config.Import, len(names))
 	ordered := make([]string, 0, len(names))
 	for _, name := range names {
+		if name == "beads-doltlite-init" {
+			imports[name] = config.Import{
+				Source:  config.PublicBeadsDoltliteInitPackSource,
+				Version: config.PublicBeadsDoltliteInitPackVersion,
+			}
+			ordered = append(ordered, name)
+			continue
+		}
 		// CanonicalImportSource authors the dereferenceable tree-URL form
 		// that gc init and the builtin-pack-imports doctor fix write into
 		// pack.toml; the version pin still derives from the normalized
