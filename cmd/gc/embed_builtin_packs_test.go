@@ -593,9 +593,16 @@ func TestBuiltinImportsForInit(t *testing.T) {
 
 	t.Run("backend_required_packs", func(t *testing.T) {
 		clearGCEnv(t)
-		_, ordered := builtinImportsForInit("bd", "doltlite")
+		imports, ordered := builtinImportsForInit("bd", "doltlite")
 		if got := strings.Join(ordered, ","); got != "core,bd,beads-doltlite-init" {
 			t.Errorf("builtinImportsForInit bd/doltlite = %v, want core,bd,beads-doltlite-init", ordered)
+		}
+		imp := imports["beads-doltlite-init"]
+		if imp.Source != config.PublicBeadsDoltliteInitPackSource {
+			t.Fatalf("beads-doltlite-init source = %q, want %q", imp.Source, config.PublicBeadsDoltliteInitPackSource)
+		}
+		if imp.Version != config.PublicBeadsDoltliteInitPackVersion {
+			t.Fatalf("beads-doltlite-init version = %q, want %q", imp.Version, config.PublicBeadsDoltliteInitPackVersion)
 		}
 	})
 
