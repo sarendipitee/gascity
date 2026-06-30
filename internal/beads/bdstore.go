@@ -1026,6 +1026,9 @@ func (s *BdStore) Get(id string) (Bead, error) {
 
 // Update modifies fields of an existing bead via bd update.
 func (s *BdStore) Update(id string, opts UpdateOpts) error {
+	if handled, err := s.tryDoltliteStatusOnlyUpdate(id, opts); handled {
+		return err
+	}
 	args := []string{"update", "--json", id}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
@@ -1910,6 +1913,9 @@ func (s *BdStore) CloseAll(ids []string, metadata map[string]string) (int, error
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	if closed, handled, err := s.doltliteCloseAll(ids, metadata); handled {
+		return closed, err
+	}
 
 	// Set metadata on all beads first (before closing, since some stores
 	// prevent metadata writes on closed beads).
@@ -2038,6 +2044,9 @@ func bdCloseArgs(reason string, ids ...string) []string {
 }
 
 func (s *BdStore) close(id, reason string) error {
+	if handled, err := s.doltliteClose(id, reason); handled {
+		return err
+	}
 	// Internal callers supply canonical full IDs; exact-ID guard lives at the
 	// CLI/API entry points (gcy-g4o).
 	err := s.runBDTransientWrite(bdCloseArgs(reason, id)...)
@@ -2066,6 +2075,9 @@ func (s *BdStore) close(id, reason string) error {
 
 // Reopen sets a closed bead's status to open via bd reopen.
 func (s *BdStore) Reopen(id string) error {
+	if handled, err := s.doltliteReopen(id); handled {
+		return err
+	}
 	err := s.runBDTransientWrite("reopen", "--json", id)
 	if err != nil {
 		if isBdNotFound(err) {
