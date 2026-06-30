@@ -1889,8 +1889,9 @@ func TestBdStoreListDecodesIsBlockedProjection(t *testing.T) {
 	}{
 		`bd list --json --include-infra --include-gates --limit 0`: {
 			out: []byte(`[
-				{"id":"bd-blocked","title":"blocked","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z","is_blocked":1},
-				{"id":"bd-ready","title":"ready","status":"open","issue_type":"task","created_at":"2025-01-15T10:31:00Z","is_blocked":false}
+				{"id":"bd-blocked","title":"blocked","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z","is_blocked":1,"dependency_count":2},
+				{"id":"bd-ready","title":"ready","status":"open","issue_type":"task","created_at":"2025-01-15T10:31:00Z","is_blocked":false},
+				{"id":"bd-legacy-blocked","title":"legacy blocked","status":"blocked","issue_type":"task","created_at":"2025-01-15T10:32:00Z","is_blocked":null}
 			]`),
 		},
 	})
@@ -1899,14 +1900,20 @@ func TestBdStoreListDecodesIsBlockedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("ListOpen() returned %d beads, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("ListOpen() returned %d beads, want 3", len(got))
 	}
 	if got[0].IsBlocked == nil || !*got[0].IsBlocked {
 		t.Fatalf("got[0].IsBlocked = %v, want true", got[0].IsBlocked)
 	}
 	if got[1].IsBlocked == nil || *got[1].IsBlocked {
 		t.Fatalf("got[1].IsBlocked = %v, want false", got[1].IsBlocked)
+	}
+	if got[2].Status != "blocked" {
+		t.Fatalf("got[2].Status = %q, want blocked", got[2].Status)
+	}
+	if got[2].IsBlocked != nil {
+		t.Fatalf("got[2].IsBlocked = %v, want nil for legacy bd projection", got[2].IsBlocked)
 	}
 }
 
@@ -2570,7 +2577,7 @@ func TestBdStoreStatusMapping(t *testing.T) {
 	}{
 		{"open", "open"},
 		{"in_progress", "in_progress"},
-		{"blocked", "open"},
+		{"blocked", "blocked"},
 		{"review", "open"},
 		{"testing", "open"},
 		{"closed", "closed"},

@@ -403,6 +403,77 @@ func TestDoHookClaimClaimsRoutedUnassignedWork(t *testing.T) {
 	}
 }
 
+func TestDoHookClaimSkipsClosedRoutedUnassignedWork(t *testing.T) {
+	runner := func(string, string) (string, error) {
+		return `[{"id":"hw-closed","status":"closed","metadata":{"gc.routed_to":"worker"}}]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(context.Context, string, []string, string, string) (beads.Bead, bool, error) {
+			t.Fatal("claim must not run for closed routed work")
+			return beads.Bead{}, false, nil
+		},
+		DrainAck: func(io.Writer) error { return nil },
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		DrainAck:           true,
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(closed routed work) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.Action != "drain" || result.Reason != "no_work" {
+		t.Fatalf("unexpected claim result: %+v", result)
+	}
+}
+
+func TestDoHookClaimCoercesNonStringMetadata(t *testing.T) {
+	runner := func(string, string) (string, error) {
+		return `[{"id":"hw-bool","status":"open","metadata":{"gc.routed_to":"worker","mail.read":true,"attempts":2,"empty":null}}]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(_ context.Context, _ string, _ []string, beadID, assignee string) (beads.Bead, bool, error) {
+			return beads.Bead{ID: beadID, Status: "in_progress", Assignee: assignee}, true, nil
+		},
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(bool metadata) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	candidates, err := decodeHookClaimBeads(`[{"id":"hw-bool","status":"open","metadata":{"mail.read":true,"attempts":2,"empty":null}}]`)
+	if err != nil {
+		t.Fatalf("decodeHookClaimBeads(bool metadata): %v", err)
+	}
+	if got := candidates[0].Metadata["mail.read"]; got != "true" {
+		t.Fatalf("metadata mail.read = %q, want true", got)
+	}
+	if got := candidates[0].Metadata["attempts"]; got != "2" {
+		t.Fatalf("metadata attempts = %q, want 2", got)
+	}
+	if got := candidates[0].Metadata["empty"]; got != "" {
+		t.Fatalf("metadata empty = %q, want empty string", got)
+	}
+}
+
 func TestDoHookClaimRetriesAfterClaimConflict(t *testing.T) {
 	var attempts []string
 	runner := func(string, string) (string, error) {
