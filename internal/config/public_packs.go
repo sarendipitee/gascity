@@ -24,13 +24,12 @@ const (
 	// beads-doltlite-init support pack; init imports this public pack when a
 	// city chooses [beads].backend = "doltlite".
 	//
-	// TODO: move this to gastownhall/gascity-packs/tree/main/beads-doltlite
-	// after the pack lands upstream.
-	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/beads-doltlite-publish/beads-doltlite"
+	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite"
 
 	// PublicBeadsDoltlitePackVersion pins fresh DoltLite init output to the
-	// forked pack publication commit until beads-doltlite lands upstream.
-	PublicBeadsDoltlitePackVersion = "sha:ef68f743643aacf9cc261945540ce670abadc99a"
+	// forked pack main commit containing reproducible init build source and
+	// libdoltlite selection.
+	PublicBeadsDoltlitePackVersion = "sha:eb8ea4c7025a7a2e44d09f05311a3cac3dd53fb8"
 
 	// PublicBeadsDoltliteInitPackSource is the durable source for the minimal
 	// DoltLite init support pack when a fresh city chooses the DoltLite beads
