@@ -3,6 +3,7 @@ package beads
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,8 @@ const (
 	BeadsStoreNameExecStore = "ExecStore"
 	// BeadsStoreNameNativeDoltStore is the diagnostic store name for native Dolt stores.
 	BeadsStoreNameNativeDoltStore = "NativeDoltStore"
+	// BeadsStoreNameDoltliteReadStore is the diagnostic store name for optimized DoltLite stores.
+	BeadsStoreNameDoltliteReadStore = "DoltliteReadStore"
 
 	storeNameBdStore         = BeadsStoreNameBdStore
 	storeNameFileStore       = BeadsStoreNameFileStore
@@ -124,7 +127,7 @@ func OpenStoreAtForCity(ctx context.Context, opts StoreOpenOptions) (StoreOpenRe
 		return opts.openBdFallback(provider, diag)
 	}
 
-	if scopeHasExecutableBdHooks(opts.ScopeRoot) {
+	if !scopeBackendIsDoltlite(opts.ScopeRoot) && scopeHasExecutableBdHooks(opts.ScopeRoot) {
 		diag := BeadsDiagnostic{
 			Store:               storeNameBdStore,
 			NativeStoreEligible: false,
@@ -238,6 +241,20 @@ func isGCStampedHook(content []byte) bool {
 		}
 	}
 	return false
+}
+
+func scopeBackendIsDoltlite(scopeRoot string) bool {
+	data, err := os.ReadFile(filepath.Join(scopeRoot, ".beads", "metadata.json"))
+	if err != nil {
+		return false
+	}
+	var meta struct {
+		Backend string `json:"backend"`
+	}
+	if json.Unmarshal(data, &meta) != nil {
+		return false
+	}
+	return meta.Backend == "doltlite"
 }
 
 func forceNativeFallback() bool {

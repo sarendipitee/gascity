@@ -107,8 +107,9 @@ func (q ListQuery) Validate() error {
 // query preserves Ready's historical behavior: all open, unblocked actionable
 // work.
 type ReadyQuery struct {
-	Assignee string
-	Limit    int
+	Assignee  string
+	Assignees []string
+	Limit     int
 	// TierMode selects the storage tier(s) to read from. Zero value
 	// (TierIssues) preserves raw Ready's historical main-tier behavior.
 	// Policy-aware callers should use the policy store wrapper, which expands
@@ -122,6 +123,10 @@ func readyQueryFromArgs(queries []ReadyQuery) ReadyQuery {
 		return ReadyQuery{}
 	}
 	return queries[0]
+}
+
+func readyQueryIsZero(q ReadyQuery) bool {
+	return q.Assignee == "" && len(q.Assignees) == 0 && q.Limit == 0 && q.TierMode == 0
 }
 
 // HasFilter reports whether the query includes at least one indexed selector.
