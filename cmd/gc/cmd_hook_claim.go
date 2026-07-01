@@ -608,11 +608,67 @@ func decodeHookClaimBeads(output string) ([]beads.Bead, error) {
 		output = extracted
 	}
 	output = normalizeWorkQueryOutput(output)
-	var candidates []beads.Bead
-	if err := json.Unmarshal([]byte(output), &candidates); err != nil {
+	rawCandidates := make([]map[string]json.RawMessage, 0)
+	if err := json.Unmarshal([]byte(output), &rawCandidates); err != nil {
 		return nil, err
 	}
+	candidates := make([]beads.Bead, 0, len(rawCandidates))
+	for _, rawCandidate := range rawCandidates {
+		candidate, err := decodeHookClaimBead(rawCandidate)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
 	return candidates, nil
+}
+
+func decodeHookClaimBead(raw map[string]json.RawMessage) (beads.Bead, error) {
+	if len(raw) == 0 {
+		return beads.Bead{}, nil
+	}
+	var candidate beads.Bead
+	if metaRaw, ok := raw["metadata"]; ok && len(metaRaw) > 0 {
+		metadata, err := decodeHookClaimMetadata(metaRaw)
+		if err != nil {
+			return beads.Bead{}, fmt.Errorf("decoding metadata: %w", err)
+		}
+		candidate.Metadata = metadata
+		delete(raw, "metadata")
+	}
+	body, err := json.Marshal(raw)
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	if err := json.Unmarshal(body, &candidate); err != nil {
+		return beads.Bead{}, err
+	}
+	return candidate, nil
+}
+
+func decodeHookClaimMetadata(raw json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	metadata := make(map[string]string, len(values))
+	for key, value := range values {
+		trimmed := strings.TrimSpace(string(value))
+		if trimmed == "null" {
+			metadata[key] = "null"
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err == nil {
+			metadata[key] = text
+			continue
+		}
+		metadata[key] = trimmed
+	}
+	return metadata, nil
 }
 
 func firstHookJSONValue(output string) (string, bool) {
