@@ -641,6 +641,33 @@ schema = 1
 	}
 }
 
+func TestBuiltinPackFamilyCheck_DoltliteBackendSkipsRequirement(t *testing.T) {
+	dir := t.TempDir()
+	doltDir := filepath.Join(dir, "packs", "dolt")
+	if err := os.MkdirAll(doltDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(doltDir, "pack.toml"), []byte(`[pack]
+name = "dolt"
+schema = 1
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Beads:    config.BeadsConfig{Backend: "doltlite"},
+		PackDirs: []string{doltDir},
+	}
+	c := NewBuiltinPackFamilyCheck(cfg, dir)
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusOK {
+		t.Fatalf("status = %d, want OK; msg = %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "not required") {
+		t.Fatalf("message = %q, want doltlite skip message", r.Message)
+	}
+}
+
 func TestBuiltinPackFamilyCheck_IgnoresSystemPacks(t *testing.T) {
 	dir := t.TempDir()
 	systemDolt := filepath.Join(dir, ".gc", "system", "packs", "dolt")

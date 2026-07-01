@@ -246,6 +246,12 @@ func (c *BuiltinPackFamilyCheck) Name() string { return "builtin-pack-family" }
 // Run validates that bd/dolt overrides are all-or-nothing.
 func (c *BuiltinPackFamilyCheck) Run(_ *CheckContext) *CheckResult {
 	r := &CheckResult{Name: c.Name()}
+	if strings.EqualFold(strings.TrimSpace(c.cfg.Beads.Backend), "doltlite") ||
+		scopeUsesBDDoltliteStore(c.cityPath, c.cityPath) {
+		r.Status = StatusOK
+		r.Message = "not required (bd backend=doltlite)"
+		return r
+	}
 	provider := c.cfg.Beads.Provider
 	if v := os.Getenv("GC_BEADS"); v != "" {
 		provider = v
