@@ -413,6 +413,9 @@ func matchesExisting(pack LockedPack, constraint string) bool {
 	if strings.HasPrefix(constraint, "sha:") {
 		return pack.Commit == strings.TrimPrefix(constraint, "sha:")
 	}
+	if strings.HasPrefix(constraint, "ref:") {
+		return pack.Version == constraint
+	}
 	return matchesConstraint(pack.Version, constraint)
 }
 
@@ -422,7 +425,7 @@ func mergeConstraints(existing, next string) (string, error) {
 		return next, nil
 	case next == "":
 		return existing, nil
-	case strings.HasPrefix(existing, "sha:") || strings.HasPrefix(next, "sha:"):
+	case strings.HasPrefix(existing, "sha:") || strings.HasPrefix(next, "sha:") || strings.HasPrefix(existing, "ref:") || strings.HasPrefix(next, "ref:"):
 		if existing != next {
 			return "", fmt.Errorf("incompatible pinned versions %q and %q", existing, next)
 		}

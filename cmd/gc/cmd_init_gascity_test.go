@@ -138,6 +138,24 @@ func TestDoInitDoltliteBackendImportsBeadsDoltlitePack(t *testing.T) {
 	if got := packCfg.Imports["beads-doltlite"].Version; got != config.PublicBeadsDoltlitePackVersion {
 		t.Fatalf("beads-doltlite version = %q, want %q", got, config.PublicBeadsDoltlitePackVersion)
 	}
+	beadsDoltliteBlock := importBlockForInitTest(t, string(packData), "beads-doltlite")
+	if strings.Contains(beadsDoltliteBlock, "sha:") || !strings.Contains(beadsDoltliteBlock, `version = "ref:main"`) {
+		t.Fatalf("beads-doltlite import should write a branch selector, not a commit pin:\n%s", beadsDoltliteBlock)
+	}
+}
+
+func importBlockForInitTest(t *testing.T, data, name string) string {
+	t.Helper()
+	marker := "[imports." + name + "]"
+	start := strings.Index(data, marker)
+	if start < 0 {
+		t.Fatalf("pack.toml missing %s:\n%s", marker, data)
+	}
+	rest := data[start+len(marker):]
+	if end := strings.Index(rest, "\n["); end >= 0 {
+		rest = rest[:end]
+	}
+	return marker + rest
 }
 
 // TestDoInitWithGascityTemplate pins the gascity wizard template: a minimal

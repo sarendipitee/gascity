@@ -17,13 +17,26 @@ type ResolvedVersion struct {
 	Commit  string
 }
 
-// ResolveVersion discovers tags for source and selects the highest tag matching constraint.
-// Empty constraint means "latest stable semver tag". "sha:<hex>" bypasses tag discovery.
+// ResolveVersion discovers a concrete commit for source and constraint.
+// Empty constraint means "latest stable semver tag". "sha:<hex>" bypasses
+// remote discovery. "ref:<name>" follows a remote branch/tag/ref and records
+// the resolved commit in the lockfile while keeping authored config movable.
 func ResolveVersion(source, constraint string) (ResolvedVersion, error) {
 	if strings.HasPrefix(constraint, "sha:") {
 		commit := strings.TrimPrefix(constraint, "sha:")
 		if commit == "" {
 			return ResolvedVersion{}, fmt.Errorf("empty sha constraint")
+		}
+		return ResolvedVersion{Version: constraint, Commit: commit}, nil
+	}
+	if strings.HasPrefix(constraint, "ref:") {
+		ref := strings.TrimPrefix(constraint, "ref:")
+		if strings.TrimSpace(ref) == "" {
+			return ResolvedVersion{}, fmt.Errorf("empty ref constraint")
+		}
+		commit, err := resolveRemoteRef(source, ref)
+		if err != nil {
+			return ResolvedVersion{}, err
 		}
 		return ResolvedVersion{Version: constraint, Commit: commit}, nil
 	}
@@ -53,6 +66,25 @@ func ResolveVersion(source, constraint string) (ResolvedVersion, error) {
 		}
 	}
 	return ResolvedVersion{}, fmt.Errorf("no tags for %q match constraint %q", source, constraint)
+}
+
+func resolveRemoteRef(source, ref string) (string, error) {
+	refs := []string{ref}
+	if !strings.HasPrefix(ref, "refs/") {
+		refs = append(refs, "refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
+	}
+	args := append([]string{"ls-remote", normalizeRemoteSource(source).CloneURL}, refs...)
+	out, err := runGit("", args...)
+	if err != nil {
+		return "", fmt.Errorf("resolving ref %q for %q: %w", ref, source, err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] != "" {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("ref %q not found for %q", ref, source)
 }
 
 // DefaultConstraint returns the default caret constraint for a selected version.
