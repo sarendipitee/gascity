@@ -71,6 +71,15 @@ func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) ma
 
 func gcExecLifecycleInitProcessEnv(cityPath string, target execStoreTarget, provider string) ([]string, error) {
 	env := gcExecStoreEnv(cityPath, target, provider)
+	if execProviderUsesCanonicalBdScopeFiles(provider) {
+		backend := resolveBeadsBackend(cityPath)
+		for _, entry := range backend.ProviderEnv() {
+			key, value, ok := strings.Cut(entry, "=")
+			if ok {
+				env[key] = value
+			}
+		}
+	}
 	if !execProviderNeedsScopedDoltInit(provider) {
 		return mergeRuntimeEnv(os.Environ(), env), nil
 	}

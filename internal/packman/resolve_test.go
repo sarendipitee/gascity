@@ -44,6 +44,40 @@ func TestResolveVersionSupportsSHA(t *testing.T) {
 	}
 }
 
+func TestResolveVersionSupportsRefSelector(t *testing.T) {
+	prev := runGit
+	var gotArgs []string
+	runGit = func(_ string, args ...string) (string, error) {
+		gotArgs = append([]string(nil), args...)
+		return "abc123\trefs/heads/main\n", nil
+	}
+	t.Cleanup(func() { runGit = prev })
+
+	got, err := ResolveVersion("https://github.com/example/repo/tree/main/packs/foo", "ref:main")
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	if got.Version != "ref:main" || got.Commit != "abc123" {
+		t.Fatalf("ResolveVersion = %#v", got)
+	}
+	wantArgs := []string{
+		"ls-remote",
+		"https://github.com/example/repo.git",
+		"main",
+		"refs/heads/main",
+		"refs/tags/main",
+		"refs/tags/main^{}",
+	}
+	if len(gotArgs) != len(wantArgs) {
+		t.Fatalf("runGit args = %#v, want %#v", gotArgs, wantArgs)
+	}
+	for i := range wantArgs {
+		if gotArgs[i] != wantArgs[i] {
+			t.Fatalf("runGit args = %#v, want %#v", gotArgs, wantArgs)
+		}
+	}
+}
+
 func TestDefaultConstraint(t *testing.T) {
 	got, err := DefaultConstraint("1.4.2")
 	if err != nil {

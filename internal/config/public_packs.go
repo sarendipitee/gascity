@@ -26,9 +26,11 @@ const (
 	//
 	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite"
 
-	// PublicBeadsDoltlitePackVersion pins fresh DoltLite init output to the
-	// forked pack main commit containing the full DoltLite provider script.
-	PublicBeadsDoltlitePackVersion = "sha:facf7e2365d9718f91792a99ac7fb53b25b57606"
+	// PublicBeadsDoltlitePackVersion follows the fork's main branch instead of
+	// baking a pack-content SHA into the gc binary. The external pack carries
+	// the slow-moving install/build workflow and needs to be updateable without
+	// reinstalling gc.
+	PublicBeadsDoltlitePackVersion = "ref:main"
 
 	// PublicBeadsDoltliteInitPackSource is the durable source for the minimal
 	// DoltLite init support pack when a fresh city chooses the DoltLite beads

@@ -759,7 +759,9 @@ type Import struct {
 	// entries store the resolved source plus optional version.
 	Source string `toml:"source" jsonschema:"required"`
 	// Version is an optional semver constraint for git-backed imports (e.g.,
-	// "^1.2"). Empty for local paths. "sha:<hex>" pins a specific commit.
+	// "^1.2"). Empty for local paths. "sha:<hex>" pins a specific commit;
+	// "ref:<name>" follows a branch, tag, or ref and records the resolved
+	// commit in packs.lock.
 	Version string `toml:"version,omitempty"`
 	// Export is a compatibility-only loader knob retained for older
 	// configs. It is intentionally omitted from generated public schemas.
