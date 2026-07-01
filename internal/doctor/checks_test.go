@@ -26,6 +26,30 @@ type partialListDoctorProvider struct {
 	listErr error
 }
 
+var inheritedBeadsEnvKeys = []string{
+	"GC_BEADS",
+	"GC_BEADS_BACKEND",
+	"GC_BEADS_SCOPE_ROOT",
+	"BEADS_BACKEND",
+	"GC_BIN",
+	"GC_DOLT",
+	"GC_DOLT_HOST",
+	"GC_DOLT_PORT",
+	"GC_DOLT_USER",
+	"GC_DOLT_PASSWORD",
+	"BEADS_DOLT_SERVER_HOST",
+	"BEADS_DOLT_SERVER_PORT",
+	"BEADS_DOLT_SERVER_USER",
+	"BEADS_DOLT_PASSWORD",
+}
+
+func TestMain(m *testing.M) {
+	for _, key := range inheritedBeadsEnvKeys {
+		_ = os.Unsetenv(key)
+	}
+	os.Exit(m.Run())
+}
+
 func (p *partialListDoctorProvider) ListRunning(prefix string) ([]string, error) {
 	names, _ := p.Fake.ListRunning(prefix)
 	return names, p.listErr
@@ -52,20 +76,7 @@ func setupCity(t *testing.T, tomlContent string) string {
 // to the test's city.toml peek, defeating the assertion.
 func clearInheritedBeadsEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{
-		"GC_BEADS",
-		"GC_BEADS_SCOPE_ROOT",
-		"GC_BIN",
-		"GC_DOLT",
-		"GC_DOLT_HOST",
-		"GC_DOLT_PORT",
-		"GC_DOLT_USER",
-		"GC_DOLT_PASSWORD",
-		"BEADS_DOLT_SERVER_HOST",
-		"BEADS_DOLT_SERVER_PORT",
-		"BEADS_DOLT_SERVER_USER",
-		"BEADS_DOLT_PASSWORD",
-	} {
+	for _, key := range inheritedBeadsEnvKeys {
 		t.Setenv(key, "")
 	}
 }
@@ -538,6 +549,7 @@ func TestConfigRefsCheck_SessionSetupScriptLegacyCityRelativeWithSourceDir(t *te
 // --- BuiltinPackFamilyCheck ---
 
 func TestBuiltinPackFamilyCheck_Unmodified(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	c := NewBuiltinPackFamilyCheck(&config.City{}, t.TempDir())
 	r := c.Run(&CheckContext{})
 	if r.Status != StatusOK {
@@ -546,6 +558,7 @@ func TestBuiltinPackFamilyCheck_Unmodified(t *testing.T) {
 }
 
 func TestBuiltinPackFamilyCheck_FullOverrideOK(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	bdDir := filepath.Join(dir, "packs", "bd")
 	doltDir := filepath.Join(dir, "packs", "dolt")
@@ -573,6 +586,7 @@ func TestBuiltinPackFamilyCheck_FullOverrideOK(t *testing.T) {
 }
 
 func TestBuiltinPackFamilyCheck_PartialOverrideFails(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	doltDir := filepath.Join(dir, "packs", "dolt")
 	if err := os.MkdirAll(doltDir, 0o755); err != nil {
@@ -594,6 +608,7 @@ func TestBuiltinPackFamilyCheck_PartialOverrideFails(t *testing.T) {
 }
 
 func TestBuiltinPackFamilyCheck_GCBeadsFileOverrideSkipsRequirement(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	t.Setenv("GC_BEADS", "file")
 	doltDir := filepath.Join(dir, "packs", "dolt")
@@ -618,6 +633,7 @@ schema = 1
 }
 
 func TestBuiltinPackFamilyCheck_ExecGcBeadsBdOverrideStillRequiresFamily(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	t.Setenv("GC_BEADS", "exec:/tmp/gc-beads-bd")
 	doltDir := filepath.Join(dir, "packs", "dolt")
@@ -642,6 +658,7 @@ schema = 1
 }
 
 func TestBuiltinPackFamilyCheck_DoltliteBackendSkipsRequirement(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	doltDir := filepath.Join(dir, "packs", "dolt")
 	if err := os.MkdirAll(doltDir, 0o755); err != nil {
@@ -669,6 +686,7 @@ schema = 1
 }
 
 func TestBuiltinPackFamilyCheck_IgnoresSystemPacks(t *testing.T) {
+	clearInheritedBeadsEnv(t)
 	dir := t.TempDir()
 	systemDolt := filepath.Join(dir, ".gc", "system", "packs", "dolt")
 	if err := os.MkdirAll(systemDolt, 0o755); err != nil {
