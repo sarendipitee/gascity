@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -934,6 +935,61 @@ func TestDoHookClaimPreassignsContinuationGroupSiblings(t *testing.T) {
 	}
 }
 
+func TestDoHookClaimCoercesTypedMetadataValues(t *testing.T) {
+	runner := func(string, string) (string, error) {
+		return `[{"id":"hw-typed","status":"open","metadata":{"gc.routed_to":"worker","recovered":true,"attempts":2,"nested":{"k":"v"},"none":null}}]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(_ context.Context, _ string, _ []string, beadID, assignee string) (beads.Bead, bool, error) {
+			return beads.Bead{
+				ID:       beadID,
+				Status:   "in_progress",
+				Assignee: assignee,
+			}, true, nil
+		},
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(typed metadata) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.BeadID != "hw-typed" || result.Reason != "claimed" {
+		t.Fatalf("unexpected claim result: %+v", result)
+	}
+}
+
+func TestDecodeHookClaimBeadsCoercesTypedMetadataValues(t *testing.T) {
+	candidates, err := decodeHookClaimBeads(`[{"id":"hw-typed","status":"open","metadata":{"gc.routed_to":"worker","recovered":true,"attempts":2,"nested":{"k":"v"},"none":null}}]`)
+	if err != nil {
+		t.Fatalf("decodeHookClaimBeads: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want 1", len(candidates))
+	}
+	want := map[string]string{
+		"gc.routed_to": "worker",
+		"recovered":    "true",
+		"attempts":     "2",
+		"nested":       `{"k":"v"}`,
+		"none":         "null",
+	}
+	if !reflect.DeepEqual(candidates[0].Metadata, want) {
+		t.Fatalf("metadata = %#v, want %#v", candidates[0].Metadata, want)
+	}
+}
+
 func TestHookCommandError(t *testing.T) {
 	runner := func(string, string) (string, error) { return "", fmt.Errorf("command failed") }
 	var stdout, stderr bytes.Buffer
@@ -1373,6 +1429,23 @@ esac
 	}
 	if strings.Contains(logText, "args=update hw-other --assignee") {
 		t.Fatalf("continuation preassignment crossed route target; log:\n%s", logText)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"hook", "--claim", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(hook --claim --json) = %d, want 0; stdout=%q stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "does not declare JSON support") {
+		t.Fatalf("stderr = %q, want hook JSON contract without rollout warning", stderr.String())
+	}
+	result = hookClaimJSONResult{}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("run stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.Command != hookClaimCommandName || result.Action != "work" || result.BeadID != "hw-claim" {
+		t.Fatalf("unexpected run claim result: %+v", result)
 	}
 }
 
