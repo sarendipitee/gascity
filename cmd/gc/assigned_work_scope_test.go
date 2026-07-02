@@ -136,8 +136,7 @@ func TestFilterAssignedWorkBeadsForPoolDemandDropsOnlyKnownBlockedWork(t *testin
 			Metadata: map[string]string{
 				"gc.routed_to": "worker",
 			},
-			DependencyCount: 1,
-			IsBlocked:       &readyProjection,
+			IsBlocked: &readyProjection,
 		},
 		{
 			ID:       "blocked-by-projection",
@@ -155,7 +154,6 @@ func TestFilterAssignedWorkBeadsForPoolDemandDropsOnlyKnownBlockedWork(t *testin
 			Metadata: map[string]string{
 				"gc.routed_to": "worker",
 			},
-			DependencyCount: 1,
 		},
 		{
 			ID:       "blocked-by-status",
@@ -188,9 +186,9 @@ func TestFilterAssignedWorkBeadsForSessionWakeDropsOnlyKnownBlockedWork(t *testi
 	blockedProjection := true
 	readyProjection := false
 	work := []beads.Bead{
-		{ID: "stale-count-ready", Status: "open", Assignee: identity, DependencyCount: 1, IsBlocked: &readyProjection},
+		{ID: "stale-count-ready", Status: "open", Assignee: identity, IsBlocked: &readyProjection},
 		{ID: "blocked-by-projection", Status: "open", Assignee: identity, IsBlocked: &blockedProjection},
-		{ID: "missing-projection-count", Status: "open", Assignee: identity, DependencyCount: 1},
+		{ID: "missing-projection-count", Status: "open", Assignee: identity},
 		{ID: "blocked-by-status", Status: "blocked", Assignee: identity},
 	}
 
