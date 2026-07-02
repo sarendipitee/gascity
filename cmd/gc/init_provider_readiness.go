@@ -143,7 +143,7 @@ func finalizeInit(cityPath string, stdout, stderr io.Writer, opts initFinalizeOp
 }
 
 func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io.Writer, commandName string) error {
-	if cfg == nil || !configUsesBdProvider(cfg) || strings.TrimSpace(cfg.Beads.Backend) == "" || resolveBeadsBackendName(cfg.Beads.Backend).Name() != "doltlite" {
+	if cfg == nil || !providerUsesBdStoreContract(rawBeadsProvider(cityPath)) || resolveBeadsBackendName(beadsBackend(cityPath)).Name() != "doltlite" {
 		return nil
 	}
 	var buildCommand *config.DiscoveredCommand
@@ -190,17 +190,6 @@ func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io
 		}
 	}
 	return nil
-}
-
-func configUsesBdProvider(cfg *config.City) bool {
-	if cfg == nil {
-		return false
-	}
-	provider := strings.TrimSpace(cfg.Beads.Provider)
-	if provider == "" {
-		provider = "bd"
-	}
-	return providerUsesBdStoreContract(provider)
 }
 
 func maybePrintWizardProviderGuidance(wiz wizardConfig, stdout io.Writer) {

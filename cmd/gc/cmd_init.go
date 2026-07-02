@@ -554,7 +554,7 @@ func cmdInitWithPreparedWizardInternal(args []string, prepared wizardConfig, pre
 			return 1
 		}
 	}
-	if handled, code := resumeExistingInitIfPossibleInternal(fsys.OSFS{}, cityPath, stdout, stderr, "gc init", true, skipProviderReadiness, noStart); handled {
+	if handled, code := resumeExistingInitIfPossibleInternal(fsys.OSFS{}, cityPath, stdout, stderr, "gc init", true, skipProviderReadiness, preserveExisting, noStart); handled {
 		return code
 	}
 	var wiz wizardConfig
@@ -589,7 +589,7 @@ func cmdInitWithPreparedWizardInternal(args []string, prepared wizardConfig, pre
 	})
 }
 
-func resumeExistingInitIfPossibleInternal(fs fsys.FS, cityPath string, stdout, stderr io.Writer, commandName string, showProgress bool, skipProviderReadiness bool, noStart bool) (bool, int) {
+func resumeExistingInitIfPossibleInternal(fs fsys.FS, cityPath string, stdout, stderr io.Writer, commandName string, showProgress bool, skipProviderReadiness bool, preserveExisting bool, noStart bool) (bool, int) {
 	if !cityCanResumeInitFS(fs, cityPath) {
 		return false, 0
 	}
@@ -601,6 +601,7 @@ func resumeExistingInitIfPossibleInternal(fs fsys.FS, cityPath string, stdout, s
 		showProgress:          showProgress,
 		commandName:           commandName,
 		noStart:               noStart,
+		preserveExisting:      preserveExisting,
 	})
 }
 
