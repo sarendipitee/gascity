@@ -646,7 +646,13 @@ func upgradeCodexHooks(existing, desired []byte, cityDir string) ([]byte, bool, 
 	}
 	hasManagedCommand := codexHookValueHasManagedCommand(root, "")
 	needsPreCompact := codexHookDocCanAddPreCompact(root)
-	changed := applyCodexManagedHookUpgrade(root, desired, cityDir)
+	changed := upgradeCodexHookValue(root, "", cityDir)
+	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root, cityDir) {
+		changed = true
+	}
+	if addCodexPreCompactHook(root, desired) {
+		changed = true
+	}
 	data, err := overlay.MarshalCanonicalJSON(root)
 	if err != nil {
 		return nil, false, err
@@ -700,9 +706,6 @@ func CodexHooksNeedManagedUpgrade(data []byte, cityDir string) bool {
 
 func applyCodexManagedHookUpgrade(root any, desired []byte, cityDir string) bool {
 	changed := upgradeCodexHookValue(root, "", cityDir)
-	if normalizeCodexManagedHookEntries(root, cityDir) {
-		changed = true
-	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
 	}
