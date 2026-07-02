@@ -19,6 +19,28 @@ const (
 	// (gascity 0.1.6).
 	PublicGascityPackVersion = "sha:3b3b89f2011e06d84459aa7bea1552382f13930a"
 
+	// PublicBeadsDoltlitePackSource is the durable source for the external
+	// DoltLite operations pack. The gc binary only embeds the minimal
+	// beads-doltlite-init support pack; init imports this public pack when a
+	// city chooses [beads].backend = "doltlite".
+	//
+	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite"
+
+	// PublicBeadsDoltlitePackVersion follows the fork's main branch instead of
+	// baking a pack-content SHA into the gc binary. The external pack carries
+	// the slow-moving install/build workflow and needs to be updateable without
+	// reinstalling gc.
+	PublicBeadsDoltlitePackVersion = "ref:main"
+
+	// PublicBeadsDoltliteInitPackSource is the durable source for the minimal
+	// DoltLite init support pack when a fresh city chooses the DoltLite beads
+	// backend.
+	PublicBeadsDoltliteInitPackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite-init"
+
+	// PublicBeadsDoltliteInitPackVersion pins fresh DoltLite init output to
+	// the forked pack main commit containing the copied builtin init pack.
+	PublicBeadsDoltliteInitPackVersion = "sha:732f78c96890d95e1a11277ebc38e4766213b181"
+
 	// BundledPackImportVersion pins the [imports.core]/[imports.bd] entries
 	// gc init writes for the gascity.git packs bundled with the binary.
 	// This is the CANONICAL pin: the only commit the binary pre-seeds into

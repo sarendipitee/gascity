@@ -71,6 +71,15 @@ func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) ma
 
 func gcExecLifecycleInitProcessEnv(cityPath string, target execStoreTarget, provider string) ([]string, error) {
 	env := gcExecStoreEnv(cityPath, target, provider)
+	if execProviderUsesCanonicalBdScopeFiles(provider) {
+		backend := resolveBeadsBackend(cityPath)
+		for _, entry := range backend.ProviderEnv() {
+			key, value, ok := strings.Cut(entry, "=")
+			if ok {
+				env[key] = value
+			}
+		}
+	}
 	if !execProviderNeedsScopedDoltInit(provider) {
 		return mergeRuntimeEnv(os.Environ(), env), nil
 	}
@@ -107,11 +116,16 @@ func execProviderNeedsScopedDoltInit(provider string) bool {
 }
 
 func execProviderUsesCanonicalBdScopeFiles(provider string) bool {
-	return execProviderBase(provider) == "gc-beads-bd"
+	switch execProviderBase(provider) {
+	case "gc-beads-bd", "gc-beads-doltlite-bd":
+		return true
+	default:
+		return false
+	}
 }
 
 func execProviderNeedsScopedDoltStoreEnv(provider string) bool {
-	return execProviderUsesCanonicalBdScopeFiles(provider)
+	return execProviderBase(provider) == "gc-beads-bd"
 }
 
 func resolveConfiguredExecStoreTarget(cityPath, storePath string) (execStoreTarget, error) {

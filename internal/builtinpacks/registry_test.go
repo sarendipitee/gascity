@@ -21,6 +21,7 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 
 	want := []string{
 		"core=internal/bootstrap/packs/core",
+		"beads-doltlite-init=internal/bootstrap/packs/beadsdoltliteinit",
 		"bd=examples/bd",
 		"dolt=examples/bd/dolt",
 		"gastown=examples/gastown/packs/gastown",
@@ -205,7 +206,7 @@ func TestMaterializeSyntheticRepoProductionCallersStayAllowlisted(t *testing.T) 
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", ".gc", "node_modules", "worktrees":
+			case ".git", ".gc", "node_modules", "workspaces", "worktrees":
 				return filepath.SkipDir
 			}
 			// Skip git worktrees embedded in the repo (have a .git file, not dir).

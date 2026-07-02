@@ -114,6 +114,85 @@ func TestFilterAssignedWorkBeadsForPoolDemandKeepsDirectAssigneeAfterTemplateFal
 	}
 }
 
+func TestFilterAssignedWorkBeadsForPoolDemandDropsOnlyKnownBlockedWork(t *testing.T) {
+	cfg := &config.City{
+		Agents: []config.Agent{{
+			Name: "worker",
+		}},
+	}
+	blockedProjection := true
+	readyProjection := false
+	work := []beads.Bead{
+		{
+			ID:       "stale-count-ready",
+			Status:   "open",
+			Assignee: "worker-session",
+			Metadata: map[string]string{
+				"gc.routed_to": "worker",
+			},
+			IsBlocked: &readyProjection,
+		},
+		{
+			ID:       "blocked-by-projection",
+			Status:   "open",
+			Assignee: "worker-session",
+			Metadata: map[string]string{
+				"gc.routed_to": "worker",
+			},
+			IsBlocked: &blockedProjection,
+		},
+		{
+			ID:       "missing-projection-count",
+			Status:   "open",
+			Assignee: "worker-session",
+			Metadata: map[string]string{
+				"gc.routed_to": "worker",
+			},
+		},
+		{
+			ID:       "blocked-by-status",
+			Status:   "blocked",
+			Assignee: "worker-session",
+			Metadata: map[string]string{
+				"gc.routed_to": "worker",
+			},
+		},
+	}
+
+	got := filterAssignedWorkBeadsForPoolDemand(cfg, "", nil, work, []string{"", "", "", ""})
+
+	if len(got) != 2 || got[0].ID != "stale-count-ready" || got[1].ID != "missing-projection-count" {
+		t.Fatalf("filtered work = %#v, want ready work preserved and only projected-blocked work dropped", got)
+	}
+}
+
+func TestFilterAssignedWorkBeadsForSessionWakeDropsOnlyKnownBlockedWork(t *testing.T) {
+	cfg := &config.City{
+		Agents: []config.Agent{{
+			Name: "worker",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template: "worker",
+			Mode:     "on_demand",
+		}},
+	}
+	identity := cfg.NamedSessions[0].QualifiedName()
+	blockedProjection := true
+	readyProjection := false
+	work := []beads.Bead{
+		{ID: "stale-count-ready", Status: "open", Assignee: identity, IsBlocked: &readyProjection},
+		{ID: "blocked-by-projection", Status: "open", Assignee: identity, IsBlocked: &blockedProjection},
+		{ID: "missing-projection-count", Status: "open", Assignee: identity},
+		{ID: "blocked-by-status", Status: "blocked", Assignee: identity},
+	}
+
+	got := filterAssignedWorkBeadsForSessionWake(cfg, "", nil, work, []string{"", "", "", ""})
+
+	if len(got) != 2 || got[0].ID != "stale-count-ready" || got[1].ID != "missing-projection-count" {
+		t.Fatalf("filtered work = %#v, want ready work preserved and only projected-blocked work dropped", got)
+	}
+}
+
 func TestFilterAssignedWorkBeadsForPoolDemandKeepsLegacyWorkflowRunTarget(t *testing.T) {
 	cfg := &config.City{
 		Agents: []config.Agent{{

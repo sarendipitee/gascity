@@ -64,7 +64,7 @@ func EnsureBuiltinRuntimeAssets(cityPath string, warningWriter io.Writer) error 
 		pruneRetiredSystemPacks(cityPath, warningWriter)
 		return nil
 	}
-	if state.ready && requiredBuiltinSourcesUsable(cityPath) && lockedBundledImportsUsable(cityPath) {
+	if state.ready && requiredBuiltinSourcesUsable(cityPath) && lockedBundledImportsUsable(cityPath) && builtinRuntimeShimsCurrent(cityPath) {
 		return nil
 	}
 	state.ready = false
@@ -78,6 +78,9 @@ func EnsureBuiltinRuntimeAssets(cityPath string, warningWriter io.Writer) error 
 	}
 	if err := ensureGcBeadsBdShim(cityPath); err != nil {
 		problems = append(problems, fmt.Errorf("writing gc-beads-bd shim: %w", err))
+	}
+	if err := ensureGcBeadsDoltliteBdShim(cityPath); err != nil {
+		problems = append(problems, fmt.Errorf("writing gc-beads-doltlite-bd shim: %w", err))
 	}
 	pruneRetiredSystemPacks(cityPath, warningWriter)
 
@@ -122,18 +125,38 @@ func requiredBuiltinSources(cityPath string) map[string]string {
 
 func requiredBuiltinPackNames(cityPath string) []string {
 	required := []string{"core"}
+	backend := resolveBeadsBackend(cityPath)
 
 	if cityUsesBdStoreContract(cityPath) {
-		required = append(required, "bd")
+		if backend.Name() != "doltlite" {
+			required = appendRequiredBuiltinPack(required, "bd")
+		}
+		for _, name := range backend.RequiredBuiltinPacks() {
+			required = appendRequiredBuiltinPack(required, name)
+		}
+		return required
 	}
 	provider := strings.TrimSpace(configuredBeadsProviderValue(cityPath))
+	normalizedProvider := normalizeRawBeadsProvider(cityPath, provider)
 	usesDirectExecLifecycle := strings.HasPrefix(provider, "exec:") &&
 		execProviderBase(provider) == "gc-beads-bd" &&
-		normalizeRawBeadsProvider(cityPath, provider) != "bd"
-	if usesDirectExecLifecycle {
-		required = append(required, "dolt")
+		normalizedProvider != "bd"
+	if providerUsesBdStoreContract(normalizedProvider) || usesDirectExecLifecycle {
+		required = appendRequiredBuiltinPack(required, "bd")
+		for _, name := range backend.RequiredBuiltinPacks() {
+			required = appendRequiredBuiltinPack(required, name)
+		}
 	}
 	return required
+}
+
+func appendRequiredBuiltinPack(required []string, name string) []string {
+	for _, existing := range required {
+		if existing == name {
+			return required
+		}
+	}
+	return append(required, name)
 }
 
 // bundledPackImportCommit is the commit tag bundled-source caches and lock
@@ -156,11 +179,11 @@ func requiredBuiltinImports(cityPath string) (map[string]config.Import, []string
 	return builtinImportsForNames(requiredBuiltinPackNames(cityPath))
 }
 
-// builtinImportsForInit resolves the beads provider the same way
-// command-time store selection does — GC_BEADS env first, then the
-// about-to-be-written city.toml provider — so init writes exactly the
-// imports the builtin-pack-imports doctor check will later enforce.
-func builtinImportsForInit(cityProvider string) (map[string]config.Import, []string) {
+// builtinImportsForInit resolves the beads provider and backend the same way
+// command-time store selection does: env first, then about-to-be-written
+// city.toml values. Init then writes exactly the imports the builtin-pack-
+// imports doctor check will later enforce.
+func builtinImportsForInit(cityProvider, cityBackend string) (map[string]config.Import, []string) {
 	provider := strings.TrimSpace(os.Getenv("GC_BEADS"))
 	if provider == "" {
 		provider = strings.TrimSpace(cityProvider)
@@ -168,17 +191,58 @@ func builtinImportsForInit(cityProvider string) (map[string]config.Import, []str
 	if provider == "" {
 		provider = "bd" // matches the rawBeadsProvider default
 	}
+	backend := strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND"))
+	if backend == "" {
+		backend = strings.TrimSpace(cityBackend)
+	}
 	names := []string{"core"}
 	if providerUsesBdStoreContract(provider) {
-		names = append(names, "bd")
+		resolvedBackend := resolveBeadsBackendName(backend)
+		if resolvedBackend.Name() != "doltlite" {
+			names = appendRequiredBuiltinPack(names, "bd")
+		}
+		for _, name := range resolvedBackend.RequiredBuiltinPacks() {
+			names = appendRequiredBuiltinPack(names, name)
+		}
 	}
 	return builtinImportsForNames(names)
+}
+
+func externalImportsForInit(cityProvider, cityBackend string) (map[string]config.Import, []string) {
+	provider := strings.TrimSpace(os.Getenv("GC_BEADS"))
+	if provider == "" {
+		provider = strings.TrimSpace(cityProvider)
+	}
+	if provider == "" {
+		provider = "bd"
+	}
+	backend := strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND"))
+	if backend == "" {
+		backend = strings.TrimSpace(cityBackend)
+	}
+	if !providerUsesBdStoreContract(provider) || resolveBeadsBackendName(backend).Name() != "doltlite" {
+		return nil, nil
+	}
+	return map[string]config.Import{
+		"beads-doltlite": {
+			Source:  config.PublicBeadsDoltlitePackSource,
+			Version: config.PublicBeadsDoltlitePackVersion,
+		},
+	}, []string{"beads-doltlite"}
 }
 
 func builtinImportsForNames(names []string) (map[string]config.Import, []string) {
 	imports := make(map[string]config.Import, len(names))
 	ordered := make([]string, 0, len(names))
 	for _, name := range names {
+		if name == "beads-doltlite-init" {
+			imports[name] = config.Import{
+				Source:  config.PublicBeadsDoltliteInitPackSource,
+				Version: config.PublicBeadsDoltliteInitPackVersion,
+			}
+			ordered = append(ordered, name)
+			continue
+		}
 		// CanonicalImportSource authors the dereferenceable tree-URL form
 		// that gc init and the builtin-pack-imports doctor fix write into
 		// pack.toml; the version pin still derives from the normalized
@@ -246,13 +310,160 @@ func bundledGcBeadsBdScriptTarget() (string, error) {
 	return filepath.Join(cachePath, filepath.FromSlash(pack.Subpath), "assets", "scripts", "gc-beads-bd.sh"), nil
 }
 
+// bundledGcBeadsDoltliteBdScriptTarget returns the cache-resolved DoltLite
+// lifecycle script the stable shim execs.
+func bundledGcBeadsDoltliteBdScriptTarget() (string, error) {
+	source, ok := builtinpacks.Source("beads-doltlite-init")
+	if !ok {
+		return "", fmt.Errorf("bundled beads-doltlite-init pack is not registered")
+	}
+	cachePath, err := packman.RepoCachePath(source, bundledPackImportCommit())
+	if err != nil {
+		return "", err
+	}
+	pack, _ := builtinpacks.ByName("beads-doltlite-init")
+	return filepath.Join(cachePath, filepath.FromSlash(pack.Subpath), "assets", "scripts", "gc-beads-doltlite-bd.sh"), nil
+}
+
+func builtinRuntimeShimsCurrent(cityPath string) bool {
+	if !cityUsesBdStoreContract(cityPath) {
+		return true
+	}
+	if resolveBeadsBackend(cityPath).Name() == "doltlite" {
+		target, err := gcBeadsDoltliteBdScriptTarget(cityPath)
+		if err != nil {
+			return false
+		}
+		return shimExecsTarget(gcBeadsDoltliteBdScriptPath(cityPath), target)
+	}
+	target, err := bundledGcBeadsBdScriptTarget()
+	if err != nil {
+		return false
+	}
+	return shimExecsTarget(gcBeadsBdScriptPath(cityPath), target)
+}
+
+func shimExecsTarget(shimPath, target string) bool {
+	data, err := os.ReadFile(shimPath)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(shimPath)
+	if err != nil || info.Mode()&0o111 == 0 {
+		return false
+	}
+	return strings.Contains(string(data), target)
+}
+
+func gcBeadsDoltliteBdScriptTarget(cityPath string) (string, error) {
+	if target, ok := installedGcBeadsDoltliteBdScriptTarget(cityPath); ok {
+		return target, nil
+	}
+	return bundledGcBeadsDoltliteBdScriptTarget()
+}
+
+func installedGcBeadsDoltliteBdScriptTarget(cityPath string) (string, bool) {
+	for _, configPath := range []string{
+		filepath.Join(cityPath, "pack.toml"),
+		filepath.Join(cityPath, "city.toml"),
+	} {
+		for _, source := range importedBeadsDoltliteSources(configPath) {
+			if target, ok := localGcBeadsDoltliteBdScriptTarget(configPath, source); ok {
+				return target, true
+			}
+			if target, ok := lockedGcBeadsDoltliteBdScriptTarget(cityPath, source); ok {
+				return target, true
+			}
+		}
+	}
+	return "", false
+}
+
+func importedBeadsDoltliteSources(configPath string) []string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Imports map[string]config.Import `toml:"imports"`
+	}
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return nil
+	}
+	sources := make([]string, 0, len(doc.Imports))
+	for binding, imp := range doc.Imports {
+		source := strings.TrimSpace(imp.Source)
+		if binding == "beads-doltlite" || importSourceLooksLikeBeadsDoltlite(source) {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+func importSourceLooksLikeBeadsDoltlite(source string) bool {
+	clean := strings.TrimRight(strings.TrimSpace(source), "/")
+	if clean == "" {
+		return false
+	}
+	return clean == config.PublicBeadsDoltlitePackSource ||
+		strings.HasSuffix(clean, "/beads-doltlite") ||
+		strings.HasSuffix(clean, "//beads-doltlite")
+}
+
+func localGcBeadsDoltliteBdScriptTarget(configPath, source string) (string, bool) {
+	if source == "" || looksLikeRemotePackSource(source) {
+		return "", false
+	}
+	if !filepath.IsAbs(source) {
+		source = filepath.Join(filepath.Dir(configPath), source)
+	}
+	return existingGcBeadsDoltliteBdScriptTarget(source)
+}
+
+func lockedGcBeadsDoltliteBdScriptTarget(cityPath, source string) (string, bool) {
+	if source == "" || !looksLikeRemotePackSource(source) {
+		return "", false
+	}
+	lock, err := packman.ReadLockfile(fsys.OSFS{}, cityPath)
+	if err != nil {
+		return "", false
+	}
+	locked, ok := lock.Packs[source]
+	if !ok || strings.TrimSpace(locked.Commit) == "" {
+		return "", false
+	}
+	cachePath, err := packman.RepoCachePath(source, strings.TrimSpace(locked.Commit))
+	if err != nil {
+		return "", false
+	}
+	return existingGcBeadsDoltliteBdScriptTarget(cachePath)
+}
+
+func looksLikeRemotePackSource(source string) bool {
+	source = strings.TrimSpace(source)
+	return strings.Contains(source, "://") || strings.HasPrefix(source, "git@")
+}
+
+func existingGcBeadsDoltliteBdScriptTarget(packDir string) (string, bool) {
+	for _, candidate := range []string{
+		filepath.Join(packDir, "assets", "scripts", "gc-beads-doltlite-bd.sh"),
+		filepath.Join(packDir, "beads-doltlite", "assets", "scripts", "gc-beads-doltlite-bd.sh"),
+	} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
 // ensureGcBeadsBdShim writes the stable per-city gc-beads-bd entrypoint
 // (.gc/scripts/gc-beads-bd.sh) execing the cache-resolved bundled script.
 // The shim path is what sessions and provider pins reference; this
 // boundary rewrites its target whenever the binary (and therefore the
 // cache location) changes. Cities on non-bd providers skip it.
 func ensureGcBeadsBdShim(cityPath string) error {
-	if !cityUsesBdStoreContract(cityPath) {
+	if !cityUsesBdStoreContract(cityPath) || resolveBeadsBackend(cityPath).Name() == "doltlite" {
 		return nil
 	}
 	target, err := bundledGcBeadsBdScriptTarget()
@@ -265,6 +476,29 @@ func ensureGcBeadsBdShim(cityPath string) error {
 exec %q "$@"
 `, target)
 	path := gcBeadsBdScriptPath(cityPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return fsys.WriteFileIfContentOrModeChangedAtomic(fsys.OSFS{}, path, []byte(shim), 0o755)
+}
+
+// ensureGcBeadsDoltliteBdShim writes the stable per-city DoltLite bd
+// lifecycle entrypoint. DoltLite needs bd schema semantics, not the managed
+// Dolt server provider pack.
+func ensureGcBeadsDoltliteBdShim(cityPath string) error {
+	if !cityUsesBdStoreContract(cityPath) || resolveBeadsBackend(cityPath).Name() != "doltlite" {
+		return nil
+	}
+	target, err := gcBeadsDoltliteBdScriptTarget(cityPath)
+	if err != nil {
+		return err
+	}
+	shim := fmt.Sprintf(`#!/bin/sh
+# Generated by gc — do not edit. Stable entrypoint for the DoltLite
+# bd lifecycle script; the target tracks the installed pack or bootstrap cache.
+exec %q "$@"
+`, target)
+	path := gcBeadsDoltliteBdScriptPath(cityPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

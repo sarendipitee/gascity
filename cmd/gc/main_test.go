@@ -3210,8 +3210,32 @@ func TestRunWizardDefaults(t *testing.T) {
 	if !strings.Contains(out, "Choose a config template:") {
 		t.Errorf("stdout missing template prompt: %q", out)
 	}
+	if !strings.Contains(out, "Choose bead store backend:") {
+		t.Errorf("stdout missing backend prompt: %q", out)
+	}
+	if backendIdx, templateIdx := strings.Index(out, "Choose bead store backend:"), strings.Index(out, "Choose a config template:"); backendIdx < 0 || templateIdx < 0 || backendIdx > templateIdx {
+		t.Errorf("backend prompt must appear before template prompt: %q", out)
+	}
 	if !strings.Contains(out, "Choose your coding agent:") {
 		t.Errorf("stdout missing agent prompt: %q", out)
+	}
+}
+
+func TestRunWizardSelectsDoltliteBeforeTemplate(t *testing.T) {
+	stubWizardProviderReadiness(t, "claude")
+	stdin := strings.NewReader("2\n\n")
+	var stdout bytes.Buffer
+	wiz := runWizard(stdin, &stdout)
+
+	if wiz.beadsBackend != "doltlite" {
+		t.Fatalf("beadsBackend = %q, want doltlite", wiz.beadsBackend)
+	}
+	if wiz.configName != "gascity" {
+		t.Fatalf("configName = %q, want gascity", wiz.configName)
+	}
+	out := stdout.String()
+	if backendIdx, templateIdx := strings.Index(out, "Choose bead store backend:"), strings.Index(out, "Choose a config template:"); backendIdx < 0 || templateIdx < 0 || backendIdx > templateIdx {
+		t.Fatalf("backend prompt must appear before template prompt:\n%s", out)
 	}
 }
 
@@ -3237,7 +3261,7 @@ func TestRunWizardNilStdin(t *testing.T) {
 func TestRunWizardSelectGemini(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude", "codex", "gemini")
 	// Default template + Gemini CLI.
-	stdin := strings.NewReader("\ngemini\n")
+	stdin := strings.NewReader("\n\ngemini\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3252,7 +3276,7 @@ func TestRunWizardSelectGemini(t *testing.T) {
 func TestRunWizardSelectCodex(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude", "codex", "gemini")
 	// Default template + Codex by number.
-	stdin := strings.NewReader("\n2\n")
+	stdin := strings.NewReader("\n\n2\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3263,7 +3287,7 @@ func TestRunWizardSelectCodex(t *testing.T) {
 
 func TestRunWizardCustomTemplate(t *testing.T) {
 	// Select custom template → skips agent question, returns minimal config.
-	stdin := strings.NewReader("4\n")
+	stdin := strings.NewReader("\n4\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3286,7 +3310,7 @@ func TestRunWizardCustomTemplate(t *testing.T) {
 func TestRunWizardGastownTemplate(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude")
 	// Select gastown template + default agent.
-	stdin := strings.NewReader("3\n")
+	stdin := strings.NewReader("\n3\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3300,7 +3324,7 @@ func TestRunWizardGastownTemplate(t *testing.T) {
 
 func TestRunWizardGastownByName(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude")
-	stdin := strings.NewReader("gastown\n")
+	stdin := strings.NewReader("\ngastown\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3311,7 +3335,7 @@ func TestRunWizardGastownByName(t *testing.T) {
 
 func TestRunWizardTutorialAliasMapsToMinimal(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude")
-	stdin := strings.NewReader("tutorial\n")
+	stdin := strings.NewReader("\ntutorial\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3325,7 +3349,7 @@ func TestRunWizardTutorialAliasMapsToMinimal(t *testing.T) {
 
 func TestRunWizardRequiresExplicitSelectionWhenMultipleProvidersConfigured(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude", "codex")
-	stdin := strings.NewReader("\n\n")
+	stdin := strings.NewReader("\n\n\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3336,7 +3360,7 @@ func TestRunWizardRequiresExplicitSelectionWhenMultipleProvidersConfigured(t *te
 
 func TestRunWizardRejectsProviderOutsideReadinessSet(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude", "codex", "gemini")
-	stdin := strings.NewReader("\ncursor\n")
+	stdin := strings.NewReader("\n\ncursor\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3347,7 +3371,7 @@ func TestRunWizardRejectsProviderOutsideReadinessSet(t *testing.T) {
 
 func TestRunWizardNoCustomCommandOption(t *testing.T) {
 	stubWizardProviderReadiness(t, "claude", "codex", "gemini")
-	stdin := strings.NewReader("\n4\n")
+	stdin := strings.NewReader("\n\n4\n")
 	var stdout bytes.Buffer
 	wiz := runWizard(stdin, &stdout)
 
@@ -3760,6 +3784,19 @@ func TestInitWizardConfigFromFlagsRejectsUnknownTemplate(t *testing.T) {
 	template, _ := cmd.Flags().GetString("template")
 	if _, _, err := initWizardConfigFromFlags(cmd, "", "", nil, template, ""); err == nil {
 		t.Fatal("expected error for unknown template")
+	}
+}
+
+func TestInitCommandRegistersBeadsBackendFlag(t *testing.T) {
+	cmd := newInitCmd(io.Discard, io.Discard)
+	flag := cmd.Flags().Lookup("beads-backend")
+	if flag == nil {
+		t.Fatal("init command missing --beads-backend flag")
+	}
+	for _, want := range []string{"dolt", "doltlite"} {
+		if !strings.Contains(flag.Usage, want) {
+			t.Fatalf("--beads-backend help = %q, want %q", flag.Usage, want)
+		}
 	}
 }
 
