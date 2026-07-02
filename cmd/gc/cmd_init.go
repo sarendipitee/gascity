@@ -101,6 +101,7 @@ func canBootstrapExistingCity(wiz wizardConfig) bool {
 		len(wiz.providers) == 0 &&
 		wiz.startCommand == "" &&
 		wiz.bootstrapProfile == "" &&
+		wiz.beadsBackend == "" &&
 		wiz.err == nil
 }
 
@@ -357,6 +358,7 @@ func newInitCmd(stdout, stderr io.Writer) *cobra.Command {
 	var providersFlag []string
 	var defaultProviderFlag string
 	var bootstrapProfileFlag string
+	var beadsBackendFlag string
 	var skipProviderReadiness bool
 	var preserveExisting bool
 	var jsonOut bool
@@ -375,13 +377,19 @@ or --file to initialize from an existing TOML config file.
 
 Pass --preserve-existing to keep any pre-authored pack.toml, city.toml, or
 agent prompt files in the target directory (useful when bootstrapping a
-committed workspace — e.g. from a bootstrap.sh shipped in the repo).`,
+committed workspace — e.g. from a bootstrap.sh shipped in the repo).
+
+Use --beads-backend to configure the bead store backend. "dolt" uses the
+managed Dolt SQL server (default). "doltlite" uses embedded DoltLite
+databases with no server process.`,
 		Example: `  gc init
   gc init ~/my-city
   gc init --default-provider codex ~/my-city
   gc init --template gastown --default-provider codex ~/my-city
   gc init --providers claude,codex --default-provider codex ~/my-city
   gc init --default-provider codex --bootstrap-profile k8s-cell /city
+  gc init --beads-backend doltlite ~/my-city
+  gc init --template gastown --beads-backend doltlite ~/my-city
   gc init --name my-city
   gc init --from ~/elan --name elan /city
   gc init --file ./my-city.toml ~/bright-lights
@@ -411,6 +419,9 @@ committed workspace — e.g. from a bootstrap.sh shipped in the repo).`,
 			if flagMode != "" {
 				mode = flagMode
 			}
+			if beadsBackendFlag != "" {
+				wiz.beadsBackend = strings.TrimSpace(beadsBackendFlag)
+			}
 			code := cmdInitWithPreparedWizardInternal(args, wiz, flagMode != "", nameFlag, out, stderr, skipProviderReadiness, preserveExisting, jsonOut, noStart)
 			return writeInitJSONOrExit(code, jsonOut, args, nameFlag, wiz.configName, wizardDefaultProvider(wiz), wizardProviders(wiz), bootstrapProfileFlag, mode, stdout)
 		},
@@ -423,6 +434,7 @@ committed workspace — e.g. from a bootstrap.sh shipped in the repo).`,
 	cmd.Flags().StringArrayVar(&providersFlag, "providers", nil, "readiness-aware providers to write to city.toml (repeatable or comma-separated)")
 	cmd.Flags().StringVar(&templateFlag, "template", "", "non-interactive template to write: minimal, gastown, gascity, or custom")
 	cmd.Flags().StringVar(&bootstrapProfileFlag, "bootstrap-profile", "", "bootstrap profile to apply for hosted/container defaults")
+	cmd.Flags().StringVar(&beadsBackendFlag, "beads-backend", "", "bead store backend: \"dolt\" (managed Dolt server) or \"doltlite\" (embedded DoltLite); default: dolt")
 	cmd.Flags().BoolVar(&skipProviderReadiness, "skip-provider-readiness", false, "skip provider login/readiness checks during init and continue startup")
 	cmd.Flags().BoolVar(&noStart, "no-start", false, "initialize files and imports without registering or starting the city")
 	cmd.Flags().BoolVar(&preserveExisting, "preserve-existing", false, "keep any pre-authored pack.toml, city.toml, or agent prompt files instead of overwriting them")
@@ -439,6 +451,8 @@ committed workspace — e.g. from a bootstrap.sh shipped in the repo).`,
 	cmd.MarkFlagsMutuallyExclusive("template", "from")
 	cmd.MarkFlagsMutuallyExclusive("bootstrap-profile", "file")
 	cmd.MarkFlagsMutuallyExclusive("bootstrap-profile", "from")
+	cmd.MarkFlagsMutuallyExclusive("beads-backend", "file")
+	cmd.MarkFlagsMutuallyExclusive("beads-backend", "from")
 	_ = cmd.Flags().MarkHidden("provider")
 	return cmd
 }

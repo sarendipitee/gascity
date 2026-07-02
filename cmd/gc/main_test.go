@@ -3787,6 +3787,19 @@ func TestInitWizardConfigFromFlagsRejectsUnknownTemplate(t *testing.T) {
 	}
 }
 
+func TestInitCommandRegistersBeadsBackendFlag(t *testing.T) {
+	cmd := newInitCmd(io.Discard, io.Discard)
+	flag := cmd.Flags().Lookup("beads-backend")
+	if flag == nil {
+		t.Fatal("init command missing --beads-backend flag")
+	}
+	for _, want := range []string{"dolt", "doltlite"} {
+		if !strings.Contains(flag.Usage, want) {
+			t.Fatalf("--beads-backend help = %q, want %q", flag.Usage, want)
+		}
+	}
+}
+
 func TestCmdInitTemplateFlagSelectsGastown(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_DOLT", "skip")

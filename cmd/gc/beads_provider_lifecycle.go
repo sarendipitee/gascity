@@ -1486,6 +1486,11 @@ func ensureCanonicalDoltliteScopeMetadataForInit(fs fsys.FS, scopeRoot, doltData
 }
 
 //nolint:unparam // keep fs seam for future testable FS injection
+func enforceCanonicalDoltliteScopeMetadataForInit(fs fsys.FS, scopeRoot, doltDatabase string) error {
+	return ensureCanonicalDoltliteScopeMetadata(fs, scopeRoot, doltDatabase, false)
+}
+
+//nolint:unparam // keep fs seam for future testable FS injection
 func enforceCanonicalScopeMetadataForInit(fs fsys.FS, scopeRoot, doltDatabase string) error {
 	return ensureCanonicalScopeMetadata(fs, scopeRoot, doltDatabase, false)
 }
