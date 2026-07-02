@@ -701,11 +701,14 @@ func CodexHooksNeedManagedUpgrade(data []byte, cityDir string) bool {
 	if err := json.Unmarshal(data, &root); err != nil {
 		return false
 	}
-	return applyCodexManagedHookUpgrade(root, nil, cityDir)
+	return upgradeCodexHookValue(root, "", cityDir)
 }
 
 func applyCodexManagedHookUpgrade(root any, desired []byte, cityDir string) bool {
 	changed := upgradeCodexHookValue(root, "", cityDir)
+	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root, cityDir) {
+		changed = true
+	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
 	}
@@ -1518,19 +1521,19 @@ func upgradeClaudeHookCommand(event, command string) (string, bool) {
 		// Tested first because it changes the same trailing token the
 		// bare-handoff form would otherwise patch.
 		if equalsLegacyCommandBody(body, `gc prime --hook`) {
-			return strings.Replace(command, `gc prime --hook`, preCompactCurrentFormBody, 1), true
+			return strings.Replace(command, `gc prime --hook`, preCompactCurrentFormBody(""), 1), true
 		}
 		// Legacy: bare `gc handoff "context cycle"` (no --auto)
 		// requests a controller restart on every Claude Code
 		// compaction event, killing the session (gc-flp1). Upstream
 		// fix landed in commit 7b3b913a; this patches existing cities.
 		if equalsLegacyCommandBody(body, `gc handoff "context cycle"`) {
-			return strings.Replace(command, `gc handoff "context cycle"`, preCompactCurrentFormBody, 1), true
+			return strings.Replace(command, `gc handoff "context cycle"`, preCompactCurrentFormBody(""), 1), true
 		}
 		// Legacy: `gc handoff --auto "context cycle"` (pre --hook-format).
 		// Upgrade to the current form that includes --hook-format codex.
 		if equalsLegacyCommandBody(body, `gc handoff --auto "context cycle"`) {
-			return strings.Replace(command, `gc handoff --auto "context cycle"`, preCompactCurrentFormBody, 1), true
+			return strings.Replace(command, `gc handoff --auto "context cycle"`, preCompactCurrentFormBody(""), 1), true
 		}
 	case "SessionStart":
 		// Legacy: bare `gc prime --hook` without the
