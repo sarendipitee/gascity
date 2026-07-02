@@ -18,6 +18,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	eventsexec "github.com/gastownhall/gascity/internal/events/exec"
+	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/mail"
 	"github.com/gastownhall/gascity/internal/mail/beadmail"
 	mailexec "github.com/gastownhall/gascity/internal/mail/exec"
@@ -550,7 +551,20 @@ func cityUsesBdStoreContract(cityPath string) bool {
 }
 
 func cityUsesManagedDoltBeadsLifecycle(cityPath string) bool {
-	return cityUsesBdStoreContract(cityPath) && !cityUsesDoltliteBeadsBackend(cityPath)
+	if !cityUsesBdStoreContract(cityPath) || cityUsesDoltliteBeadsBackend(cityPath) {
+		return false
+	}
+	if cfg, err := loadCityConfig(cityPath, io.Discard); err == nil && cfg != nil {
+		host, port := configuredExternalDoltTargetForCity(cfg.Dolt)
+		if strings.TrimSpace(host) != "" || strings.TrimSpace(port) != "" {
+			return true
+		}
+	}
+	meta, ok, err := contract.LoadMetadataState(fsys.OSFS{}, filepath.Join(cityPath, ".beads", "metadata.json"))
+	if err == nil && ok && strings.EqualFold(strings.TrimSpace(meta.Backend), "dolt") {
+		return strings.EqualFold(strings.TrimSpace(meta.DoltMode), "server")
+	}
+	return false
 }
 
 func rawBeadsProviderForScope(scopeRoot, cityPath string) string {
@@ -653,7 +667,7 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 //     operations. Used by testscript and integration tests.
 func beadsProvider(cityPath string) string {
 	raw := rawBeadsProvider(cityPath)
-	if raw == "bd" {
+	if raw == "bd" && cityUsesManagedDoltBeadsLifecycle(cityPath) {
 		return "exec:" + gcBeadsBdScriptPath(cityPath)
 	}
 	return raw

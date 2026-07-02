@@ -475,6 +475,9 @@ func normalizeCanonicalBdScopeFilesForInit(cityPath, dir, prefix, doltDatabase s
 	} else if usesPostgres {
 		return nil
 	}
+	if cityUsesDoltliteBeadsBackend(cityPath) {
+		return nil
+	}
 	if state, ok, err := desiredScopeDoltConfigStateForInit(cityPath, dir, prefix); err != nil {
 		return err
 	} else if ok {
@@ -818,6 +821,9 @@ func initBeadsForDir(cityPath, dir, prefix, doltDatabase string) error {
 	if provider == "file" {
 		return initFileStoreForDir(cityPath, dir)
 	}
+	if provider == "bd" {
+		return initEmbeddedBdStore(dir, prefix)
+	}
 	if strings.HasPrefix(provider, "exec:") {
 		args := []string{"init", dir, prefix}
 		if strings.TrimSpace(doltDatabase) != "" {
@@ -934,6 +940,35 @@ func shouldInitDefaultRigBdStore(cityPath, dir, provider string) bool {
 	}
 	provider = strings.TrimSpace(provider)
 	return provider != "" && provider != "file" && !strings.HasPrefix(provider, "exec:") && !providerUsesBdStoreContract(provider)
+}
+
+func initEmbeddedBdStore(dir, prefix string) error {
+	if _, err := os.Stat(filepath.Join(dir, ".beads", "metadata.json")); err == nil {
+		return nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check bd embedded metadata: %w", err)
+	}
+	env := map[string]string{
+		"BEADS_DIR":              filepath.Join(dir, ".beads"),
+		"GC_DOLT_HOST":           "",
+		"GC_DOLT_PORT":           "",
+		"GC_DOLT_USER":           "",
+		"GC_DOLT_PASSWORD":       "",
+		"BEADS_DOLT_SERVER_HOST": "",
+		"BEADS_DOLT_SERVER_MODE": "",
+		"BEADS_DOLT_SERVER_PORT": "",
+		"BEADS_DOLT_SERVER_USER": "",
+		"BEADS_DOLT_PASSWORD":    "",
+	}
+	applyExportSuppressionEnv(env)
+	args := []string{"init", "--backend", "doltlite", "-p", prefix, "--skip-hooks", "--skip-agents"}
+	if _, err := beads.ExecCommandRunnerWithEnv(env)(dir, "bd", args...); err != nil {
+		if isBdAlreadyInitializedError(err) {
+			return nil
+		}
+		return fmt.Errorf("bd embedded init: %w", err)
+	}
+	return nil
 }
 
 func initDefaultRigBdStore(cityPath, dir, prefix, doltDatabase string) error {
@@ -1560,6 +1595,9 @@ func normalizeCanonicalBdScopeFiles(cityPath string, cfg *config.City, warns ...
 				return fmt.Errorf("canonicalizing rig %q metadata: %w", cfg.Rigs[i].Name, err)
 			}
 		}
+	}
+	if cityUsesDoltliteBeadsBackend(cityPath) {
+		return nil
 	}
 	if err := syncConfiguredDoltPortFiles(cityPath, cfg.Dolt, config.EffectiveHQPrefix(cfg), cfg.Rigs, warn); err != nil {
 		return fmt.Errorf("syncing canonical dolt config: %w", err)
