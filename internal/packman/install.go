@@ -220,9 +220,13 @@ func (s *syncState) resolveSource(source, constraint string) (bool, error) {
 	if !forceUpgrade && s.upgradeSources != nil {
 		_, forceUpgrade = s.upgradeSources[source]
 	}
+	mutableRef := strings.HasPrefix(constraint, "ref:")
 
 	if current, ok := s.chosen[source]; ok && matchesExisting(current, constraint) {
-		if !forceUpgrade || s.refreshed[source] {
+		if mutableRef && !s.refreshed[source] {
+			// Re-resolve movable refs once per sync so repeated imports share
+			// one remote lookup without pinning future installs to stale HEADs.
+		} else if !forceUpgrade || s.refreshed[source] {
 			return false, nil
 		}
 	}
@@ -240,7 +244,7 @@ func (s *syncState) resolveSource(source, constraint string) (bool, error) {
 	case InstallUpgrade:
 		// Always refresh below unless this sync already resolved the source.
 	case InstallResolveIfNeeded:
-		if !forceUpgrade && hasExisting && matchesExisting(existing, constraint) {
+		if !forceUpgrade && !mutableRef && hasExisting && matchesExisting(existing, constraint) {
 			return s.storeChosen(source, existing, false), nil
 		}
 	default:

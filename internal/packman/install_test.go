@@ -195,6 +195,53 @@ func TestSyncLockResolveIfNeededResolvesAndCaches(t *testing.T) {
 	}
 }
 
+func TestSyncLockResolveIfNeededRefreshesMutableRef(t *testing.T) {
+	home := t.TempDir()
+	city := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
+	stubCachedPackGit(t)
+
+	source := "https://example.com/a.git"
+	if err := WriteLockfile(fsys.OSFS{}, city, &Lockfile{
+		Schema: LockfileSchema,
+		Packs: map[string]LockedPack{
+			source: {Version: "ref:main", Commit: "old", Fetched: time.Unix(10, 0).UTC()},
+		},
+	}); err != nil {
+		t.Fatalf("WriteLockfile: %v", err)
+	}
+	stageCachedPack(t, source, "old", `
+[pack]
+name = "a"
+schema = 1
+`)
+	stageCachedPack(t, source, "new", `
+[pack]
+name = "a"
+schema = 1
+`)
+
+	prev := runGit
+	runGit = func(dir string, args ...string) (string, error) {
+		if len(args) >= 1 && args[0] == "ls-remote" {
+			return "new\trefs/heads/main\n", nil
+		}
+		return prev(dir, args...)
+	}
+	t.Cleanup(func() { runGit = prev })
+
+	got, err := SyncLock(city, map[string]config.Import{
+		"a": {Source: source, Version: "ref:main"},
+	}, InstallResolveIfNeeded)
+	if err != nil {
+		t.Fatalf("SyncLock: %v", err)
+	}
+	if pack := got.Packs[source]; pack.Commit != "new" {
+		t.Fatalf("Commit = %q, want refreshed ref commit", pack.Commit)
+	}
+}
+
 func TestInstallLockedEnsuresEveryLockedRepo(t *testing.T) {
 	home := t.TempDir()
 	city := t.TempDir()

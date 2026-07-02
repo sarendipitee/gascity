@@ -32,6 +32,7 @@ type initFinalizeOptions struct {
 	showProgress          bool
 	commandName           string
 	noStart               bool
+	preserveExisting      bool
 }
 
 type initProviderTarget struct {
@@ -67,9 +68,11 @@ func finalizeInit(cityPath string, stdout, stderr io.Writer, opts initFinalizeOp
 		fmt.Fprintf(stderr, "%s: fetching packs: %v\n", opts.commandName, err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	if err := ensureInitDoltlitePackImportsCurrent(cityPath); err != nil {
-		fmt.Fprintf(stderr, "%s: repairing DoltLite imports: %v\n", opts.commandName, err) //nolint:errcheck // best-effort stderr
-		return 1
+	if !opts.preserveExisting {
+		if err := ensureInitDoltlitePackImportsCurrent(cityPath); err != nil {
+			fmt.Fprintf(stderr, "%s: repairing DoltLite imports: %v\n", opts.commandName, err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
 	}
 
 	if opts.showProgress {
@@ -140,7 +143,7 @@ func finalizeInit(cityPath string, stdout, stderr io.Writer, opts initFinalizeOp
 }
 
 func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io.Writer, commandName string) error {
-	if cfg == nil || strings.TrimSpace(cfg.Beads.Backend) == "" || resolveBeadsBackendName(cfg.Beads.Backend).Name() != "doltlite" {
+	if cfg == nil || !configUsesBdProvider(cfg) || strings.TrimSpace(cfg.Beads.Backend) == "" || resolveBeadsBackendName(cfg.Beads.Backend).Name() != "doltlite" {
 		return nil
 	}
 	var buildCommand *config.DiscoveredCommand
@@ -187,6 +190,17 @@ func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io
 		}
 	}
 	return nil
+}
+
+func configUsesBdProvider(cfg *config.City) bool {
+	if cfg == nil {
+		return false
+	}
+	provider := strings.TrimSpace(cfg.Beads.Provider)
+	if provider == "" {
+		provider = "bd"
+	}
+	return providerUsesBdStoreContract(provider)
 }
 
 func maybePrintWizardProviderGuidance(wiz wizardConfig, stdout io.Writer) {

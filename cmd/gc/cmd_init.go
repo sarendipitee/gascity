@@ -420,9 +420,13 @@ databases with no server process.`,
 				mode = flagMode
 			}
 			if beadsBackendFlag != "" {
+				if wiz.configName == "" {
+					wiz = defaultWizardConfig()
+				}
 				wiz.beadsBackend = strings.TrimSpace(beadsBackendFlag)
 			}
-			code := cmdInitWithPreparedWizardInternal(args, wiz, flagMode != "", nameFlag, out, stderr, skipProviderReadiness, preserveExisting, jsonOut, noStart)
+			preparedSet := flagMode != "" || beadsBackendFlag != ""
+			code := cmdInitWithPreparedWizardInternal(args, wiz, preparedSet, nameFlag, out, stderr, skipProviderReadiness, preserveExisting, jsonOut, noStart)
 			return writeInitJSONOrExit(code, jsonOut, args, nameFlag, wiz.configName, wizardDefaultProvider(wiz), wizardProviders(wiz), bootstrapProfileFlag, mode, stdout)
 		},
 	}
@@ -581,6 +585,7 @@ func cmdInitWithPreparedWizardInternal(args []string, prepared wizardConfig, pre
 		showProgress:          true,
 		commandName:           "gc init",
 		noStart:               noStart,
+		preserveExisting:      preserveExisting,
 	})
 }
 
@@ -1357,6 +1362,7 @@ func cmdInitFromTOMLFileWithOptionsInternal(fs fsys.FS, tomlSrc, cityPath, nameO
 		skipProviderReadiness: skipProviderReadiness,
 		commandName:           "gc init",
 		noStart:               noStart,
+		preserveExisting:      preserveExisting,
 	})
 }
 
