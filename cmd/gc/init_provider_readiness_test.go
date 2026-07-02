@@ -635,7 +635,7 @@ func TestFinalizeInitRepairsStaleDoltliteImportBeforeInstall(t *testing.T) {
 	})
 
 	cityPath := filepath.Join(t.TempDir(), "bright-lights")
-	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
+	if err := ensureCityScaffold(cityPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
@@ -707,7 +707,7 @@ func TestFinalizeInitPreserveExistingSkipsDoltliteImportRepair(t *testing.T) {
 	})
 
 	cityPath := filepath.Join(t.TempDir(), "bright-lights")
-	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
+	if err := ensureCityScaffold(cityPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
@@ -753,6 +753,69 @@ source = "https://github.com/gastownhall/gascity-packs.git//beads-doltlite"
 	}
 	if !bytes.Equal(got, originalPack) {
 		t.Fatalf("pack.toml was rewritten under preserveExisting=true\n got: %s\nwant: %s", got, originalPack)
+	}
+}
+
+func TestResumeExistingInitPreserveExistingSkipsDoltliteImportRepair(t *testing.T) {
+	clearGCEnv(t)
+	t.Setenv("GC_DOLT", "skip")
+	configureIsolatedRuntimeEnv(t)
+	t.Setenv("GC_BEADS", "bd")
+	disableBootstrapForTests(t)
+	stubInitDependencyChecks(t)
+	stubInitDoltAuthorIdentity(t, map[string]string{
+		"user.name":  "Test User",
+		"user.email": "test@example.com",
+	})
+
+	cityPath := filepath.Join(t.TempDir(), "bright-lights")
+	if err := ensureCityScaffold(cityPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "bright-lights"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+bd_compatibility = "1.0.5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalPack := []byte(`[pack]
+name = "resume-authored"
+schema = 2
+
+[imports.beads-doltlite]
+source = "https://github.com/gastownhall/gascity-packs.git//beads-doltlite"
+`)
+	if err := os.WriteFile(filepath.Join(cityPath, "pack.toml"), originalPack, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !cityCanResumeInitFS(fsys.OSFS{}, cityPath) {
+		t.Fatal("test city should be resumable")
+	}
+
+	prevInstall := ensureInitRemoteImportsInstalled
+	t.Cleanup(func() { ensureInitRemoteImportsInstalled = prevInstall })
+	ensureInitRemoteImportsInstalled = func(string) error {
+		return errors.New("stop after skipped resume import repair")
+	}
+
+	var stdout, stderr bytes.Buffer
+	handled, code := resumeExistingInitIfPossibleInternal(fsys.OSFS{}, cityPath, &stdout, &stderr, "gc init", true, true, true, true)
+	if !handled {
+		t.Fatal("resumeExistingInitIfPossibleInternal did not handle resumable city")
+	}
+	if code != 1 {
+		t.Fatalf("resumeExistingInitIfPossibleInternal code = %d, want 1", code)
+	}
+	got, err := os.ReadFile(filepath.Join(cityPath, "pack.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, originalPack) {
+		t.Fatalf("pack.toml was rewritten under preserveExisting=true resume\n got: %s\nwant: %s", got, originalPack)
 	}
 }
 
@@ -863,6 +926,15 @@ func assertInitPackImport(t *testing.T, imports map[string]config.Import, name s
 
 func TestRunDoltliteFullInstallRunsExternalPackBuildAllInstall(t *testing.T) {
 	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "bright-lights"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	commandDir := filepath.Join(cityPath, "commands", "build")
 	if err := os.MkdirAll(commandDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -878,6 +950,7 @@ func TestRunDoltliteFullInstallRunsExternalPackBuildAllInstall(t *testing.T) {
 
 	cfg := &config.City{}
 	cfg.Workspace.Name = "bright-lights"
+	cfg.Beads.Provider = "bd"
 	cfg.Beads.Backend = "doltlite"
 	cfg.PackCommands = []config.DiscoveredCommand{{
 		BindingName: "beads-doltlite",
@@ -903,7 +976,7 @@ func TestRunDoltliteFullInstallRunsExternalPackBuildAllInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading env: %v", err)
 	}
-	if got, want := strings.TrimSpace(string(env)), "source=1 lib=1 ld= dyld=\nsource=1 lib=1 ld= dyld="; got != want {
+	if got, want := strings.TrimSpace(string(env)), "source=1 lib=1 ld= dyld=unset\nsource=1 lib=1 ld= dyld=unset"; got != want {
 		t.Fatalf("DoltLite skip env values = %q, want %q", got, want)
 	}
 	for _, want := range []string{
@@ -928,18 +1001,63 @@ func TestRunDoltliteFullInstallSkipsNonDoltliteBackend(t *testing.T) {
 }
 
 func TestRunDoltliteFullInstallSkipsNonBdProvider(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "bright-lights"
+
+[beads]
+provider = "file"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := &config.City{}
 	cfg.Beads.Provider = "file"
 	cfg.Beads.Backend = "doltlite"
-	if err := runDoltliteFullInstall(t.TempDir(), cfg, io.Discard, io.Discard, "gc init"); err != nil {
+	if err := runDoltliteFullInstall(cityPath, cfg, io.Discard, io.Discard, "gc init"); err != nil {
 		t.Fatalf("runDoltliteFullInstall non-bd provider: %v", err)
 	}
 }
 
-func TestRunDoltliteFullInstallRequiresInstalledExternalCommand(t *testing.T) {
+func TestRunDoltliteFullInstallHonorsBdProviderEnvOverride(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "bright-lights"
+
+[beads]
+provider = "file"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_BEADS", "bd")
+
 	cfg := &config.City{}
+	cfg.Beads.Provider = "file"
 	cfg.Beads.Backend = "doltlite"
-	err := runDoltliteFullInstall(t.TempDir(), cfg, io.Discard, io.Discard, "gc init")
+	err := runDoltliteFullInstall(cityPath, cfg, io.Discard, io.Discard, "gc init")
+	if err == nil || !strings.Contains(err.Error(), "beads-doltlite build command is not installed") {
+		t.Fatalf("err = %v, want missing build command from env-selected bd provider", err)
+	}
+}
+
+func TestRunDoltliteFullInstallRequiresInstalledExternalCommand(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "bright-lights"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{}
+	cfg.Beads.Provider = "bd"
+	cfg.Beads.Backend = "doltlite"
+	err := runDoltliteFullInstall(cityPath, cfg, io.Discard, io.Discard, "gc init")
 	if err == nil || !strings.Contains(err.Error(), "beads-doltlite build command is not installed") {
 		t.Fatalf("err = %v, want missing build command", err)
 	}
