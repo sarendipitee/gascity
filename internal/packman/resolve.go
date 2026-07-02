@@ -74,18 +74,29 @@ func ResolveVersion(cityRoot, source, constraint string) (ResolvedVersion, error
 
 func resolveRemoteRef(cityRoot, source, ref string) (string, error) {
 	refs := []string{ref}
-	if !strings.HasPrefix(ref, "refs/") {
+	candidates := []string{ref}
+	if strings.HasPrefix(ref, "refs/tags/") && !strings.HasSuffix(ref, "^{}") {
+		refs = append(refs, ref+"^{}")
+		candidates = []string{ref + "^{}", ref}
+	} else if !strings.HasPrefix(ref, "refs/") {
 		refs = append(refs, "refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
+		candidates = []string{ref, "refs/heads/" + ref, "refs/tags/" + ref + "^{}", "refs/tags/" + ref}
 	}
 	cloneURL := normalizeRemoteSource(source).CloneURL
 	out, err := runNetworkGit(cityRoot, cloneURL, "", append([]string{"ls-remote", cloneURL}, refs...)...)
 	if err != nil {
 		return "", fmt.Errorf("resolving ref %q for %q: %w", ref, gitcred.RedactUserinfo(source), err)
 	}
+	matches := make(map[string]string)
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] != "" {
-			return fields[0], nil
+		if len(fields) == 2 && fields[0] != "" && fields[1] != "" {
+			matches[fields[1]] = fields[0]
+		}
+	}
+	for _, candidate := range candidates {
+		if commit := matches[candidate]; commit != "" {
+			return commit, nil
 		}
 	}
 	return "", fmt.Errorf("ref %q not found for %q", ref, source)
