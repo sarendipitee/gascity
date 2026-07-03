@@ -3115,6 +3115,77 @@ func TestOrderHistoryWithStoresResolverDeduplicatesSameBackingStore(t *testing.T
 	}
 }
 
+func TestCachedOrderHistoryStoresResolverUsesDedicatedOpener(t *testing.T) {
+	t.Cleanup(func() { openOrderHistoryStoreAt = defaultOpenOrderHistoryStoreAt })
+
+	want := beads.NewMemStore()
+	var calls []string
+	openOrderHistoryStoreAt = func(storePath, cityPath string) (beads.Store, error) {
+		calls = append(calls, storePath+"|"+cityPath)
+		return want, nil
+	}
+
+	resolver := cachedOrderHistoryStoresResolver("/tmp/city", nil, io.Discard)
+	stores, err := resolver(orders.Order{Name: "digest"})
+	if err != nil {
+		t.Fatalf("resolver: %v", err)
+	}
+	if len(stores) != 1 {
+		t.Fatalf("stores len = %d, want 1", len(stores))
+	}
+	if stores[0].Store == nil {
+		t.Fatal("resolver returned nil store")
+	}
+	if len(calls) != 1 || calls[0] != "/tmp/city|/tmp/city" {
+		t.Fatalf("opener calls = %#v, want city-scope order-history opener", calls)
+	}
+}
+
+func TestCachedOrderHistoryStoresResolverRigUsesDedicatedOpenerForPrimaryAndLegacy(t *testing.T) {
+	t.Cleanup(func() { openOrderHistoryStoreAt = defaultOpenOrderHistoryStoreAt })
+
+	primary := beads.NewMemStore()
+	legacy := beads.NewMemStore()
+	calls := make([]string, 0, 2)
+	openOrderHistoryStoreAt = func(storePath, cityPath string) (beads.Store, error) {
+		calls = append(calls, storePath+"|"+cityPath)
+		if storePath == "/tmp/city/rigs/frontend" {
+			return primary, nil
+		}
+		return legacy, nil
+	}
+
+	cfg := &config.City{
+		Rigs: []config.Rig{{
+			Name: "frontend",
+			Path: "rigs/frontend",
+		}},
+	}
+	resolver := cachedOrderHistoryStoresResolver("/tmp/city", cfg, io.Discard)
+	stores, err := resolver(orders.Order{Name: "digest", Rig: "frontend"})
+	if err != nil {
+		t.Fatalf("resolver: %v", err)
+	}
+	if len(stores) != 2 {
+		t.Fatalf("stores len = %d, want 2", len(stores))
+	}
+	if stores[0].Store == nil || stores[1].Store == nil {
+		t.Fatal("resolver returned nil store")
+	}
+	wantCalls := []string{
+		"/tmp/city/rigs/frontend|/tmp/city",
+		"/tmp/city|/tmp/city",
+	}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("opener calls len = %d, want %d (%#v)", len(calls), len(wantCalls), calls)
+	}
+	for i := range wantCalls {
+		if calls[i] != wantCalls[i] {
+			t.Fatalf("opener call %d = %q, want %q (all calls %#v)", i, calls[i], wantCalls[i], calls)
+		}
+	}
+}
+
 func TestOrderHistoryWithStoresResolverSortsMergedStoresByRecency(t *testing.T) {
 	rigStore := beads.NewMemStore()
 	legacyStore := beads.NewMemStore()

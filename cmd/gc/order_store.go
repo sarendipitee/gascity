@@ -23,6 +23,8 @@ type (
 	orderStoresResolver func(orders.Order) ([]beads.OrdersStore, error)
 )
 
+var openOrderHistoryStoreAt = defaultOpenOrderHistoryStoreAt
+
 // unwrapOrdersStores returns the underlying beads.Store values of a typed
 // orders-store slice. The per-order resolution outputs are strongly typed as
 // beads.OrdersStore, but the cross-store gate/history reads
@@ -96,6 +98,25 @@ func openOrderStoreForOrder(cityPath string, cfg *config.City, a orders.Order, s
 		return beads.OrdersStore{}, 1
 	}
 	return beads.OrdersStore{Store: store}, 0
+}
+
+func defaultOpenOrderHistoryStoreAt(storePath, cityPath string) (beads.Store, error) {
+	scopeRoot := resolveStoreScopeRoot(cityPath, storePath)
+	if providerUsesBdStoreContract(rawBeadsProviderForScope(scopeRoot, cityPath)) {
+		return openUnoptimizedBdStoreAt(scopeRoot, cityPath)
+	}
+	return openStoreAtForCity(scopeRoot, cityPath)
+}
+
+func openUnoptimizedBdStoreAt(storePath, cityPath string) (beads.Store, error) {
+	if filepath.Clean(storePath) == filepath.Clean(cityPath) {
+		return bdStoreForCity(storePath, cityPath), nil
+	}
+	cfg, err := loadCityConfig(cityPath, io.Discard)
+	if err != nil {
+		cfg = nil
+	}
+	return bdStoreForRig(storePath, cityPath, cfg), nil
 }
 
 func resolveOrderStoreTarget(cityPath string, cfg *config.City, a orders.Order) (execStoreTarget, error) {
@@ -609,7 +630,7 @@ func cachedOrderHistoryStoresResolver(cityPath string, cfg *config.City, stderr 
 		if store, ok := stores[key]; ok {
 			return store, nil
 		}
-		store, err := openStoreAtForCity(target.ScopeRoot, cityPath)
+		store, err := openOrderHistoryStoreAt(target.ScopeRoot, cityPath)
 		if err != nil {
 			return nil, err
 		}
