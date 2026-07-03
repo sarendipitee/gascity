@@ -228,6 +228,35 @@ func TestProviderLifecycleProcessEnvCanonicalizesSymlinkedCityPath(t *testing.T)
 	}
 }
 
+func TestProviderLifecycleProcessEnvInjectsGCBinForDoltliteBdProvider(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n\n[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldResolve := resolveProviderLifecycleGCBinary
+	resolveProviderLifecycleGCBinary = func() string { return "/opt/gc/bin/gc" }
+	t.Cleanup(func() { resolveProviderLifecycleGCBinary = oldResolve })
+
+	envEntries := mustProviderLifecycleProcessEnv(t, cityPath, "bd")
+	env := map[string]string{}
+	for _, entry := range envEntries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+
+	if got := env["GC_BIN"]; got != "/opt/gc/bin/gc" {
+		t.Fatalf("providerLifecycleProcessEnv()[GC_BIN] = %q, want %q", got, "/opt/gc/bin/gc")
+	}
+	if got := env["GC_BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("providerLifecycleProcessEnv()[GC_BEADS_BACKEND] = %q, want doltlite", got)
+	}
+	if got := env["BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("providerLifecycleProcessEnv()[BEADS_BACKEND] = %q, want doltlite", got)
+	}
+}
+
 func TestEnsureCanonicalScopeConfigStatePreservesExplicitOptOutJSONL(t *testing.T) {
 	dir := t.TempDir()
 	beadsDir := filepath.Join(dir, ".beads")
@@ -7504,6 +7533,143 @@ func TestGcBeadsBdInitDoltliteInitializesDelegatedBdWrites(t *testing.T) {
 	}
 	if createdIssue.Title != "probe task" {
 		t.Fatalf("created issue title = %q, want probe task", createdIssue.Title)
+	}
+}
+
+func TestGcBeadsBdInitDoltliteRepairsExistingDbMissingRuntimeConfig(t *testing.T) {
+	sqlitePath, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 required for DoltLite wrapper repair smoke test")
+	}
+
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbDir := filepath.Join(cityPath, ".beads", "doltlite")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dbDir, "hq.db")
+	createSchema := exec.Command(sqlitePath, dbPath, `
+CREATE TABLE IF NOT EXISTS config (
+  "key" TEXT PRIMARY KEY,
+  value TEXT
+);
+`)
+	if out, err := createSchema.CombinedOutput(); err != nil {
+		t.Fatalf("create doltlite config table: %v\n%s", err, out)
+	}
+
+	materializeBuiltinPacksForTest(t, cityPath)
+	script := gcBeadsBdScriptPath(cityPath)
+	cmd := exec.Command(script, "init", cityPath, "gc", "hq")
+	cmd.Env = sanitizedBaseEnv(append(gcBeadsBdTestHomeEnv(t),
+		"GC_CITY_PATH="+cityPath,
+		"GC_BEADS_BACKEND=doltlite",
+		"BEADS_BACKEND=doltlite",
+		"GC_DOLTLITE_MAINTENANCE_INTERVAL_SECONDS=0",
+		"BD_NON_INTERACTIVE=1",
+		"PATH="+os.Getenv("PATH"),
+	)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("gc-beads-bd doltlite repair failed: %v\n%s", err, out)
+	}
+
+	configGet := exec.Command(sqlitePath, dbPath, `SELECT value FROM config WHERE "key" = 'issue_prefix';`)
+	gotPrefix, err := configGet.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sqlite query issue_prefix failed: %v\n%s", err, gotPrefix)
+	}
+	if strings.TrimSpace(string(gotPrefix)) != "gc" {
+		t.Fatalf("issue_prefix = %q, want gc", strings.TrimSpace(string(gotPrefix)))
+	}
+}
+
+func TestGcBeadsBdInitDoltliteExistingDbUsesGCHelperRepair(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbDir := filepath.Join(cityPath, ".beads", "doltlite")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dbDir, "hq.db")
+	if err := os.WriteFile(dbPath, []byte("CTLD"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	materializeBuiltinPacksForTest(t, cityPath)
+	script := gcBeadsBdScriptPath(cityPath)
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bdInitArgs := filepath.Join(t.TempDir(), "unexpected-bd-init-args")
+	fakeBD := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(fakeBD, []byte(fmt.Sprintf(`#!/bin/sh
+set -eu
+if [ "${1:-}" = "init" ]; then
+  printf '%%s\n' "$@" > %q
+  echo "bd init must not run for existing doltlite db" >&2
+  exit 2
+fi
+if [ "${1:-}" = "flatten" ] || [ "${1:-}" = "gc" ]; then
+  exit 0
+fi
+exit 0
+`, bdInitArgs)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helperLog := filepath.Join(t.TempDir(), "gc-helper.log")
+	fakeGC := filepath.Join(binDir, "gc")
+	if err := os.WriteFile(fakeGC, []byte(fmt.Sprintf(`#!/bin/sh
+set -eu
+printf '%%s\n' "$@" > %q
+exit 0
+`, helperLog)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(script, "init", cityPath, "gc", "hq")
+	cmd.Env = sanitizedBaseEnv(append(gcBeadsBdTestHomeEnv(t),
+		"GC_CITY_PATH="+cityPath,
+		"GC_BEADS_BACKEND=doltlite",
+		"BEADS_BACKEND=doltlite",
+		"GC_BIN="+fakeGC,
+		"BD_BIN="+fakeBD,
+		"GC_DOLTLITE_MAINTENANCE_INTERVAL_SECONDS=0",
+		"PATH="+strings.Join([]string{binDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
+	)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("gc-beads-bd doltlite helper repair failed: %v\n%s", err, out)
+	}
+
+	if data, err := os.ReadFile(bdInitArgs); err == nil {
+		t.Fatalf("bd init unexpectedly ran for existing doltlite db:\n%s", data)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat bd init argv: %v", err)
+	}
+
+	helperArgs, err := os.ReadFile(helperLog)
+	if err != nil {
+		t.Fatalf("read helper log: %v", err)
+	}
+	got := string(helperArgs)
+	for _, want := range []string{"dolt-config", "repair-doltlite-runtime", "--city", cityPath, "--dir", cityPath, "--prefix", "gc", "--dolt-database", "hq", "--custom-types"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("gc helper args missing %q:\n%s", want, got)
+		}
 	}
 }
 

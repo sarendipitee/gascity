@@ -2085,6 +2085,10 @@ func providerLifecycleProcessEnvFromBase(cityPath, provider string, env []string
 	if !providerUsesBdStoreContract(provider) {
 		return env
 	}
+	if gcBin := resolveProviderLifecycleGCBinary(); gcBin != "" {
+		env = removeEnvKey(env, "GC_BIN")
+		env = append(env, "GC_BIN="+gcBin)
+	}
 	if !backend.NeedsManagedServer() {
 		env = removeEnvKey(env, "GC_BEADS_BACKEND")
 		env = removeEnvKey(env, "BEADS_BACKEND")
@@ -2112,10 +2116,6 @@ func providerLifecycleProcessEnvFromBase(cityPath, provider string, env []string
 		env = removeEnvKey(env, key)
 	}
 	env = append(env, providerLifecycleDoltPathEnv(cityPath)...)
-	if gcBin := resolveProviderLifecycleGCBinary(); gcBin != "" {
-		env = removeEnvKey(env, "GC_BIN")
-		env = append(env, "GC_BIN="+gcBin)
-	}
 	// Strip any inherited test-mode env unconditionally so a stray
 	// GC_MANAGED_DOLT_TEST_MODE=1 in a production parent shell can never
 	// reach child managed-dolt processes. Only Go test binaries

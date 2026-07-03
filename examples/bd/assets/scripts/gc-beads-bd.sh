@@ -2569,6 +2569,16 @@ doltlite_bd_schema_ready() {
     doltlite_bd_issue_prefix "$dir" | grep -Fx "$prefix" >/dev/null 2>&1
 }
 
+doltlite_db_path() {
+    local dir="$1" database="$2"
+    printf '%s\n' "$dir/.beads/doltlite/$database.db"
+}
+
+doltlite_db_exists() {
+    local dir="$1" database="$2"
+    [ -f "$(doltlite_db_path "$dir" "$database")" ]
+}
+
 run_bd_doltlite_init() {
     local dir="$1" prefix="$2" database="$3" reinit="${4:-false}"
     if [ "$reinit" = true ]; then
@@ -2587,6 +2597,20 @@ ensure_doltlite_bd_schema() {
         reinit=true
     fi
     run_bd_doltlite_init "$dir" "$prefix" "$database" "$reinit"
+}
+
+ensure_doltlite_runtime_config() {
+    local dir="$1" prefix="$2" database="$3" custom_types="$4" gc_bin db_path
+    gc_bin=$(resolve_gc_helper_bin)
+    if [ -n "$gc_bin" ]; then
+        "$gc_bin" dolt-config repair-doltlite-runtime --city "$GC_CITY_PATH" --dir "$dir" --prefix "$prefix" --dolt-database "$database" --custom-types "$custom_types" \
+            || die "failed to repair doltlite runtime config for $dir"
+        return 0
+    fi
+    db_path="$(doltlite_db_path "$dir" "$database")"
+    ensure_doltlite_schema "$db_path"
+    ensure_doltlite_runtime_issue_prefix "$db_path" "$prefix"
+    ensure_doltlite_runtime_custom_types "$db_path" "$custom_types"
 }
 
 doltlite_maintenance_due() {
@@ -2717,7 +2741,7 @@ op_init() {
     local custom_types="${GC_BEADS_CUSTOM_TYPES:-molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,spec,convergence,step}"
 
     if is_doltlite_backend; then
-        local database already_ready
+        local database already_ready existing_db db_path
         database="$dolt_database"
         if [ -z "$database" ]; then
             database="$prefix"
@@ -2729,12 +2753,19 @@ op_init() {
         ensure_beads_dir_permissions "$dir"
         mkdir -p "$dir/.beads/doltlite"
         already_ready=false
+        existing_db=false
+        if doltlite_db_exists "$dir" "$database"; then
+            existing_db=true
+        fi
         if doltlite_bd_schema_ready "$dir" "$prefix"; then
             already_ready=true
         fi
-        ensure_doltlite_bd_schema "$dir" "$prefix" "$database"
+        if [ "$existing_db" != true ]; then
+            ensure_doltlite_bd_schema "$dir" "$prefix" "$database"
+        fi
         write_doltlite_metadata "$dir" "$database"
-        if [ "$already_ready" = true ]; then
+        ensure_doltlite_runtime_config "$dir" "$prefix" "$database" "$custom_types"
+        if [ "$already_ready" = true ] || [ "$existing_db" = true ]; then
             run_doltlite_existing_db_maintenance "$dir"
         fi
         ensure_types_custom_in_yaml "$dir" "$custom_types"

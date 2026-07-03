@@ -841,6 +841,9 @@ func (s *DoltliteReadStore) SetMetadataBatch(id string, kvs map[string]string) e
 		var err error
 		current, err = s.doltliteWriteBead(id)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) && s.BdStore != nil {
+				return s.BdStore.SetMetadataBatch(id, kvs)
+			}
 			return err
 		}
 		changed = changedMetadata(current.Metadata, kvs)
