@@ -192,7 +192,7 @@ func TestFilterAssignedWorkBeadsForSessionWakeDropsOnlyKnownBlockedWork(t *testi
 		{ID: "blocked-by-status", Status: "blocked", Assignee: identity},
 	}
 
-	got := filterAssignedWorkBeadsForSessionWake(cfg, "", nil, work, []string{"", "", "", ""})
+	got, _ := filterAssignedWorkBeadsForSessionWake(cfg, "", nil, work, []string{"", "", "", ""})
 
 	if len(got) != 2 || got[0].ID != "stale-count-ready" || got[1].ID != "missing-projection-count" {
 		t.Fatalf("filtered work = %#v, want ready work preserved and only projected-blocked work dropped", got)

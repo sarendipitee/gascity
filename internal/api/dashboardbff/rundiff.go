@@ -308,7 +308,7 @@ func (p *Plane) readUntracked(ctx context.Context, cwd string, allowedRoots []st
 			continue
 		}
 		if strings.TrimSpace(diff.stdout) != "" {
-			patches = append(patches, diff.stdout)
+			patches = append(patches, normalizeRunGitNewFilePatch(diff.stdout, rel))
 		}
 		if diff.truncated {
 			truncated = true
@@ -603,7 +603,33 @@ func filterReviewablePatch(patch string) string {
 	return joinPatch(kept)
 }
 
-var diffGitHeaderRE = regexp.MustCompile(`^diff --git a/(.+) b/(.+)$`)
+var (
+	diffGitHeaderRE        = regexp.MustCompile(`^diff --git a/(.+) b/(.+)$`)
+	diffGitNoIndexHeaderRE = regexp.MustCompile(`^diff --git [12]/(.+) [12]/(.+)$`)
+)
+
+// normalizeRunGitNewFilePatch rewrites git --no-index's synthetic 1/ and 2/
+// path prefixes to canonical a/ and b/ prefixes so downstream review filtering
+// and UI rendering see the same shape as tracked git diffs.
+func normalizeRunGitNewFilePatch(patch, relPath string) string {
+	if strings.TrimSpace(patch) == "" {
+		return patch
+	}
+	lines := strings.Split(patch, "\n")
+	expectedOld := "--- /dev/null"
+	expectedNew := "+++ 2/" + relPath
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			lines[i] = diffGitNoIndexHeaderRE.ReplaceAllString(line, "diff --git a/$1 b/$2")
+		case line == expectedNew:
+			lines[i] = "+++ b/" + relPath
+		case line == expectedOld:
+			// Keep /dev/null unchanged for new-file diffs.
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // isReviewablePatchBlock ports diff.ts isReviewablePatchBlock. A block whose
 // header doesn't match the "diff --git a/X b/Y" shape is kept; otherwise both

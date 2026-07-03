@@ -11460,10 +11460,19 @@
           "payload": {
             "$ref": "#/components/schemas/SessionLivenessStalePayload"
           },
+          "run_id": {
+            "type": "string"
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
           },
           "subject": {
             "type": "string"
@@ -15720,10 +15729,19 @@
           "payload": {
             "$ref": "#/components/schemas/SessionLivenessStalePayload"
           },
+          "run_id": {
+            "type": "string"
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
           },
           "subject": {
             "type": "string"
