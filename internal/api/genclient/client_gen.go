@@ -4241,14 +4241,17 @@ type TypedEventStreamEnvelopeSessionIdleKilled struct {
 
 // TypedEventStreamEnvelopeSessionLivenessStale defines model for TypedEventStreamEnvelopeSessionLivenessStale.
 type TypedEventStreamEnvelopeSessionLivenessStale struct {
-	Actor    string                      `json:"actor"`
-	Message  *string                     `json:"message,omitempty"`
-	Payload  SessionLivenessStalePayload `json:"payload"`
-	Seq      int64                       `json:"seq"`
-	Subject  *string                     `json:"subject,omitempty"`
-	Ts       time.Time                   `json:"ts"`
-	Type     string                      `json:"type"`
-	Workflow *WorkflowEventProjection    `json:"workflow,omitempty"`
+	Actor     string                      `json:"actor"`
+	Message   *string                     `json:"message,omitempty"`
+	Payload   SessionLivenessStalePayload `json:"payload"`
+	RunId     *string                     `json:"run_id,omitempty"`
+	Seq       int64                       `json:"seq"`
+	SessionId *string                     `json:"session_id,omitempty"`
+	StepId    *string                     `json:"step_id,omitempty"`
+	Subject   *string                     `json:"subject,omitempty"`
+	Ts        time.Time                   `json:"ts"`
+	Type      string                      `json:"type"`
+	Workflow  *WorkflowEventProjection    `json:"workflow,omitempty"`
 }
 
 // TypedEventStreamEnvelopeSessionMaxAgeKilled defines model for TypedEventStreamEnvelopeSessionMaxAgeKilled.
@@ -5379,15 +5382,18 @@ type TypedTaggedEventStreamEnvelopeSessionIdleKilled struct {
 
 // TypedTaggedEventStreamEnvelopeSessionLivenessStale defines model for TypedTaggedEventStreamEnvelopeSessionLivenessStale.
 type TypedTaggedEventStreamEnvelopeSessionLivenessStale struct {
-	Actor    string                      `json:"actor"`
-	City     string                      `json:"city"`
-	Message  *string                     `json:"message,omitempty"`
-	Payload  SessionLivenessStalePayload `json:"payload"`
-	Seq      int64                       `json:"seq"`
-	Subject  *string                     `json:"subject,omitempty"`
-	Ts       time.Time                   `json:"ts"`
-	Type     string                      `json:"type"`
-	Workflow *WorkflowEventProjection    `json:"workflow,omitempty"`
+	Actor     string                      `json:"actor"`
+	City      string                      `json:"city"`
+	Message   *string                     `json:"message,omitempty"`
+	Payload   SessionLivenessStalePayload `json:"payload"`
+	RunId     *string                     `json:"run_id,omitempty"`
+	Seq       int64                       `json:"seq"`
+	SessionId *string                     `json:"session_id,omitempty"`
+	StepId    *string                     `json:"step_id,omitempty"`
+	Subject   *string                     `json:"subject,omitempty"`
+	Ts        time.Time                   `json:"ts"`
+	Type      string                      `json:"type"`
+	Workflow  *WorkflowEventProjection    `json:"workflow,omitempty"`
 }
 
 // TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled defines model for TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled.
