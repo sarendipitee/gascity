@@ -47,7 +47,7 @@ func (c PreflightChecker) Check(scope string) (PreflightResult, error) {
 		c.checkBDContextAgreement(metadata, bdCtx, bdCtxErr),
 		c.checkDoltModeSafe(metadata, bdCtx, bdCtxErr),
 		c.checkIdentityMatch(scope, metadata),
-		c.checkVersionCompat(bdCtx, bdCtxErr),
+		c.checkVersionCompat(metadata, bdCtx, bdCtxErr),
 		c.checkContractShape(metadata),
 	}
 	verdict := preflightVerdictForChecks(checks)
@@ -122,6 +122,8 @@ func (c PreflightChecker) checkMetadataBackend(metadata preflightMetadata) Prefl
 	switch metadata.Backend {
 	case "dolt":
 		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, "Metadata backend is dolt", details)
+	case "doltlite":
+		return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckPass, "Metadata backend is doltlite", details)
 	case "postgres":
 		if hasDSN && !hasSplit {
 			return NewPreflightCheckResult(PreflightCheckMetadataBackend, PreflightCheckWarn, "Metadata backend is postgres (postgres_dsn form)", details)
@@ -148,6 +150,9 @@ func (c PreflightChecker) readBDContext(scope string) (PreflightBDContext, error
 func (c PreflightChecker) checkBDContextAgreement(metadata preflightMetadata, ctx PreflightBDContext, err error) PreflightCheckResult {
 	details := PreflightDetails{MetadataBackend: metadata.Backend}
 	details.BDContextBackend = ctx.Backend
+	if metadata.Backend == "doltlite" {
+		return NewPreflightCheckResult(PreflightCheckBDContextAgreement, PreflightCheckPass, "bd context check is not required for doltlite backend", details)
+	}
 	if err != nil {
 		// Unreachable bd context (e.g. a non-git city root where `bd context`
 		// cannot run) is not evidence of backend DISAGREEMENT — only that we
@@ -170,6 +175,9 @@ func (c PreflightChecker) checkDoltModeSafe(metadata preflightMetadata, ctx Pref
 		BDContextBackend:  ctx.Backend,
 		BDContextDoltMode: ctx.DoltMode,
 	}
+	if metadata.Backend == "doltlite" {
+		return NewPreflightCheckResult(PreflightCheckDoltModeSafe, PreflightCheckPass, "Dolt mode check is not required for doltlite backend", details)
+	}
 	if err != nil {
 		// Unreachable bd context cannot confirm dolt server mode; degrade
 		// (opt-in) rather than hard-block. embedded mode is still rejected
@@ -191,6 +199,9 @@ func (c PreflightChecker) checkDoltModeSafe(metadata preflightMetadata, ctx Pref
 
 func (c PreflightChecker) checkIdentityMatch(scope string, metadata preflightMetadata) PreflightCheckResult {
 	details := PreflightDetails{MetadataProjectID: metadata.ProjectID}
+	if metadata.Backend == "doltlite" {
+		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckPass, "project_id check is not required for doltlite backend", details)
+	}
 	if metadata.ProjectID == "" {
 		return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckFail, "metadata project_id is missing", details)
 	}
@@ -208,7 +219,7 @@ func (c PreflightChecker) checkIdentityMatch(scope string, metadata preflightMet
 	return NewPreflightCheckResult(PreflightCheckIdentityMatch, PreflightCheckPass, "project_id matches", details)
 }
 
-func (c PreflightChecker) checkVersionCompat(ctx PreflightBDContext, err error) PreflightCheckResult {
+func (c PreflightChecker) checkVersionCompat(metadata preflightMetadata, ctx PreflightBDContext, err error) PreflightCheckResult {
 	libraryVersion := strings.TrimPrefix(strings.TrimSpace(c.BeadsLibraryVersion), "v")
 	if libraryVersion == "" {
 		libraryVersion = strings.TrimPrefix(beadsModuleVersion(), "v")
@@ -217,6 +228,9 @@ func (c PreflightChecker) checkVersionCompat(ctx PreflightBDContext, err error) 
 		BDVersion:           ctx.BDVersion,
 		BeadsLibraryVersion: libraryVersion,
 		SchemaVersion:       ctx.SchemaVersion,
+	}
+	if metadata.Backend == "doltlite" {
+		return NewPreflightCheckResult(PreflightCheckVersionCompat, PreflightCheckPass, "bd/beads version compatibility is not required for doltlite backend", details)
 	}
 	if err != nil {
 		// Unreachable bd context cannot confirm bd/beads version parity; degrade
@@ -268,6 +282,11 @@ func (c PreflightChecker) checkContractShape(metadata preflightMetadata) Preflig
 			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "dolt metadata contains postgres fields", details)
 		}
 		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, "Metadata uses dolt shape", details)
+	case "doltlite":
+		if hasDSN || hasSplit {
+			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckFail, "doltlite metadata contains postgres fields", details)
+		}
+		return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckPass, "Metadata uses doltlite shape", details)
 	case "postgres":
 		if hasDSN {
 			return NewPreflightCheckResult(PreflightCheckContractShape, PreflightCheckWarn, "postgres_dsn present; Gas City expects split fields", details)

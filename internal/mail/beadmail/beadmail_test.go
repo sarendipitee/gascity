@@ -50,6 +50,22 @@ func (s *messageListProbeStore) List(query beads.ListQuery) ([]beads.Bead, error
 	return s.MemStore.List(query)
 }
 
+type sessionMetadataProbeStore struct {
+	*beads.MemStore
+	t               *testing.T
+	metadataQueries []beads.ListQuery
+}
+
+func (s *sessionMetadataProbeStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if len(query.Metadata) > 0 && (query.Metadata["alias"] != "" || query.Metadata["session_name"] != "") {
+		s.metadataQueries = append(s.metadataQueries, query)
+		if query.Type != session.BeadType {
+			s.t.Fatalf("session metadata query missing session type filter: %+v", query)
+		}
+	}
+	return s.MemStore.List(query)
+}
+
 type noCloseAllStore struct {
 	*beads.MemStore
 	t *testing.T
@@ -144,6 +160,37 @@ func TestInboxUsesSingleBothTierMessageScanAcrossRoutes(t *testing.T) {
 	}
 	if !query.Live {
 		t.Fatalf("message query = %+v, want live read for command-visible mail freshness", query)
+	}
+}
+
+func TestInboxSessionRouteMetadataQueriesUseSessionTypeFilter(t *testing.T) {
+	store := &sessionMetadataProbeStore{MemStore: beads.NewMemStore(), t: t}
+	p := New(store)
+
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "mayor",
+			"session_name": "runtime-mayor",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	if _, err := p.Send("human", sessionBead.ID, "", "for mayor"); err != nil {
+		t.Fatalf("Send session ID: %v", err)
+	}
+
+	msgs, err := p.Inbox("mayor")
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("Inbox = %#v, want one routed message", msgs)
+	}
+	if len(store.metadataQueries) == 0 {
+		t.Fatal("expected session metadata route lookup")
 	}
 }
 

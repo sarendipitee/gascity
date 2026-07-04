@@ -29,11 +29,49 @@ func TestEmitSessionSubmitResultFollowUpImmediate(t *testing.T) {
 	}
 }
 
+func TestEmitSessionSubmitResultDefaultImmediate(t *testing.T) {
+	var stdout bytes.Buffer
+	emitSessionSubmitResult(&stdout, io.Discard, "mayor", session.SubmitIntentDefault, false, false)
+	if got := stdout.String(); !strings.Contains(got, "Submitted to mayor") {
+		t.Fatalf("stdout = %q, want submitted default confirmation", got)
+	}
+}
+
+func TestEmitSessionSubmitResultInterruptImmediate(t *testing.T) {
+	var stdout bytes.Buffer
+	emitSessionSubmitResult(&stdout, io.Discard, "mayor", session.SubmitIntentInterruptNow, false, false)
+	if got := stdout.String(); !strings.Contains(got, "Interrupted and submitted to mayor") {
+		t.Fatalf("stdout = %q, want interrupt confirmation", got)
+	}
+}
+
 func TestEmitSessionSubmitResultJSON(t *testing.T) {
 	var stdout bytes.Buffer
 	emitSessionSubmitResult(&stdout, io.Discard, "mayor", session.SubmitIntentFollowUp, true, true)
 	got := stdout.String()
 	for _, want := range []string{`"schema_version":"1"`, `"ok":true`, `"target":"mayor"`, `"intent":"follow_up"`, `"queued":true`, `"outcome":"queued"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout = %q, missing %s", got, want)
+		}
+	}
+}
+
+func TestEmitSessionSubmitResultJSONDefaultImmediate(t *testing.T) {
+	var stdout bytes.Buffer
+	emitSessionSubmitResult(&stdout, io.Discard, "mayor", session.SubmitIntentDefault, false, true)
+	got := stdout.String()
+	for _, want := range []string{`"schema_version":"1"`, `"ok":true`, `"target":"mayor"`, `"intent":"default"`, `"queued":false`, `"outcome":"submitted"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout = %q, missing %s", got, want)
+		}
+	}
+}
+
+func TestEmitSessionSubmitResultJSONInterruptImmediate(t *testing.T) {
+	var stdout bytes.Buffer
+	emitSessionSubmitResult(&stdout, io.Discard, "mayor", session.SubmitIntentInterruptNow, false, true)
+	got := stdout.String()
+	for _, want := range []string{`"schema_version":"1"`, `"ok":true`, `"target":"mayor"`, `"intent":"interrupt_now"`, `"queued":false`, `"outcome":"interrupted"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("stdout = %q, missing %s", got, want)
 		}

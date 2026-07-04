@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/config"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
@@ -307,8 +308,12 @@ func poolInFlightNewRequests(cfg *config.City, sessionBeads []beads.Bead, resume
 
 func poolSessionConsumesNewDemand(session beads.Bead) bool {
 	if strings.TrimSpace(session.Metadata["pending_create_claim"]) == boolMetadata(true) {
-		return true
+		return pendingCreateLeaseActive(session, clock.Real{}, 0)
 	}
+	return poolSessionConsumesResidualNewDemand(session)
+}
+
+func poolSessionConsumesResidualNewDemand(session beads.Bead) bool {
 	// This pure desired-state pass has no reconciler clock. Creating sessions
 	// still represent already-spent new demand; lifecycle code owns stale
 	// creating recovery with its clock-aware predicate.

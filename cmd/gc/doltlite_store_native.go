@@ -26,7 +26,7 @@ func openOptimizedDoltliteStore(storePath string, store *beads.BdStore) (beads.S
 func nativeDoltliteBeadsEnabled() bool {
 	raw := strings.TrimSpace(os.Getenv(nativeDoltliteBeadsEnv))
 	if raw == "" {
-		return false
+		return true
 	}
 	enabled, err := strconv.ParseBool(raw)
 	return err == nil && enabled

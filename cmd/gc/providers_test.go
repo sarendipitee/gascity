@@ -134,6 +134,22 @@ func TestRawBeadsProviderNormalizesLegacyManagedExecEnv(t *testing.T) {
 	}
 }
 
+func TestBeadsProviderRoutesDoltliteBdThroughShim(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := beadsProvider(cityPath); got != "exec:"+gcBeadsBdScriptPath(cityPath) {
+		t.Fatalf("beadsProvider() = %q, want gc-beads-bd shim for doltlite", got)
+	}
+}
+
 func TestRawBeadsProviderPreservesCustomExecOverride(t *testing.T) {
 	t.Setenv("GC_BEADS", "exec:/tmp/custom-beads")
 

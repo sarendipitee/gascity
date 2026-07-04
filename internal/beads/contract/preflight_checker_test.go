@@ -169,6 +169,31 @@ func TestPreflightPassesOnHealthyDolt(t *testing.T) {
 	}
 }
 
+func TestPreflightPassesOnHealthyDoltlite(t *testing.T) {
+	scope := "/city"
+	checker := testPreflightChecker(preflightMetadataJSON(`{
+		"backend": "doltlite",
+		"database": "doltlite",
+		"dolt_database": "hq",
+		"project_id": "gc-local"
+	}`), PreflightBDContext{Backend: "doltlite"}, "gc-local")
+
+	result, err := checker.Check(scope)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	assertPreflightVerdict(t, result, PreflightVerdictEligible, true)
+	for _, check := range result.Checks {
+		if check.State != PreflightCheckPass {
+			t.Fatalf("check %s state = %s, want PASS in healthy doltlite case: %+v", check.ID, check.State, result.Checks)
+		}
+	}
+	if result.Fallback != PreflightFallbackNone {
+		t.Fatalf("Fallback = %q, want none", result.Fallback)
+	}
+}
+
 func TestPreflightAcceptsExecGcBeadsBdProviderPath(t *testing.T) {
 	scope := "/city"
 	checker := testPreflightChecker(preflightMetadataJSON(`{
@@ -381,7 +406,7 @@ func TestCheckVersionCompatSourceBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := PreflightChecker{BeadsLibraryVersion: tt.libVersion}
-			got := c.checkVersionCompat(tt.ctx, nil)
+			got := c.checkVersionCompat(preflightMetadata{Backend: "dolt"}, tt.ctx, nil)
 			if got.ID != PreflightCheckVersionCompat {
 				t.Fatalf("ID = %q, want %q", got.ID, PreflightCheckVersionCompat)
 			}

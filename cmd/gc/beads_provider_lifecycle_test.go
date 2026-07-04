@@ -10904,6 +10904,62 @@ dolt.auto-start: false
 	}
 }
 
+func TestStartBeadsLifecycleDoltliteCityDoesNotClobberHQMetadataOrConfig(t *testing.T) {
+	cityPath := t.TempDir()
+	callLog := filepath.Join(cityPath, "op-calls.log")
+	script := writeManagedBdTestScript(t, "#!/bin/sh\necho \"$1\" >> "+callLog+"\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"test-city\"\n\n[beads]\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"), []byte("issue_prefix: tc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contract.EnsureCanonicalMetadata(fsys.OSFS{}, filepath.Join(cityPath, ".beads", "metadata.json"), contract.MetadataState{
+		Database:     "doltlite",
+		Backend:      "doltlite",
+		DoltDatabase: "hq",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GC_BEADS", "exec:"+script)
+	t.Setenv("GC_BEADS_SCOPE_ROOT", cityPath)
+	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
+	if err := startBeadsLifecycle(cityPath, "test-city", cfg, io.Discard); err != nil {
+		t.Fatalf("startBeadsLifecycle() error = %v", err)
+	}
+	if got := strings.Fields(string(mustReadFile(t, callLog))); len(got) == 0 || got[0] != "init" {
+		t.Fatalf("provider call log = %q, want init call", string(mustReadFile(t, callLog)))
+	}
+
+	metaText := string(mustReadFile(t, filepath.Join(cityPath, ".beads", "metadata.json")))
+	for _, want := range []string{`"backend": "doltlite"`, `"database": "doltlite"`, `"dolt_database": "hq"`} {
+		if !strings.Contains(metaText, want) {
+			t.Fatalf("metadata missing %q:\n%s", want, metaText)
+		}
+	}
+	for _, forbidden := range []string{`"backend": "dolt"`, `"database": "dolt"`, `"dolt_mode": "server"`} {
+		if strings.Contains(metaText, forbidden) {
+			t.Fatalf("metadata should not contain %q:\n%s", forbidden, metaText)
+		}
+	}
+
+	cfgText := string(mustReadFile(t, filepath.Join(cityPath, ".beads", "config.yaml")))
+	for _, want := range []string{"issue_prefix: tc"} {
+		if !strings.Contains(cfgText, want) {
+			t.Fatalf("config missing %q:\n%s", want, cfgText)
+		}
+	}
+	for _, forbidden := range []string{"gc.endpoint_origin: managed_city", "gc.endpoint_status: verified", "dolt.auto-start: false"} {
+		if strings.Contains(cfgText, forbidden) {
+			t.Fatalf("config should not contain %q:\n%s", forbidden, cfgText)
+		}
+	}
+}
+
 func TestNormalizeCanonicalBdScopeFilesRepairsCityAndRigScopeFiles(t *testing.T) {
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "frontend")
