@@ -338,6 +338,18 @@
               "null"
             ]
           },
+          "Pack": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "PackRoot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "Pool": {
             "$ref": "#/components/schemas/PoolOverride"
           },
@@ -502,6 +514,8 @@
           "Dir",
           "Name",
           "WorkDir",
+          "Pack",
+          "PackRoot",
           "TmuxAlias",
           "Scope",
           "Suspended",
@@ -857,6 +871,10 @@
               "array",
               "null"
             ]
+          },
+          "dependency_count": {
+            "format": "int64",
+            "type": "integer"
           },
           "description": {
             "type": "string"

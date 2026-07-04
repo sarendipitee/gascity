@@ -1,0 +1,5 @@
+.beads/config.yaml
+cmd/gc/build_desired_state.go
+cmd/gc/build_desired_state_test.go
+cmd/gc/pool_desired_state.go
+cmd/gc/session_lifecycle_parallel.go

@@ -56,10 +56,11 @@ func TestStageStartFilesKeepsScaffoldOutOfSpawnerCWD(t *testing.T) {
 	leakedWorkDir := filepath.Join(sharedWorktree, beadSlug)
 	workDir := filepath.Join(root, "city", ".gc", "worktrees", "gascity", "builder", beadSlug)
 	packOverlay := filepath.Join(root, "city", "packs", "core", "overlay")
+	settingsSrc := filepath.Join(root, "city", ".gc", "settings.json")
 
 	writeTmuxScaffoldFixture(t, filepath.Join(packOverlay, ".claude", "skills", "triage", "SKILL.md"), "---\nname: triage\n---\n")
 	writeTmuxScaffoldFixture(t, filepath.Join(packOverlay, ".codex", "hooks.json"), `{"hooks":{"SessionStart":[]}}`+"\n")
-	writeTmuxScaffoldFixture(t, filepath.Join(packOverlay, ".gc", "settings.json"), "{}\n")
+	writeTmuxScaffoldFixture(t, settingsSrc, "{}\n")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", workDir, err)
 	}
@@ -74,6 +75,10 @@ func TestStageStartFilesKeepsScaffoldOutOfSpawnerCWD(t *testing.T) {
 		ProviderName:        "codex",
 		ProviderOverlayName: "codex",
 		PackOverlayDirs:     []string{packOverlay},
+		CopyFiles: []runtime.CopyEntry{{
+			Src:    settingsSrc,
+			RelDst: filepath.Join(".gc", "settings.json"),
+		}},
 	}, &warnings)
 	if err != nil {
 		t.Fatalf("stageStartFiles: %v", err)

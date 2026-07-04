@@ -128,6 +128,9 @@ func TestBuiltinProvidersCodex(t *testing.T) {
 	if p.Command != "codex" {
 		t.Errorf("Command = %q, want %q", p.Command, "codex")
 	}
+	if p.Args != nil {
+		t.Errorf("Args = %v, want nil", p.Args)
+	}
 	if p.PromptMode != "arg" {
 		t.Errorf("PromptMode = %q, want %q", p.PromptMode, "arg")
 	}

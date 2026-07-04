@@ -166,6 +166,34 @@ func TestDoltliteRuntimeConfigUsesSQLiteParameters(t *testing.T) {
 	}
 }
 
+func TestDoltliteInitCreatesBackendDirectoryBeforeBdInit(t *testing.T) {
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	fn := extractShellFunction(t, string(data), "op_init")
+
+	permissionsIdx := strings.Index(fn, `ensure_beads_dir_permissions "$dir"`)
+	mkdirIdx := strings.Index(fn, `mkdir -p "$dir/.beads/doltlite"`)
+	readyIdx := strings.Index(fn, `doltlite_bd_schema_ready "$dir" "$prefix"`)
+	initIdx := strings.Index(fn, `ensure_doltlite_bd_schema "$dir" "$prefix" "$database"`)
+	for name, idx := range map[string]int{
+		"ensure_beads_dir_permissions": permissionsIdx,
+		"mkdir -p .beads/doltlite":     mkdirIdx,
+		"doltlite_bd_schema_ready":     readyIdx,
+		"ensure_doltlite_bd_schema":    initIdx,
+	} {
+		if idx < 0 {
+			t.Fatalf("op_init missing %s:\n%s", name, fn)
+		}
+	}
+	if permissionsIdx >= mkdirIdx || mkdirIdx >= readyIdx || readyIdx >= initIdx {
+		t.Fatalf("op_init must create .beads/doltlite after permission setup and before DoltLite schema checks/init:\n%s", fn)
+	}
+}
+
 func TestDoltliteMaintenanceDueUsesPortableStatFallback(t *testing.T) {
 	root := repoRootForLint(t)
 	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")

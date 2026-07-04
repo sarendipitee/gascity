@@ -7,8 +7,8 @@ import (
 
 // TestWorkQueryTimeoutsAccommodateMultiRoundTripProbe guards the work-query
 // timeout budget. The default work-probe (config.Agent.EffectiveWorkQuery)
-// issues ~6 sequential bd/store round-trips — three session identifiers across
-// the in-progress and ready assigned tiers — before the pool-demand tier that
+// issues ~6 sequential bd/store round-trips - three session identifiers across
+// the in-progress and ready assigned tiers - before the pool-demand tier that
 // finds routed work. On a multi-rig dolt city under concurrent load each
 // round-trip costs several seconds, so at the prior 30s work-query subprocess
 // budget the probe was killed before reaching pool-demand and pool operators

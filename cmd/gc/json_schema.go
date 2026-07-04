@@ -338,7 +338,13 @@ func schemaForRole(cmd *cobra.Command, commandPath []string, role string) (json.
 func readCommandSchema(cmd *cobra.Command, commandPath []string, role string) (json.RawMessage, error) {
 	if cmd != nil {
 		if schemaDir := strings.TrimSpace(cmd.Annotations[jsonSchemaDirAnnotation]); schemaDir != "" {
-			return readLocalSchema(filepath.Join(schemaDir, role+".schema.json"))
+			schema, err := readLocalSchema(filepath.Join(schemaDir, role+".schema.json"))
+			if err == nil {
+				return schema, nil
+			}
+			if !os.IsNotExist(err) {
+				return nil, err
+			}
 		}
 	}
 	return readBuiltinSchema(commandPath, role)

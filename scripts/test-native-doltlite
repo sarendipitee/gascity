@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="run"
+if [ "${1:-}" = "--list" ]; then
+  mode="list"
+  shift
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+while IFS= read -r file; do
+  if ! grep -q '^//go:build gascity_doltlite_lib' "$file"; then
+    continue
+  fi
+  pkg_dir="$(dirname "$file")"
+  pkg="./${pkg_dir#./}"
+  sed -n -E 's/^func[[:space:]]+(Test[[:alnum:]_]+)[[:space:]]*\(.*/\1/p' "$file" |
+    while IFS= read -r test_name; do
+      [ -n "$test_name" ] || continue
+      printf '%s\t%s\n' "$pkg" "$test_name"
+    done >>"$tmp"
+done < <(git ls-files '*_test.go' | sed 's#^#./#' | sort)
+
+if [ ! -s "$tmp" ]; then
+  echo "no gascity_doltlite_lib tagged Go tests found" >&2
+  exit 2
+fi
+
+cut -f1 "$tmp" | sort -u | while IFS= read -r pkg; do
+  tests="$(awk -F '\t' -v pkg="$pkg" '$1 == pkg { print $2 }' "$tmp" | sort -u)"
+  pattern="$(printf '%s\n' "$tests" | paste -sd '|' -)"
+  if [ "$mode" = "list" ]; then
+    printf '%s\t%s\n' "$pkg" "$pattern"
+  else
+    go test -tags gascity_doltlite_lib "$pkg" -run "^(${pattern})$" -count=1 "$@"
+  fi
+done

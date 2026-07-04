@@ -201,7 +201,7 @@ func runWizard(stdin io.Reader, stdout io.Writer) wizardConfig {
 		fmt.Fprintf(stdout, "Unknown template %q, using gascity.\n", configChoice) //nolint:errcheck // best-effort stdout
 	}
 
-	// Custom config → skip agent question, return minimal config.
+	// Custom config → skip agent question, return after backend choice.
 	if configName == "custom" {
 		return wizardConfig{
 			interactive:  true,
@@ -360,15 +360,15 @@ func newInitCmd(stdout, stderr io.Writer) *cobra.Command {
 	var providersFlag []string
 	var defaultProviderFlag string
 	var bootstrapProfileFlag string
+	var beadsBackendFlag string
+	var skipProviderReadiness bool
+	var preserveExisting bool
+	var jsonOut bool
 	var doltHostFlag string
 	var doltPortFlag string
 	var doltUserFlag string
 	var doltDatabaseFlag string
 	var doltProjectIDFlag string
-	var beadsBackendFlag string
-	var skipProviderReadiness bool
-	var preserveExisting bool
-	var jsonOut bool
 	var noStart bool
 	cmd := &cobra.Command{
 		Use:   "init [path]",
@@ -455,15 +455,15 @@ databases with no server process.`,
 	cmd.Flags().StringArrayVar(&providersFlag, "providers", nil, "readiness-aware providers to write to city.toml (repeatable or comma-separated)")
 	cmd.Flags().StringVar(&templateFlag, "template", "", "non-interactive template to write: minimal, gastown, gascity, or custom")
 	cmd.Flags().StringVar(&bootstrapProfileFlag, "bootstrap-profile", "", "bootstrap profile to apply for hosted/container defaults")
+	cmd.Flags().StringVar(&beadsBackendFlag, "beads-backend", "", "bead store backend: \"dolt\" (managed Dolt server) or \"doltlite\" (embedded DoltLite); default: dolt")
+	cmd.Flags().BoolVar(&skipProviderReadiness, "skip-provider-readiness", false, "skip provider login/readiness checks during init and continue startup")
+	cmd.Flags().BoolVar(&noStart, "no-start", false, "initialize files and imports without registering or starting the city")
+	cmd.Flags().BoolVar(&preserveExisting, "preserve-existing", false, "keep any pre-authored pack.toml, city.toml, or agent prompt files instead of overwriting them")
 	cmd.Flags().StringVar(&doltHostFlag, "dolt-host", "", "external/hosted Dolt host for the city beads ledger (or "+envDoltHost+"); pins the city to an external endpoint instead of bootstrapping a managed-local Dolt")
 	cmd.Flags().StringVar(&doltPortFlag, "dolt-port", "", "external/hosted Dolt port (or "+envDoltPort+"); required with --dolt-host")
 	cmd.Flags().StringVar(&doltUserFlag, "dolt-user", "", "external/hosted Dolt user (or "+envDoltUser+"); optional")
 	cmd.Flags().StringVar(&doltDatabaseFlag, "dolt-database", "", "hosted beads project database, e.g. bd_prj_… (or "+envDoltDatabase+"); required with --dolt-host")
 	cmd.Flags().StringVar(&doltProjectIDFlag, "dolt-project-id", "", "authoritative beads project_id for the identity handshake (or "+envBeadsProjectID+"); derived from a bd_<id> --dolt-database when omitted")
-	cmd.Flags().StringVar(&beadsBackendFlag, "beads-backend", "", "bead store backend: \"dolt\" (managed Dolt server) or \"doltlite\" (embedded DoltLite); default: dolt")
-	cmd.Flags().BoolVar(&skipProviderReadiness, "skip-provider-readiness", false, "skip provider login/readiness checks during init and continue startup")
-	cmd.Flags().BoolVar(&noStart, "no-start", false, "initialize files and imports without registering or starting the city")
-	cmd.Flags().BoolVar(&preserveExisting, "preserve-existing", false, "keep any pre-authored pack.toml, city.toml, or agent prompt files instead of overwriting them")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON summary")
 	cmd.Flags().BoolVar(&assumeYesForSupervisorCycle, "yes", false, "bypass the cross-city supervisor cycle confirmation prompt (warning is still printed for the audit trail)")
 	cmd.MarkFlagsMutuallyExclusive("file", "from")

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,8 +26,9 @@ func newHookCmd(stdout, stderr io.Writer) *cobra.Command {
 	var drainAck bool
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "hook [agent]",
-		Short: "Find routed work for an agent",
+		Use:         "hook [agent]",
+		Short:       "Find routed work for an agent",
+		Annotations: map[string]string{jsonSchemaDirAnnotation: filepath.Join("schemas", "hook")},
 		Long: `Finds routed work using the agent's work_query config.
 
 Without --inject: prints normalized ready-only output, exits 0 if work exists, 1 if empty.

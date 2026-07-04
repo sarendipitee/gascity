@@ -143,7 +143,7 @@ func finalizeInit(cityPath string, stdout, stderr io.Writer, opts initFinalizeOp
 }
 
 func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io.Writer, commandName string) error {
-	if cfg == nil || !providerUsesBdStoreContract(rawBeadsProvider(cityPath)) || resolveBeadsBackendName(beadsBackend(cityPath)).Name() != "doltlite" {
+	if cfg == nil || !providerUsesBdStoreContract(rawBeadsProvider(cityPath)) || resolveBeadsBackend(cityPath).Name() != "doltlite" {
 		return nil
 	}
 	var buildCommand *config.DiscoveredCommand
@@ -158,10 +158,11 @@ func runDoltliteFullInstall(cityPath string, cfg *config.City, stdout, stderr io
 		return fmt.Errorf("beads-doltlite build command is not installed; run \"gc import install\"")
 	}
 	if stdout != nil {
-		fmt.Fprintln(stdout, "Configuring DoltLite-linked bd/gc binaries")                                  //nolint:errcheck // best-effort stdout
-		fmt.Fprintln(stdout, "Running: gc beads-doltlite build bd --install --no-restart")                  //nolint:errcheck // best-effort stdout
-		fmt.Fprintln(stdout, "Running: gc beads-doltlite build gc --install --no-restart")                  //nolint:errcheck // best-effort stdout
-		fmt.Fprintln(stdout, "This updates the active controller and supervisor binaries without restart.") //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "Configuring DoltLite-linked bd/gc binaries")                                          //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "Running: gc beads-doltlite build bd --install --no-restart")                          //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "Running: gc beads-doltlite build gc --install --no-restart")                          //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "Skipping automatic local source and libdoltlite discovery during fresh init builds.") //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "This updates the active controller and supervisor binaries without restart.")         //nolint:errcheck // best-effort stdout
 	}
 	cityName := strings.TrimSpace(cfg.Workspace.Name)
 	if cityName == "" {
@@ -624,8 +625,9 @@ var initRunVersion = func(binary string) (string, error) {
 
 // Minimum versions for beads-provider binaries.
 const (
-	doltMinVersion = doltversion.ManagedMin // sql-server features used by gc-beads-bd
-	bdMinVersion   = "1.0.4"                // BdStore shell-out interface, including bd create --id
+	doltMinVersion       = doltversion.ManagedMin // sql-server features used by gc-beads-bd
+	bdMinVersion         = "1.0.4"                // BdStore shell-out interface, including bd create --id
+	bdDoltliteMinVersion = "1.0.3"                // DoltLite bd fork minimum version
 )
 
 // checkHardDependencies verifies that all required binaries are available
@@ -643,6 +645,9 @@ func checkHardDependencies(cityPath string) []missingDep {
 	}
 
 	needsBd := initNeedsBdTooling(cityPath)
+	needsDolt := needsBd && resolveBeadsBackend(cityPath).NeedsDoltBinary()
+
+	bdMin := resolveBeadsBackend(cityPath).MinBDVersion()
 
 	deps := []dep{
 		{
@@ -661,12 +666,12 @@ func checkHardDependencies(cityPath string) []missingDep {
 			name:        "dolt",
 			installHint: "https://github.com/dolthub/dolt/releases",
 			minVersion:  doltMinVersion,
-			condition:   func() bool { return needsBd },
+			condition:   func() bool { return needsDolt },
 		},
 		{
 			name:        "bd",
 			installHint: "https://github.com/gastownhall/beads/releases",
-			minVersion:  bdMinVersion,
+			minVersion:  bdMin,
 			condition:   func() bool { return needsBd },
 		},
 		{
@@ -770,6 +775,9 @@ func checkDoltAuthorIdentity(cityPath string) doltAuthorIdentityStatus {
 
 func initNeedsLocalDoltIdentity(cityPath string) bool {
 	if gcDoltSkip() {
+		return false
+	}
+	if !resolveBeadsBackend(cityPath).NeedsDoltBinary() {
 		return false
 	}
 

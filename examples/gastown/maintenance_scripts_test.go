@@ -63,6 +63,14 @@ func containsSQLFragment(text, fragment string) bool {
 	return strings.Contains(strings.Join(strings.Fields(text), ""), strings.Join(strings.Fields(fragment), ""))
 }
 
+func skipDoltOnlyWhenDoltliteBackend(t *testing.T) {
+	t.Helper()
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND")), "doltlite") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("BEADS_BACKEND")), "doltlite") {
+		t.Skip("legacy Dolt maintenance-script coverage is not part of the DoltLite test profile")
+	}
+}
+
 func TestMaintenanceCheckBinariesTreatsGhAsOptional(t *testing.T) {
 	binDir := t.TempDir()
 	bashPath, err := exec.LookPath("bash")
@@ -90,6 +98,8 @@ func TestMaintenanceCheckBinariesTreatsGhAsOptional(t *testing.T) {
 }
 
 func TestMaintenanceDoltScriptsUseProjectedConnectionTarget(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	tests := []struct {
 		name   string
 		script string
@@ -128,7 +138,9 @@ exit 0
 
 			env := map[string]string{
 				"DOLT_ARGS_LOG":       doltLog,
+				"BEADS_BACKEND":       "dolt",
 				"GC_CALL_LOG":         gcLog,
+				"GC_BEADS_BACKEND":    "dolt",
 				"GC_CITY":             cityDir,
 				"GC_CITY_PATH":        cityDir,
 				"GC_PACK_STATE_DIR":   stateDir,
@@ -223,6 +235,76 @@ exit 0
 			}
 			if data, err := os.ReadFile(gcLog); err == nil && strings.Contains(string(data), "mail send") {
 				t.Fatalf("no escalation mail expected without a dolt target:\n%s", data)
+			}
+		})
+	}
+}
+
+func TestMaintenanceScriptsSkipDoltliteBackendEvenWithStaleDoltPort(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+		env    map[string]string
+	}{
+		{
+			name:   "reaper",
+			script: coreScriptPath("reaper.sh"),
+			env: map[string]string{
+				"GC_REAPER_DRY_RUN": "1",
+			},
+		},
+		{
+			name:   "jsonl export",
+			script: coreScriptPath("jsonl-export.sh"),
+			env: map[string]string{
+				"GC_JSONL_ARCHIVE_REPO":      "archive",
+				"GC_JSONL_MAX_PUSH_FAILURES": "99",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cityDir := t.TempDir()
+			binDir := t.TempDir()
+			doltLog := filepath.Join(t.TempDir(), "dolt-args.log")
+			gcLog := filepath.Join(t.TempDir(), "gc.log")
+
+			writeMaintenanceDoltStub(t, filepath.Join(binDir, "dolt"))
+			writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_CALL_LOG"
+exit 0
+`)
+
+			env := map[string]string{
+				"DOLT_ARGS_LOG":    doltLog,
+				"GC_CALL_LOG":      gcLog,
+				"GC_CITY":          cityDir,
+				"GC_CITY_PATH":     cityDir,
+				"GC_BEADS_BACKEND": "doltlite",
+				"BEADS_BACKEND":    "doltlite",
+				"GC_DOLT_PORT":     "33549",
+				"PATH":             binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			}
+			for key, value := range tt.env {
+				if key == "GC_JSONL_ARCHIVE_REPO" {
+					value = filepath.Join(cityDir, value)
+				}
+				env[key] = value
+			}
+
+			out, err := runScriptResult(t, scriptPath(tt.script), env)
+			if err != nil {
+				t.Fatalf("%s should skip cleanly for doltlite backend: %v\n%s", filepath.Base(tt.script), err, out)
+			}
+			if !strings.Contains(string(out), "no managed dolt target for this city; skipping") {
+				t.Fatalf("missing doltlite no-dolt skip message:\n%s", out)
+			}
+			if data, err := os.ReadFile(doltLog); err == nil && len(data) > 0 {
+				t.Fatalf("dolt should not be invoked for doltlite backend:\n%s", data)
+			}
+			if data, err := os.ReadFile(gcLog); err == nil && strings.Contains(string(data), "mail send") {
+				t.Fatalf("no escalation mail expected for doltlite backend:\n%s", data)
 			}
 		})
 	}
@@ -2183,6 +2265,8 @@ func countExactLine(lines []string, want string) int {
 }
 
 func TestMaintenanceDoltScriptsUseManagedRuntimePorts(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	scripts := []struct {
 		name   string
 		script string
@@ -2338,6 +2422,8 @@ exit 0
 }
 
 func TestMaintenanceDoltScriptsFallbackToManagedRuntimePortsWithInconclusiveLsof(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	scripts := []struct {
 		name   string
 		script string
@@ -2488,6 +2574,8 @@ func assertMaintenanceScriptExit78(t *testing.T, err error, out []byte) {
 }
 
 func TestMaintenanceDoltScriptsUsePsConfirmedManagedRuntimePorts(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	scripts := []struct {
 		name   string
 		script string
@@ -2606,6 +2694,8 @@ exit 1
 }
 
 func TestMaintenanceDoltScriptsParseManagedRuntimeStateWithPortableSed(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	realSed, err := exec.LookPath("sed")
 	if err != nil {
 		t.Fatalf("LookPath(sed): %v", err)
@@ -2696,6 +2786,8 @@ exec %q "$@"
 }
 
 func TestMaintenanceDoltScriptsRejectInvalidManagedPort(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	cityDir := t.TempDir()
 	binDir := t.TempDir()
 	writeMaintenanceDoltStub(t, filepath.Join(binDir, "dolt"))
@@ -3056,6 +3148,8 @@ exit 0
 }
 
 func TestMaintenanceDoltScriptsSkipTestPatternDatabases(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	tests := []struct {
 		name   string
 		script string
@@ -3160,6 +3254,8 @@ exit 0
 }
 
 func TestMaintenanceDoltScriptsSkipUnsafeDatabaseIdentifiers(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	tests := []struct {
 		name   string
 		script string
@@ -6268,6 +6364,8 @@ func writeRuntimeStateFile(t *testing.T, cityDir string, filename string, port i
 // SHOW TABLES FROM <db> LIKE 'wisps' via the shared has_wisps_table
 // helper in dolt-target.sh and skip silently when wisps is absent.
 func TestMaintenanceDoltScriptsSkipDatabasesWithoutWispsTable(t *testing.T) {
+	skipDoltOnlyWhenDoltliteBackend(t)
+
 	tests := []struct {
 		name           string
 		script         string

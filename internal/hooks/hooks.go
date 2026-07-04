@@ -647,8 +647,13 @@ func upgradeCodexHooks(existing, desired []byte, cityDir string) ([]byte, bool, 
 	hasManagedCommand := codexHookValueHasManagedCommand(root, "")
 	needsPreCompact := codexHookDocCanAddPreCompact(root)
 	changed := upgradeCodexHookValue(root, "", cityDir)
-	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root, cityDir) {
-		changed = true
+	if desiredCodexPreCompactHook(desired) != nil {
+		if normalizeCodexManagedHookEntries(root, cityDir) {
+			changed = true
+		}
+		if canonicalizeCodexSessionStartHooks(root, cityDir) {
+			changed = true
+		}
 	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
@@ -670,6 +675,9 @@ func normalizeCodexHookCommands(existing []byte, cityDir string) ([]byte, bool, 
 	}
 	hasManagedCommand := codexHookValueHasManagedCommand(root, "")
 	changed := upgradeCodexHookValue(root, "", cityDir)
+	if canonicalizeCodexSessionStartHooks(root, cityDir) {
+		changed = true
+	}
 	if normalizeCodexManagedHookEntries(root, cityDir) {
 		changed = true
 	}
@@ -744,6 +752,68 @@ func codexHookValueHasManagedCommand(v any, event string) bool {
 			if codexHookValueHasManagedCommand(elem, event) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func canonicalizeCodexSessionStartHooks(root any, cityDir string) bool {
+	doc, ok := root.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooksMap, ok := doc["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	entries, ok := hooksMap["SessionStart"].([]any)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	keptManaged := false
+	out := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		entryMap, ok := entry.(map[string]any)
+		if !ok || !codexSessionStartEntryIsManaged(entryMap, cityDir) {
+			out = append(out, entry)
+			continue
+		}
+		if keptManaged {
+			changed = true
+			continue
+		}
+		if matcher, ok := entryMap["matcher"].(string); !ok || matcher != "startup" {
+			entryMap["matcher"] = "startup"
+			changed = true
+		}
+		keptManaged = true
+		out = append(out, entry)
+	}
+	if len(out) != len(entries) {
+		hooksMap["SessionStart"] = out
+		changed = true
+	}
+	return changed
+}
+
+func codexSessionStartEntryIsManaged(entry map[string]any, cityDir string) bool {
+	hookCmds, ok := entry["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hookCmds {
+		hMap, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		command, ok := hMap["command"].(string)
+		if !ok {
+			continue
+		}
+		if commandBodyAfterCanonicalPrefix(command) == sessionStartCurrentFormBody(cityDir) {
+			return true
 		}
 	}
 	return false

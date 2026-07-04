@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -308,6 +309,22 @@ const (
 	bdTransientWriteAttempts = 3
 	bdTransientReadAttempts  = 3
 )
+
+var doltliteWriteLocks sync.Map // map[string]*sync.Mutex
+
+func withDoltliteWriteLock(lockKey, lockPath string, fn func() error) error {
+	actual, _ := doltliteWriteLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := actual.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	locker := NewFileFlock(lockPath)
+	if err := locker.Lock(); err != nil {
+		return fmt.Errorf("locking DoltLite writes: %w", err)
+	}
+	defer locker.Unlock() //nolint:errcheck // best-effort unlock after write
+	return fn()
+}
 
 var _ ConditionalAssignmentReleaser = (*BdStore)(nil)
 
@@ -610,10 +627,13 @@ type bdIssue struct {
 	Labels       []string     `json:"labels"`
 	Metadata     StringMap    `json:"metadata,omitempty"`
 	Dependencies []bdIssueDep `json:"dependencies,omitempty"`
-	Ephemeral    bool         `json:"ephemeral,omitempty"`
-	NoHistory    bool         `json:"no_history,omitempty"`
-	DeferUntil   *time.Time   `json:"defer_until,omitempty"`
-	IsBlocked    optionalBool `json:"is_blocked,omitempty"`
+	// dependency_count is bd's active-blocker count when list-style commands
+	// include it. It is not the readiness source of truth; is_blocked is.
+	DependencyCount int          `json:"dependency_count,omitempty"`
+	Ephemeral       bool         `json:"ephemeral,omitempty"`
+	NoHistory       bool         `json:"no_history,omitempty"`
+	DeferUntil      *time.Time   `json:"defer_until,omitempty"`
+	IsBlocked       optionalBool `json:"is_blocked,omitempty"`
 }
 
 type bdIssueDep struct {
@@ -746,26 +766,27 @@ func (b *bdIssue) toBead() Bead {
 		}
 	}
 	return Bead{
-		ID:           b.ID,
-		Title:        b.Title,
-		Status:       mapBdStatus(b.Status),
-		Type:         b.IssueType,
-		Priority:     cloneIntPtr(b.Priority),
-		CreatedAt:    b.CreatedAt.Truncate(time.Second),
-		UpdatedAt:    b.UpdatedAt.Truncate(time.Second),
-		Assignee:     b.Assignee,
-		From:         from,
-		ParentID:     parentID,
-		Ref:          b.Ref,
-		Needs:        b.Needs,
-		Description:  b.Description,
-		Labels:       b.Labels,
-		Metadata:     b.Metadata,
-		Dependencies: deps,
-		Ephemeral:    b.Ephemeral,
-		NoHistory:    b.NoHistory,
-		DeferUntil:   cloneTimePtr(b.DeferUntil),
-		IsBlocked:    b.IsBlocked.ptr(),
+		ID:              b.ID,
+		Title:           b.Title,
+		Status:          mapBdStatus(b.Status),
+		Type:            b.IssueType,
+		Priority:        cloneIntPtr(b.Priority),
+		CreatedAt:       b.CreatedAt.Truncate(time.Second),
+		UpdatedAt:       b.UpdatedAt.Truncate(time.Second),
+		Assignee:        b.Assignee,
+		From:            from,
+		ParentID:        parentID,
+		Ref:             b.Ref,
+		Needs:           b.Needs,
+		Description:     b.Description,
+		Labels:          b.Labels,
+		Metadata:        b.Metadata,
+		Dependencies:    deps,
+		DependencyCount: b.DependencyCount,
+		Ephemeral:       b.Ephemeral,
+		NoHistory:       b.NoHistory,
+		DeferUntil:      cloneTimePtr(b.DeferUntil),
+		IsBlocked:       b.IsBlocked.ptr(),
 	}
 }
 
@@ -1052,6 +1073,20 @@ func (s *BdStore) Get(id string) (Bead, error) {
 
 // Update modifies fields of an existing bead via bd update.
 func (s *BdStore) Update(id string, opts UpdateOpts) error {
+	if opts.ExpectedStatus != nil && opts.Status != nil {
+		if err := s.updateStatusIfCurrent(id, *opts.ExpectedStatus, *opts.Status); err != nil {
+			return err
+		}
+		opts.Status = nil
+		opts.ExpectedStatus = nil
+		if !hasUpdateOpts(opts) {
+			return nil
+		}
+	}
+	return s.updateWithoutExpectedStatus(id, opts)
+}
+
+func (s *BdStore) updateWithoutExpectedStatus(id string, opts UpdateOpts) error {
 	args := []string{"update", "--json", id}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
@@ -1109,6 +1144,99 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 		return fmt.Errorf("updating bead %q: %w", id, err)
 	}
 	return nil
+}
+
+func hasNonStatusUpdateFields(opts UpdateOpts) bool {
+	return opts.Title != nil ||
+		opts.Type != nil ||
+		opts.Priority != nil ||
+		opts.Description != nil ||
+		opts.ParentID != nil ||
+		opts.Assignee != nil ||
+		len(opts.Metadata) > 0 ||
+		len(opts.Labels) > 0 ||
+		len(opts.RemoveLabels) > 0
+}
+
+func (s *BdStore) updateStatusIfCurrent(id, expectedStatus, nextStatus string) error {
+	current, err := s.Get(id)
+	if err != nil {
+		if isBdNotFound(err) {
+			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("updating bead %q: %w", id, err)
+	}
+	if current.Status == nextStatus {
+		if current.Status == expectedStatus {
+			return nil
+		}
+		return statusConflictError(id, expectedStatus, current.Status)
+	}
+	if current.Status != expectedStatus {
+		return statusConflictError(id, expectedStatus, current.Status)
+	}
+
+	table := "issues"
+	if current.Ephemeral {
+		table = "wisps"
+	}
+	query := "UPDATE " + table + " SET status = " + bdSQLStringLiteral(nextStatus) +
+		", updated_at = CURRENT_TIMESTAMP WHERE id = " + bdSQLStringLiteral(id) +
+		" AND status = " + bdSQLStringLiteral(expectedStatus)
+	out, err := s.runBDTransientWriteOutput("sql", "--json", query)
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if isBdSQLUnsupportedInEmbeddedMode(err) {
+			return s.updateStatusIfCurrentViaEmbeddedDoltSQL(id, table, expectedStatus, nextStatus)
+		}
+		if msg != "" {
+			return fmt.Errorf("bd status update: %w: %s", err, msg)
+		}
+		return fmt.Errorf("bd status update: %w", err)
+	}
+	var result struct {
+		RowsAffected int `json:"rows_affected"`
+	}
+	if err := json.Unmarshal(extractJSON(out), &result); err != nil {
+		return fmt.Errorf("bd status update: parsing JSON: %w", err)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	return statusConflictError(id, expectedStatus, current.Status)
+}
+
+func (s *BdStore) updateStatusIfCurrentViaEmbeddedDoltSQL(id, table, expectedStatus, nextStatus string) error {
+	doltDir, ok, err := s.embeddedDoltDir()
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("bd status update embedded fallback: %w", ErrConditionalReleaseUnsupported)
+	}
+	query := "UPDATE " + table + " SET status = " + bdSQLStringLiteral(nextStatus) +
+		", updated_at = CURRENT_TIMESTAMP WHERE id = " + bdSQLStringLiteral(id) +
+		" AND status = " + bdSQLStringLiteral(expectedStatus) +
+		"; SELECT ROW_COUNT() AS rows_affected"
+	out, err := s.runner(doltDir, "dolt", "sql", "-r", "json", "-q", query)
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: dolt sql: %w", err)
+	}
+	rowsAffected, err := parseDoltRowsAffected(out)
+	if err != nil {
+		return fmt.Errorf("bd status update embedded fallback: parsing SQL result: %w", err)
+	}
+	if rowsAffected > 0 {
+		return nil
+	}
+	current, getErr := s.Get(id)
+	if getErr != nil {
+		if isBdNotFound(getErr) {
+			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("updating bead %q: %w", id, getErr)
+	}
+	return statusConflictError(id, expectedStatus, current.Status)
 }
 
 // ReleaseIfCurrent clears an in-progress assignment only when the bead still
@@ -1819,16 +1947,24 @@ func (s *BdStore) runBDTransientCreateOutput(hasStableID bool, args ...string) (
 }
 
 func (s *BdStore) runBDTransientWriteOutputWhen(shouldRetry func(error) bool, args ...string) ([]byte, error) {
+	doltlite := s.isDoltliteBackend()
 	var err error
 	var out []byte
-	args = s.bdTransientWriteArgs(args)
-	for attempt := 1; attempt <= bdTransientWriteAttempts; attempt++ {
-		out, err = s.runner(s.dir, "bd", args...)
-		if err == nil || !shouldRetry(err) || attempt == bdTransientWriteAttempts {
-			return out, err
+	args = s.bdTransientWriteArgsForBackend(args, doltlite)
+	run := func() error {
+		for attempt := 1; attempt <= bdTransientWriteAttempts; attempt++ {
+			out, err = s.runner(s.dir, "bd", args...)
+			if err == nil || !shouldRetry(err) || attempt == bdTransientWriteAttempts {
+				return err
+			}
+			time.Sleep(time.Duration(attempt) * 25 * time.Millisecond)
 		}
-		time.Sleep(time.Duration(attempt) * 25 * time.Millisecond)
+		return err
 	}
+	if !doltlite {
+		return out, run()
+	}
+	err = withDoltliteWriteLock(filepath.Join(s.dir, ".beads"), filepath.Join(s.dir, ".beads", ".bd-write.lock"), run)
 	return out, err
 }
 
@@ -1852,7 +1988,11 @@ func (s *BdStore) runBDTransientRead(args ...string) ([]byte, error) {
 }
 
 func (s *BdStore) bdTransientWriteArgs(args []string) []string {
-	if !s.isDoltliteBackend() {
+	return s.bdTransientWriteArgsForBackend(args, s.isDoltliteBackend())
+}
+
+func (s *BdStore) bdTransientWriteArgsForBackend(args []string, doltlite bool) []string {
+	if !doltlite {
 		return args
 	}
 	out := []string{"--dolt-auto-commit", "off"}
@@ -1893,10 +2033,12 @@ func isBdTransientWriteError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "Error 1213 (40001): serialization failure") ||
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "error 1213 (40001): serialization failure") ||
 		strings.Contains(msg, "this transaction conflicts with a committed transaction") ||
 		strings.Contains(msg, "failed to prepare catalog") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
 		isBdAmbiguousWriteError(err)
 }
 
@@ -2491,6 +2633,7 @@ func (s *BdStore) Children(parentID string, opts ...QueryOpt) ([]Bead, error) {
 // wisp-aware tier modes.
 func (s *BdStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 	q := readyQueryFromArgs(query)
+	assignees := readyQueryAssignees(q)
 	includeEphemeral := q.TierMode == TierBoth || q.TierMode == TierWisps
 	args := bdReadyArgs(q, includeEphemeral)
 	out, err := s.runBDTransientRead(args...)
@@ -2505,7 +2648,7 @@ func (s *BdStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 		if !IsReadyCandidateForTier(bead, now, q.TierMode) {
 			continue
 		}
-		if q.Assignee != "" && bead.Assignee != q.Assignee {
+		if len(assignees) > 0 && !slices.Contains(assignees, bead.Assignee) {
 			continue
 		}
 		result = append(result, bead)

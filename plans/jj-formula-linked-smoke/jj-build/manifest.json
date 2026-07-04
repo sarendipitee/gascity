@@ -1,0 +1,65 @@
+{
+  "schema": "gascity.workflow-docs.v1",
+  "workflow_root": "gc-wrkw",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build",
+  "artifact_root_relative": "plans/jj-formula-linked-smoke/jj-build",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/manifest.json",
+  "manifest_path_relative": "plans/jj-formula-linked-smoke/jj-build/manifest.json",
+  "docs_change_id": "mwnzyvorvnyotpzwrypszuwmmxuznrlu",
+  "source_workspace": "",
+  "source_workspace_path": "",
+  "source_change_id": "",
+  "documents": [
+    {
+      "name": "final-report",
+      "schema": "gc.build.final-report.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/final-report.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/final-report.md",
+      "hash": "sha256:c19b417a2d3d52b00bc6a2e792df8f8eaa2963d1404b9f40a02a79eb9c1b3532",
+      "change_id": "twpsuupknosossoruonwsvnlrnuwmokt"
+    },
+    {
+      "name": "requirements",
+      "schema": "gc.build.requirements.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/requirements.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/requirements.md",
+      "hash": "sha256:0be5778c2c7279867f647a7a4c7e2ab9c056b6d7d04fe805ef8ed258ebc8d4d5",
+      "change_id": "wmqqurqzmnztpuqqykzwnkpwmmpsppox"
+    },
+    {
+      "name": "decomposition",
+      "schema": "gc.build.decomposition.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/decomposition.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/decomposition.md",
+      "hash": "sha256:425f824e7e6b3f23b5f0aef472daad096b1cb4a354243fa592ed931dbf38742e",
+      "change_id": "lxtyxwwpzrswtlxsmsrsnnoytsovvkzy"
+    },
+    {
+      "name": "implementation-summary",
+      "schema": "gc.build.implementation-summary.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/implementation-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/implementation-summary.md",
+      "hash": "sha256:65a5343c3a1e7b86d57e05537a436b4fa8fc47c81f468506006ac01ac31dc19d",
+      "change_id": "lursqtmt"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/plan.md",
+      "hash": "sha256:fbc9a0e379748579e1f1f6adf2f71c94d338adf431d698172e623d4a85d952a1",
+      "change_id": "unwlqrporwstuvumqquzknylxysqrzrn"
+    },
+    {
+      "name": "plan-review",
+      "schema": "gc.docs.plan-review.v1",
+      "path": "plans/jj-formula-linked-smoke/jj-build/plan-review.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-linked-smoke/jj-build/plan-review.md",
+      "hash": "sha256:b1e7af3983ec7cfa70ba905e8f652b248907b39b44f09f83cc2718e27d6cc164",
+      "change_id": "mwnzyvorvnyotpzwrypszuwmmxuznrlu"
+    }
+  ]
+}

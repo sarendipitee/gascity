@@ -167,9 +167,11 @@ func TestResolveProviderWorkspaceProvider(t *testing.T) {
 	if rp.Name != "codex" {
 		t.Errorf("Name = %q, want %q", rp.Name, "codex")
 	}
-	// After migration, CommandString() is just "codex" -- schema flags come from ResolveDefaultArgs.
-	if rp.CommandString() != "codex" {
-		t.Errorf("CommandString() = %q, want %q", rp.CommandString(), "codex")
+	// After migration, CommandString() contains only provider base args;
+	// schema flags come from ResolveDefaultArgs.
+	wantCommand := "codex"
+	if rp.CommandString() != wantCommand {
+		t.Errorf("CommandString() = %q, want %q", rp.CommandString(), wantCommand)
 	}
 	defaultArgs := rp.ResolveDefaultArgs()
 	codexWantArgs := []string{

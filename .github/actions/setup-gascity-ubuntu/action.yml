@@ -19,6 +19,14 @@ inputs:
       installs bd itself (used by the cross-version contract "current" cell).
     required: false
     default: ""
+  install-doltlite:
+    description: Whether to install DoltLite CLI, headers, and libdoltlite
+    required: false
+    default: "false"
+  doltlite-version:
+    description: DoltLite release version to install
+    required: false
+    default: "latest"
   install-claude-cli:
     description: Whether to install the Claude CLI
     required: false
@@ -41,7 +49,7 @@ runs:
 
     - name: Install system dependencies
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y tmux jq
+      run: sudo apt-get update && sudo apt-get install -y tmux jq unzip
 
     - name: Install dolt v${{ inputs.dolt-version }}
       shell: bash
@@ -53,6 +61,11 @@ runs:
       if: ${{ inputs.bd-version != '' }}
       shell: bash
       run: ${{ github.action_path }}/../../scripts/install-bd-archive.sh "${{ inputs.bd-version }}"
+
+    - name: Install DoltLite C library
+      if: ${{ inputs.install-doltlite == 'true' }}
+      shell: bash
+      run: ${{ github.action_path }}/../../scripts/install-doltlite-archive.sh "${{ inputs.doltlite-version }}"
 
     - name: Install Claude CLI
       if: ${{ inputs.install-claude-cli == 'true' }}

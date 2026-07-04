@@ -7,6 +7,8 @@
 #   - supervisor registration/start
 #   - DB-backed beads runtime config
 #   - bd create/delete against the new DoltLite store
+#   - gc rig add against the new DoltLite city
+#   - rig-scoped DoltLite metadata, DB config, and bd create/delete
 #
 # By default the throwaway city is unregistered and deleted at exit.
 # Set KEEP_GC_INIT_SMOKE=1 to leave it behind for inspection.
@@ -113,6 +115,15 @@ for row in rows:
         raise SystemExit(0)
 raise SystemExit(1)
 ' "$key"
+}
+
+require_json_field() {
+  local file="$1"
+  local field="$2"
+  local want="$3"
+  local got
+  got="$(json_field "$file" "$field")"
+  [ "$got" = "$want" ] || fail "$file $field = $got, want $want"
 }
 
 snapshot_file() {
@@ -267,6 +278,51 @@ log "checking DoltLite beads DB config"
   bead_json="$(bd create "clean DoltLite gc init smoke test" --json)"
   bead_id="$(printf '%s\n' "$bead_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
   [ -n "$bead_id" ] || fail "bd create did not return an id"
+  bd delete "$bead_id" --force >/dev/null
+)
+
+log "adding and checking a DoltLite rig"
+SCRATCH_RIG_NAME="${GC_INIT_SMOKE_RIG_NAME:-release-smoke-scratch}"
+SCRATCH_RIG_PREFIX="${GC_INIT_SMOKE_RIG_PREFIX:-rss}"
+SCRATCH_RIG_DIR="$CITY_DIR/rigs/$SCRATCH_RIG_NAME"
+
+gc --city "$CITY_DIR" rig add "$SCRATCH_RIG_DIR" \
+  --name "$SCRATCH_RIG_NAME" \
+  --prefix "$SCRATCH_RIG_PREFIX" \
+  --start-suspended >/dev/null
+
+gc --city "$CITY_DIR" rig list | grep -q "$SCRATCH_RIG_NAME" ||
+  fail "gc rig list does not include $SCRATCH_RIG_NAME"
+grep -q "name = \"$SCRATCH_RIG_NAME\"" "$CITY_DIR/city.toml" ||
+  fail "city.toml does not include rig $SCRATCH_RIG_NAME"
+
+rig_meta="$SCRATCH_RIG_DIR/.beads/metadata.json"
+rig_db="$SCRATCH_RIG_DIR/.beads/doltlite/$SCRATCH_RIG_PREFIX.db"
+[ -s "$rig_meta" ] || fail "missing rig metadata: $rig_meta"
+[ -s "$rig_db" ] || fail "missing rig DoltLite DB: $rig_db"
+require_json_field "$rig_meta" backend doltlite
+require_json_field "$rig_meta" database doltlite
+require_json_field "$rig_meta" dolt_database "$SCRATCH_RIG_PREFIX"
+
+(
+  cd "$SCRATCH_RIG_DIR"
+  prefix="$(bd_sql_config_value issue_prefix 2>/dev/null | tr -d '[:space:]' || true)"
+  [ "$prefix" = "$SCRATCH_RIG_PREFIX" ] ||
+    fail "rig DB config issue_prefix = ${prefix:-<empty>}, want $SCRATCH_RIG_PREFIX"
+
+  custom_types="$(bd_sql_config_value types.custom 2>/dev/null || true)"
+  case "$custom_types" in
+    *molecule*convoy*session*) ;;
+    *) fail "rig DB config types.custom missing expected Gas City types: $custom_types" ;;
+  esac
+
+  bd list >/dev/null
+  bead_json="$(bd create "clean DoltLite rig add smoke test" --json)"
+  bead_id="$(printf '%s\n' "$bead_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  case "$bead_id" in
+    "$SCRATCH_RIG_PREFIX"-*) ;;
+    *) fail "rig bd create returned id $bead_id, want prefix $SCRATCH_RIG_PREFIX-" ;;
+  esac
   bd delete "$bead_id" --force >/dev/null
 )
 

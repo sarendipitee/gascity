@@ -20,6 +20,11 @@ type softReloadAcceptanceResult struct {
 	DesiredEmpty   bool
 }
 
+type softReloadSessionStore interface {
+	List(query beads.ListQuery) ([]beads.Bead, error)
+	SetMetadataBatch(id string, metadata map[string]string) error
+}
+
 func (r softReloadAcceptanceResult) warnings() []string {
 	var warnings []string
 	if r.Failed > 0 {
@@ -78,7 +83,7 @@ func formatSoftReloadFailedSessions(names []string) string {
 // The hash computation uses sessionCoreConfigForHash, the same canonical
 // reconciler drift-hash helper used by live and asleep drift detection.
 //
-// Returns accepted-session, failed-session, stale-drain-cancellation, and
+// Returns accepted-session, failed-session, stale-drain-cancelation, and
 // empty-desired-state diagnostics for the controller reply.
 func acceptConfigDriftAcrossSessions(
 	sessFront *session.InfoStore,
@@ -156,6 +161,44 @@ func acceptConfigDriftAcrossSessions(
 		result.Updated++
 	}
 	return result
+}
+
+func loadSoftReloadSessionBeadSnapshot(store softReloadSessionStore) (*sessionBeadSnapshot, error) {
+	if store == nil {
+		return newSessionBeadSnapshot(nil), nil
+	}
+	byType, typeErr := store.List(beads.ListQuery{Type: session.BeadType})
+	if typeErr != nil && !beads.IsPartialResult(typeErr) {
+		return nil, fmt.Errorf("listing session beads by type: %w", typeErr)
+	}
+	byLabel, labelErr := store.List(beads.ListQuery{Label: session.LabelSession})
+	if labelErr != nil && !beads.IsPartialResult(labelErr) {
+		return nil, fmt.Errorf("listing session beads by label: %w", labelErr)
+	}
+	seen := make(map[string]struct{}, len(byType)+len(byLabel))
+	merged := make([]beads.Bead, 0, len(byType)+len(byLabel))
+	for _, b := range byType {
+		if _, ok := seen[b.ID]; ok || !session.IsSessionBeadOrRepairable(b) {
+			continue
+		}
+		seen[b.ID] = struct{}{}
+		merged = append(merged, b)
+	}
+	for _, b := range byLabel {
+		if _, ok := seen[b.ID]; ok || !session.IsSessionBeadOrRepairable(b) {
+			continue
+		}
+		seen[b.ID] = struct{}{}
+		merged = append(merged, b)
+	}
+	snapshot := newSessionBeadSnapshot(merged)
+	if typeErr != nil {
+		return snapshot, typeErr
+	}
+	if labelErr != nil {
+		return snapshot, labelErr
+	}
+	return snapshot, nil
 }
 
 func softReloadAcceptedHashMetadata(agentCfg runtime.Config, currentHash string) (map[string]string, error) {

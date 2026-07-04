@@ -1197,37 +1197,6 @@ func TestGastownCity(t *testing.T) {
 	}
 }
 
-// TestGascityCitySeedsRolesDefaultRigImport pins gascity#3832: the gascity
-// template imports the formulas pack at city scope AND seeds the gc-roles pack
-// as a default rig import bound "gc", so every rig added to the city receives
-// the providerless role agents (gc.run-operator, gc.requirements-planner, ...)
-// that the built-in formulas route to. Without this, a fresh city could launch
-// a formula but failed with `agent "gc.run-operator" not found in city.toml`.
-func TestGascityCitySeedsRolesDefaultRigImport(t *testing.T) {
-	c := GascityCityWithProviders("bright-lights", "claude", []string{"claude"})
-
-	// City-scope formulas/skills import is unchanged.
-	if len(c.Imports) != 1 || c.Imports["gascity"].Source != PublicGascityPackSource || c.Imports["gascity"].Version != PublicGascityPackVersion {
-		t.Errorf("Imports = %v, want gascity=%s %s", c.Imports, PublicGascityPackSource, PublicGascityPackVersion)
-	}
-
-	// Roles ride along as a default rig import, bound "gc" so the formula's
-	// gc.* targets resolve, pinned to the same commit as the formulas pack.
-	roles, ok := c.DefaultRigImports["gc"]
-	if !ok || len(c.DefaultRigImports) != 1 {
-		t.Fatalf("DefaultRigImports = %v, want single gc entry", c.DefaultRigImports)
-	}
-	if roles.Source != PublicGascityRolesPackSource {
-		t.Errorf("roles import source = %q, want %q", roles.Source, PublicGascityRolesPackSource)
-	}
-	if roles.Version != PublicGascityPackVersion {
-		t.Errorf("roles import version = %q, want %q (same commit as the formulas pack)", roles.Version, PublicGascityPackVersion)
-	}
-	if len(c.DefaultRigImportOrder) != 1 || c.DefaultRigImportOrder[0] != "gc" {
-		t.Errorf("DefaultRigImportOrder = %v, want [gc]", c.DefaultRigImportOrder)
-	}
-}
-
 func TestGastownCityStartCommand(t *testing.T) {
 	c := GastownCity("test", "", "my-agent --auto")
 	if c.Workspace.StartCommand != "my-agent --auto" {
@@ -1927,6 +1896,39 @@ esac
 `)
 	if !strings.Contains(out, "ga-ephemeral-progress") {
 		t.Fatalf("EffectiveWorkQueryForBeads(bd-1.0.5) did not surface assigned ephemeral in-progress work: %q", out)
+	}
+}
+
+func TestEffectiveWorkQueryBD105SurfacesEphemeralOpenAssignedWork(t *testing.T) {
+	a := Agent{Name: "run-operator", Dir: "gascity"}
+	out := runEffectiveWorkQueryForBeads(t, a, BeadsConfig{BDCompatibility: BeadsBDCompatibility105}, map[string]string{
+		"GC_SESSION_NAME": "gascity/gc.run-operator-1",
+	}, `#!/bin/sh
+set -eu
+case "$1" in
+  list)
+    printf '[]'
+    ;;
+  query)
+    case "$*" in
+      *"ephemeral=true AND status=open"*)
+        printf '[{"id":"ga-ephemeral-open","assignee":"gascity/gc.run-operator-1","status":"open","ephemeral":true}]'
+        ;;
+      *)
+        printf '[]'
+        ;;
+    esac
+    ;;
+  ready)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if !strings.Contains(out, "ga-ephemeral-open") {
+		t.Fatalf("EffectiveWorkQueryForBeads(bd-1.0.5) did not surface assigned ephemeral open work: %q", out)
 	}
 }
 
@@ -6009,8 +6011,8 @@ func TestDefaultSlingTargetsRoundTrip(t *testing.T) {
 func TestSessionSetupTimeoutDefault(t *testing.T) {
 	s := SessionConfig{}
 	got := s.SetupTimeoutDuration()
-	if got != 10*time.Second {
-		t.Errorf("SetupTimeoutDuration() = %v, want 10s", got)
+	if got != 60*time.Second {
+		t.Errorf("SetupTimeoutDuration() = %v, want 60s", got)
 	}
 }
 
@@ -6025,8 +6027,8 @@ func TestSessionSetupTimeoutCustom(t *testing.T) {
 func TestSessionSetupTimeoutInvalid(t *testing.T) {
 	s := SessionConfig{SetupTimeout: "not-a-duration"}
 	got := s.SetupTimeoutDuration()
-	if got != 10*time.Second {
-		t.Errorf("SetupTimeoutDuration() = %v, want 10s (default for invalid)", got)
+	if got != 60*time.Second {
+		t.Errorf("SetupTimeoutDuration() = %v, want 60s (default for invalid)", got)
 	}
 }
 
@@ -8110,15 +8112,28 @@ func TestPreferredDeterministicControlDispatcher(t *testing.T) {
 	rigCopy := deterministic("fixture")
 	plain := Agent{Name: ControlDispatcherAgentName, Dir: "fixture"} // no StartCommand
 
+	// A rig-scoped dispatcher made RESIDENT by a min_active_sessions>=1 floor.
+	minOne := 1
+	rigCopyMinActive := deterministic("fixture")
+	rigCopyMinActive.MinActiveSessions = &minOne
+
+	// alwaysPin returns a [[named_session]] mode="always" pinning the rig-scoped
+	// core.control-dispatcher for dir; its TemplateQualifiedName matches the agent
+	// QualifiedName "<dir>/core.control-dispatcher", mirroring atlas's city.toml.
+	alwaysPin := func(dir string) NamedSession {
+		return NamedSession{Template: "core.control-dispatcher", Dir: dir, Mode: "always"}
+	}
+
 	tests := []struct {
-		name       string
-		agents     []Agent
-		rigContext string
-		wantQN     string
-		wantOK     bool
+		name          string
+		agents        []Agent
+		namedSessions []NamedSession
+		rigContext    string
+		wantQN        string
+		wantOK        bool
 	}{
 		{
-			name:       "singleton preferred over rig copy for rig scope",
+			name:       "singleton preferred over NON-resident rig copy for rig scope",
 			agents:     []Agent{rigCopy, citySingleton},
 			rigContext: "fixture",
 			wantQN:     "core.control-dispatcher",
@@ -8150,11 +8165,59 @@ func TestPreferredDeterministicControlDispatcher(t *testing.T) {
 			rigContext: "other",
 			wantOK:     false,
 		},
+		{
+			// Multi-store city (atlas): the rig dispatcher is pinned always-on,
+			// so it runs + serves its own rig store — its control beads route to
+			// it, not the singleton (which cannot claim a <rig>/... route).
+			name:          "RESIDENT rig copy (named_session always) preferred for its rig scope",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("fixture")},
+			rigContext:    "fixture",
+			wantQN:        "fixture/core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			name:       "RESIDENT rig copy (min_active_sessions>=1) preferred for its rig scope",
+			agents:     []Agent{rigCopyMinActive, citySingleton},
+			rigContext: "fixture",
+			wantQN:     "fixture/core.control-dispatcher",
+			wantOK:     true,
+		},
+		{
+			// Residency must not leak into city-scope work: a pinned rig
+			// dispatcher does NOT capture rigContext=="" (run-operator-city).
+			name:          "resident rig copy still yields singleton for empty scope",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("fixture")},
+			rigContext:    "",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			// on_demand pinning does NOT make the rig dispatcher resident (only
+			// the singleton runs given max_active_sessions=1) — singleton wins.
+			name:          "on_demand-pinned rig copy is NOT resident — singleton wins",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{{Template: "core.control-dispatcher", Dir: "fixture", Mode: "on_demand"}},
+			rigContext:    "fixture",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			// A pin for a DIFFERENT rig does not make THIS rig's dispatcher
+			// resident (the QualifiedName correlation is rig-specific).
+			name:          "always-pin for another rig does not make this rig resident",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("other")},
+			rigContext:    "fixture",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := PreferredDeterministicControlDispatcher(&City{Agents: tt.agents}, tt.rigContext)
+			got, ok := PreferredDeterministicControlDispatcher(&City{Agents: tt.agents, NamedSessions: tt.namedSessions}, tt.rigContext)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}

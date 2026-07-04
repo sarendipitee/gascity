@@ -110,14 +110,13 @@ func assertSingleStopWithBenignNoise(t *testing.T, ops []string) {
 	}
 }
 
-// assertHooksAbsent checks that gc-installed bead event hooks are absent at dir.
-// installBeadHooks now removes these hooks; they must not exist after any gc operation.
-func assertHooksAbsent(t *testing.T, dir, context string) {
+// assertHooksExist checks that all bead hooks exist at the given directory.
+func assertHooksExist(t *testing.T, dir, context string) {
 	t.Helper()
 	for _, hook := range []string{"on_create", "on_close", "on_update"} {
 		path := filepath.Join(dir, ".beads", "hooks", hook)
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("hook %s must be absent at %s (%s): stat err=%v", hook, dir, context, err)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("hook %s missing at %s (%s): %v", hook, dir, context, err)
 		}
 	}
 }
@@ -163,7 +162,7 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	ops := readOpLog(t, logFile)
 	assertOpSubsequence(t, ops, "probe", "start", "init "+cityPath)
 	cityInitOps := len(ops)
-	assertHooksAbsent(t, cityPath, "after city init")
+	assertHooksExist(t, cityPath, "after city init")
 
 	// Phase 2: gc rig add — initDirIfReady for rig.
 	rigPrefix := "mr"
@@ -181,10 +180,17 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	}
 	assertOpSubsequence(t, ops[cityInitOps:], "probe", "start", "init "+rigPath)
 	rigInitOps := len(ops)
-	assertHooksAbsent(t, rigPath, "after rig add")
+	assertHooksExist(t, rigPath, "after rig add")
 
-	// Phase 3: gc start — startBeadsLifecycle re-runs provider init and removes
-	// any stale gc hooks. No hooks are installed since autoclose runs in-process.
+	// Phase 3: Simulate hook wipe (bd init recreates .beads/).
+	if err := os.RemoveAll(filepath.Join(cityPath, ".beads", "hooks")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(rigPath, ".beads", "hooks")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Phase 4: gc start — startBeadsLifecycle reinstalls everything.
 	cfg := testCityConfig(cityName, []config.Rig{
 		{Name: "myrig", Path: rigPath, Prefix: rigPrefix},
 	})
@@ -198,9 +204,9 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	}
 	assertOpSubsequence(t, ops[rigInitOps:], "start", "init "+cityPath, "init "+rigPath)
 
-	// Verify gc hooks are absent at both paths after start.
-	assertHooksAbsent(t, cityPath, "after start")
-	assertHooksAbsent(t, rigPath, "after start")
+	// Verify hooks reinstalled at both paths after start.
+	assertHooksExist(t, cityPath, "after start")
+	assertHooksExist(t, rigPath, "after start")
 }
 
 // TestLifecycleCoordination_StartOrder verifies that start precedes any
@@ -245,6 +251,67 @@ func TestLifecycleCoordination_StartOrder(t *testing.T) {
 			t.Fatalf("op[%d] should be init, got: %s", i, ops[i])
 		}
 	}
+}
+
+func TestStartBeadsLifecycleContinuesAfterRigInitFailure(t *testing.T) {
+	cityPath := t.TempDir()
+	cityName := "partialstart"
+	badRigPath := filepath.Join(cityPath, "rigs", "bad")
+	goodRigPath := filepath.Join(cityPath, "rigs", "good")
+	for _, dir := range []string{badRigPath, goodRigPath} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"),
+		[]byte("[workspace]\nname = \""+cityName+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logFile := filepath.Join(t.TempDir(), "ops.log")
+	script := filepath.Join(t.TempDir(), "partial-beads.sh")
+	content := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %q
+case "$1" in
+  init)
+    if [ "$2" = %q ]; then
+      echo "intentional bad rig init" >&2
+      exit 42
+    fi
+    mkdir -p "$2/.beads"
+    ;;
+  create)
+    cat >/dev/null
+    printf '{"id":"spy-1","title":"spy bead","status":"open","type":"task"}\n'
+    ;;
+esac
+exit 0
+`, logFile, badRigPath)
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_BEADS", "exec:"+script)
+
+	cfg := testCityConfig(cityName, []config.Rig{
+		{Name: "bad", Path: badRigPath, Prefix: "bd"},
+		{Name: "good", Path: goodRigPath, Prefix: "gd"},
+	})
+	var stderr strings.Builder
+	if err := startBeadsLifecycle(cityPath, cityName, cfg, &stderr); err != nil {
+		t.Fatalf("startBeadsLifecycle() error = %v, want nil when one rig init fails", err)
+	}
+	if !cfg.Rigs[0].Suspended {
+		t.Fatal("failed rig was not suspended for this startup")
+	}
+	if cfg.Rigs[1].Suspended {
+		t.Fatal("successful rig was suspended")
+	}
+	if got := stderr.String(); !strings.Contains(got, `rig "bad" beads`) || !strings.Contains(got, "intentional bad rig init") {
+		t.Fatalf("stderr = %q, want failed rig init warning", got)
+	}
+
+	ops := readOpLog(t, logFile)
+	assertOpSubsequence(t, ops, "init "+cityPath, "init "+badRigPath, "init "+goodRigPath)
 }
 
 // TestLifecycleCoordination_StopOrder verifies that stop is called
@@ -347,7 +414,7 @@ func TestLifecycleCoordination_InitDirIfReadySkipsProviderForPostgresCityAndRig(
 	if deferred {
 		t.Fatal("initDirIfReady(city) deferred = true, want false")
 	}
-	assertHooksAbsent(t, cityPath, "after postgres city init")
+	assertHooksExist(t, cityPath, "after postgres city init")
 
 	deferred, err = initDirIfReady(cityPath, rigPath, "pg")
 	if err != nil {
@@ -356,7 +423,7 @@ func TestLifecycleCoordination_InitDirIfReadySkipsProviderForPostgresCityAndRig(
 	if deferred {
 		t.Fatal("initDirIfReady(rig) deferred = true, want false")
 	}
-	assertHooksAbsent(t, rigPath, "after postgres rig add")
+	assertHooksExist(t, rigPath, "after postgres rig add")
 
 	if ensureCalls != 0 {
 		t.Fatalf("managed Dolt provider start calls = %d, want 0", ensureCalls)
@@ -528,6 +595,52 @@ func TestLifecycleCoordination_InitDirIfReady_BdDeferredPreservesExistingDoltDat
 	}
 	if got := strings.TrimSpace(fmt.Sprint(meta["dolt_database"])); got != "gascity" {
 		t.Fatalf("dolt_database = %q, want %q", got, "gascity")
+	}
+}
+
+func TestNormalizeCanonicalBdScopeFilesForInit_DoltliteInheritedRigRewritesStaleDoltMetadata(t *testing.T) {
+	cityPath := t.TempDir()
+	rigPath := filepath.Join(cityPath, "gascity")
+	if err := os.MkdirAll(filepath.Join(rigPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n\n[beads]\nbackend = \"doltlite\"\n\n[[rigs]]\nname = \"gascity\"\npath = \"gascity\"\nprefix = \"gc\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "config.yaml"), []byte(`issue_prefix: gc
+gc.endpoint_origin: inherited_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "metadata.json"), []byte(`{"backend":"dolt","database":"dolt","dolt_database":"gc","dolt_mode":"server"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := normalizeCanonicalBdScopeFilesForInit(cityPath, rigPath, "gc", "gc"); err != nil {
+		t.Fatalf("normalizeCanonicalBdScopeFilesForInit: %v", err)
+	}
+
+	metaData, err := os.ReadFile(filepath.Join(rigPath, ".beads", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(meta["backend"])); got != "doltlite" {
+		t.Fatalf("backend = %q, want doltlite; metadata=%s", got, metaData)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(meta["database"])); got != "doltlite" {
+		t.Fatalf("database = %q, want doltlite; metadata=%s", got, metaData)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(meta["dolt_database"])); got != "gc" {
+		t.Fatalf("dolt_database = %q, want gc; metadata=%s", got, metaData)
+	}
+	if _, ok := meta["dolt_mode"]; ok {
+		t.Fatalf("metadata should remove dolt_mode for doltlite: %s", metaData)
 	}
 }
 

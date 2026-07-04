@@ -1,0 +1,28 @@
+{
+  "workflow_root_bead_id": "gc-wisp-e17",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "docs_artifact_root": "/data/projects/doltlite-gascity/gascity/plans/review-doltlite-backend-plugin",
+  "docs_manifest_path": "/data/projects/doltlite-gascity/gascity/plans/review-doltlite-backend-plugin/manifest.json",
+  "docs_change_id": "trrnpqlztznvvtwqntyqxvrxrpwzvmnn",
+  "source": {},
+  "documents": [
+    {
+      "name": "requirements",
+      "schema": "gc.build.requirements.v1",
+      "path": "plans/review-doltlite-backend-plugin/requirements.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/review-doltlite-backend-plugin/requirements.md",
+      "hash": "sha256:cee760d53d50acffb0157b1c691fa3395aa5b0ddb6e327cc76d2ac0b4553690b",
+      "change_id": "mnootytpnuopsxuxwlxmnsypmqznrxoq"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/review-doltlite-backend-plugin/plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/review-doltlite-backend-plugin/plan.md",
+      "hash": "sha256:92706683dd16513ebe9e001a334538d955027a5b7190aeb7f2308ad4f849f744",
+      "change_id": "trrnpqlztznvvtwqntyqxvrxrpwzvmnn"
+    }
+  ]
+}

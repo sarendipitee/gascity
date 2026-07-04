@@ -176,7 +176,7 @@ append_fragments = ["safety"]
 | `Branch` | Current git branch | `feature-x` |
 | `DefaultBranch` | Default branch | `main` |
 | `WorkQuery` | Work discovery command | `bd ready --assignee=...` |
-| `AssignedInProgressQuery` | Assigned in-progress recovery command | `bd list --include-ephemeral --status in_progress ...` |
+| `AssignedInProgressQuery` | Assigned ready-work recovery command | `bd ready --include-ephemeral --assignee=... --json --limit=1` |
 | `AssignedReadyQuery` | Assigned ready-work command | `bd ready --include-ephemeral --assignee=...` |
 | `RoutedPoolQuery` | Unassigned routed pool-work command | `bd ready --metadata-field gc.routed_to=... --unassigned` |
 | `SlingQuery` | Work routing command | `gc sling ...` |

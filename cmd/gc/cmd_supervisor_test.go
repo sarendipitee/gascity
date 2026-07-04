@@ -235,6 +235,18 @@ func readCommandLog(t *testing.T, path string) string {
 	return string(data)
 }
 
+func enableSupervisorRuntimeDirInferenceForTest(t *testing.T, runUserRoot string) {
+	t.Helper()
+	oldRoot := supervisorRunUserRuntimeRoot
+	oldInfer := supervisorInferRuntimeDirsInTest
+	supervisorRunUserRuntimeRoot = runUserRoot
+	supervisorInferRuntimeDirsInTest = true
+	t.Cleanup(func() {
+		supervisorRunUserRuntimeRoot = oldRoot
+		supervisorInferRuntimeDirsInTest = oldInfer
+	})
+}
+
 func TestDoSupervisorLogsNoFile(t *testing.T) {
 	t.Setenv("GC_HOME", t.TempDir())
 
@@ -271,6 +283,48 @@ func TestSupervisorAliveFallsBackToDefaultHomeSocket(t *testing.T) {
 	}
 	if pid := supervisorAlive(); pid != 4242 {
 		t.Fatalf("supervisorAlive() = %d, want 4242", pid)
+	}
+}
+
+func TestInferredSupervisorRuntimeDirsUsesRunUserWithoutXDG(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("run-user runtime fallback is Linux-only")
+	}
+	homeDir := shortTempDir(t, "home-")
+	runUserRoot := shortTempDir(t, "run-user-")
+	runDir := filepath.Join(runUserRoot, strconv.Itoa(os.Getuid()), "gc")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", runDir, err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	enableSupervisorRuntimeDirInferenceForTest(t, runUserRoot)
+
+	got := inferredSupervisorRuntimeDirs()
+	if len(got) != 1 || !samePath(got[0], runDir) {
+		t.Fatalf("inferredSupervisorRuntimeDirs() = %q, want [%q]", got, runDir)
+	}
+}
+
+func TestInferredSupervisorRuntimeDirsSkipsIsolatedGCHome(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("run-user runtime fallback is Linux-only")
+	}
+	homeDir := shortTempDir(t, "home-")
+	gcHome := shortTempDir(t, "gc-home-")
+	runUserRoot := shortTempDir(t, "run-user-")
+	runDir := filepath.Join(runUserRoot, strconv.Itoa(os.Getuid()), "gc")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", runDir, err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	enableSupervisorRuntimeDirInferenceForTest(t, runUserRoot)
+
+	if got := inferredSupervisorRuntimeDirs(); len(got) != 0 {
+		t.Fatalf("inferredSupervisorRuntimeDirs() = %q, want no inferred run-user supervisor for isolated GC_HOME", got)
 	}
 }
 

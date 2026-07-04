@@ -83,6 +83,7 @@ func applyGraphRouting(recipe *formula.Recipe, a *config.Agent, routedTo string,
 
 var (
 	workflowServeList               = nextWorkflowServeBeads
+	workflowServeOpenControlStore   = openBdStoreAt
 	controlDispatcherServe          = runControlDispatcherInStore
 	workflowServeOpenEventsProvider = func(stderr io.Writer) (events.Provider, error) {
 		ep, code := openCityEventsProvider(stderr, "gc convoy control --serve")
@@ -138,6 +139,8 @@ var (
 		warned: map[string]struct{}{},
 	}
 )
+
+const workflowServeControlStoreQueryEnv = "GC_CONTROL_STORE_QUERY"
 
 // followSleepDuration returns the sleep interval the --follow loop should use
 // before its next drain, given how many consecutive idle sweeps have passed.
@@ -362,14 +365,73 @@ func runWorkflowServe(agentName string, follow bool, _ io.Writer, stderr io.Writ
 	// on every iteration. #793.
 	workQuery := expandAgentCommandTemplate(cityPath, cityName, &agentCfg, cfg.Rigs, "work_query", agentCfg.EffectiveWorkQueryForBeads(cfg.Beads), stderr)
 	if agentCfg.WorkQuery == "" && isWorkflowServeControlDispatcherAgent(agentCfg) {
-		workQuery = workflowServeControlReadyQueryForBeads(agentCfg, cfg.Beads, config.NamedSessionRuntimeName(cityName, cfg.Workspace, agentCfg.QualifiedName()))
+		controlSessionName := config.NamedSessionRuntimeName(cityName, cfg.Workspace, agentCfg.QualifiedName())
+		workQuery = workflowServeControlReadyQueryForBeads(agentCfg, cfg.Beads, controlSessionName)
+		workEnv = cloneWorkflowServeEnv(workEnv)
+		workEnv[workflowServeControlStoreQueryEnv] = "true"
+		workEnv["GC_CONTROL_TARGET"] = strings.TrimSpace(agentCfg.QualifiedName())
+		workEnv["GC_CONTROL_SESSION_NAME"] = controlSessionName
+		if legacy := workflowServeLegacyControlRoute(workEnv["GC_CONTROL_TARGET"]); legacy != "" {
+			workEnv["GC_CONTROL_LEGACY_TARGET"] = legacy
+		}
+		if bare := controlDispatcherBareRoute(workEnv["GC_CONTROL_TARGET"]); bare != "" {
+			workEnv["GC_CONTROL_BARE_TARGET"] = bare
+		}
 	}
-	workflowTracef("serve start agent=%s city=%s dir=%s", agentCfg.QualifiedName(), cityPath, workDir)
-	if !follow {
-		_, err := drainWorkflowServeWork(agentCfg, cityPath, workDir, workQuery, workEnv, stderr)
+	targets, err := workflowServeTargets(cityPath, cfg, &agentCfg, workDir, workEnv)
+	if err != nil {
 		return err
 	}
-	return runWorkflowServeFollow(agentCfg, cityPath, workDir, workQuery, workEnv, stderr)
+	workflowTracef("serve start agent=%s city=%s dir=%s stores=%d", agentCfg.QualifiedName(), cityPath, workDir, len(targets))
+	if !follow {
+		_, err := drainWorkflowServeWork(agentCfg, cityPath, targets, workQuery, stderr)
+		return err
+	}
+	return runWorkflowServeFollow(agentCfg, cityPath, targets, workQuery, stderr)
+}
+
+// workflowServeTarget pairs a bead store root with the env that pins the
+// serve loop's ready query and per-bead dispatch to that store.
+type workflowServeTarget struct {
+	storePath string
+	workEnv   map[string]string
+}
+
+// workflowServeTargets returns every store the serve loop must scan for the
+// resolved agent. A rig-scoped dispatcher instance watches only its own rig
+// store. The city-singleton control dispatcher also owns rig-routed control
+// beads — config.PreferredDeterministicControlDispatcher stamps rig-store
+// control beads with the singleton's qualified name — so its loop fans
+// across the city store plus every configured rig store, mirroring how the
+// one-shot path locates beads with findBeadAcrossStores. A city-only scan
+// strands rig control beads: their routed demand points at a loop that
+// cannot see them, while the rig dispatcher sees no demand and never scales
+// from zero (gastownhall/gascity#3872, incident 2). Agents with a custom
+// work_query keep the single-store behavior: their query text may embed
+// rig-specific template expansions that do not transfer across stores.
+func workflowServeTargets(cityPath string, cfg *config.City, agentCfg *config.Agent, workDir string, workEnv map[string]string) ([]workflowServeTarget, error) {
+	targets := []workflowServeTarget{{storePath: workDir, workEnv: workEnv}}
+	if !isWorkflowServeControlDispatcherAgent(*agentCfg) ||
+		strings.TrimSpace(agentCfg.Dir) != "" ||
+		strings.TrimSpace(agentCfg.WorkQuery) != "" {
+		return targets, nil
+	}
+	for _, rig := range cfg.Rigs {
+		if strings.TrimSpace(rig.Path) == "" {
+			continue
+		}
+		rigAgent := *agentCfg
+		rigAgent.Dir = rig.Name
+		env, err := controllerWorkQueryEnv(cityPath, cfg, &rigAgent)
+		if err != nil {
+			return nil, fmt.Errorf("building work query env for rig %q: %w", rig.Name, err)
+		}
+		targets = append(targets, workflowServeTarget{
+			storePath: agentCommandDir(cityPath, &rigAgent, cfg.Rigs),
+			workEnv:   env,
+		})
+	}
+	return targets, nil
 }
 
 func requireWorkflowServeFollowSessionEnv() error {
@@ -465,10 +527,25 @@ type workflowServeDrainResult struct {
 }
 
 // drainWorkflowServeWork runs the control-dispatcher drain loop to completion
-// for a single invocation. Returns whether it advanced a control bead and
-// whether the queue still contains only pending work so the --follow caller
-// can distinguish blocked work from genuine idle.
-func drainWorkflowServeWork(agentCfg config.Agent, cityPath, storePath, workQuery string, workEnv map[string]string, stderr io.Writer) (workflowServeDrainResult, error) {
+// for a single invocation, scanning every serve target in order. Returns
+// whether it advanced a control bead and whether any store's queue still
+// contains only pending work so the --follow caller can distinguish blocked
+// work from genuine idle.
+func drainWorkflowServeWork(agentCfg config.Agent, cityPath string, targets []workflowServeTarget, workQuery string, stderr io.Writer) (workflowServeDrainResult, error) {
+	combined := workflowServeDrainResult{}
+	for _, target := range targets {
+		result, err := drainWorkflowServeWorkInStore(agentCfg, cityPath, target.storePath, workQuery, target.workEnv, stderr)
+		combined.processedAny = combined.processedAny || result.processedAny
+		combined.pendingAny = combined.pendingAny || result.pendingAny
+		if err != nil {
+			return combined, err
+		}
+	}
+	return combined, nil
+}
+
+// drainWorkflowServeWorkInStore drains ready control beads from one store.
+func drainWorkflowServeWorkInStore(agentCfg config.Agent, cityPath, storePath, workQuery string, workEnv map[string]string, stderr io.Writer) (workflowServeDrainResult, error) {
 	result := workflowServeDrainResult{}
 	idlePolls := 0
 	for {
@@ -541,7 +618,7 @@ func drainWorkflowServeWork(agentCfg config.Agent, cityPath, storePath, workQuer
 	}
 }
 
-func runWorkflowServeFollow(agentCfg config.Agent, cityPath, storePath, workQuery string, workEnv map[string]string, stderr io.Writer) error {
+func runWorkflowServeFollow(agentCfg config.Agent, cityPath string, targets []workflowServeTarget, workQuery string, stderr io.Writer) error {
 	ep, err := workflowServeOpenEventsProvider(stderr)
 	if err != nil {
 		return err
@@ -566,7 +643,7 @@ func runWorkflowServeFollow(agentCfg config.Agent, cityPath, storePath, workQuer
 	idleSweeps := 0
 	var pendingWakeErr error
 	for {
-		drainResult, err := drainWorkflowServeWork(agentCfg, cityPath, storePath, workQuery, workEnv, stderr)
+		drainResult, err := drainWorkflowServeWork(agentCfg, cityPath, targets, workQuery, stderr)
 		if err != nil {
 			// A transient work-query/store failure — most commonly the
 			// work-query timeout (hookWorkQueryTimeout) when the bead store is
@@ -764,6 +841,14 @@ func isWorkflowServeControlDispatcherAgent(agentCfg config.Agent) bool {
 		strings.HasSuffix(qualified, "."+config.ControlDispatcherAgentName)
 }
 
+func cloneWorkflowServeEnv(env map[string]string) map[string]string {
+	cloned := make(map[string]string, len(env)+4)
+	for key, value := range env {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func workflowServeControlReadyQuery(agentCfg config.Agent, controlSessionNames ...string) string {
 	return workflowServeControlReadyQueryForBeads(agentCfg, config.BeadsConfig{}, controlSessionNames...)
 }
@@ -867,6 +952,9 @@ func nextWorkflowServeBeads(workQuery, dir string, env map[string]string) ([]hoo
 	if workQuery == "" {
 		return nil, nil
 	}
+	if workflowServeBoolEnv(env[workflowServeControlStoreQueryEnv]) {
+		return nextWorkflowServeControlBeads(dir, env)
+	}
 	output, err := shellWorkQueryWithEnv(workQuery, dir, mergeRuntimeEnv(os.Environ(), env))
 	if err != nil {
 		return nil, err
@@ -884,6 +972,157 @@ func nextWorkflowServeBeads(workQuery, dir string, env map[string]string) ([]hoo
 		return []hookBead{bead}, nil
 	}
 	return nil, fmt.Errorf("unexpected work query output: %s", trimmed)
+}
+
+func workflowServeBoolEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func nextWorkflowServeControlBeads(storePath string, env map[string]string) ([]hookBead, error) {
+	cityPath := strings.TrimSpace(env["GC_CITY"])
+	if cityPath == "" {
+		cityPath = strings.TrimSpace(env["GC_STORE_ROOT"])
+	}
+	if cityPath == "" {
+		cityPath = storePath
+	}
+	store, err := workflowServeOpenControlStore(storePath, cityPath)
+	if err != nil {
+		return nil, err
+	}
+	if closer, ok := store.(interface{ CloseStore() error }); ok {
+		defer closer.CloseStore() //nolint:errcheck // best-effort cleanup
+	}
+	return workflowServeControlBeadsFromStore(store, env)
+}
+
+func workflowServeControlBeadsFromStore(store beads.Store, env map[string]string) ([]hookBead, error) {
+	if store == nil {
+		return nil, errors.New("control dispatcher store query: nil store")
+	}
+	result := make([]hookBead, 0, workflowServeScanLimit)
+	seen := map[string]struct{}{}
+	appendReady := func(items []beads.Bead) {
+		for _, bead := range items {
+			if !workflowServeControlBeadEligible(bead) {
+				continue
+			}
+			if _, ok := seen[bead.ID]; ok {
+				continue
+			}
+			seen[bead.ID] = struct{}{}
+			result = append(result, workflowServeHookBeadFromStore(bead))
+		}
+	}
+
+	for _, candidate := range workflowServeControlAssigneeCandidates(env) {
+		items, err := store.Ready(beads.ReadyQuery{
+			Assignee: candidate,
+			Limit:    workflowServeScanLimit,
+			TierMode: beads.TierBoth,
+		})
+		if err != nil {
+			return nil, err
+		}
+		appendReady(items)
+	}
+
+	allReady, err := store.Ready(beads.ReadyQuery{TierMode: beads.TierBoth})
+	if err != nil {
+		return nil, err
+	}
+	for _, target := range workflowServeControlRouteTargets(env) {
+		appendReady(workflowServeControlRoutedReady(allReady, beadmeta.RunTargetMetadataKey, target))
+		appendReady(workflowServeControlRoutedReady(allReady, beadmeta.RoutedToMetadataKey, target))
+	}
+	return result, nil
+}
+
+func workflowServeControlBeadEligible(bead beads.Bead) bool {
+	if strings.TrimSpace(bead.ID) == "" {
+		return false
+	}
+	if strings.TrimSpace(bead.Type) == "epic" {
+		return false
+	}
+	if strings.TrimSpace(bead.Metadata[beadmeta.InstantiatingMetadataKey]) != "" {
+		return false
+	}
+	return true
+}
+
+func workflowServeControlAssigneeCandidates(env map[string]string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	for _, key := range []string{"GC_CONTROL_SESSION_NAME", "GC_SESSION_NAME", "GC_ALIAS", "GC_CONTROL_TARGET", "GC_SESSION_ID"} {
+		candidate := strings.TrimSpace(env[key])
+		add(candidate)
+		if strings.HasSuffix(candidate, config.ControlDispatcherAgentName) {
+			add(strings.TrimSuffix(candidate, config.ControlDispatcherAgentName) + "workflow-control")
+		}
+	}
+	return out
+}
+
+func workflowServeControlRouteTargets(env map[string]string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(target string) {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			return
+		}
+		if _, ok := seen[target]; ok {
+			return
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	for _, key := range []string{"GC_CONTROL_TARGET", "GC_CONTROL_LEGACY_TARGET", "GC_CONTROL_BARE_TARGET"} {
+		add(env[key])
+	}
+	return out
+}
+
+func workflowServeControlRoutedReady(items []beads.Bead, key, target string) []beads.Bead {
+	out := make([]beads.Bead, 0, workflowServeScanLimit)
+	for _, bead := range items {
+		if len(out) >= workflowServeScanLimit {
+			break
+		}
+		if strings.TrimSpace(bead.Assignee) != "" {
+			continue
+		}
+		if strings.TrimSpace(bead.Metadata[key]) != target {
+			continue
+		}
+		out = append(out, bead)
+	}
+	return out
+}
+
+func workflowServeHookBeadFromStore(bead beads.Bead) hookBead {
+	metadata := make(hookBeadMetadata, len(bead.Metadata))
+	for key, value := range bead.Metadata {
+		metadata[key] = value
+	}
+	return hookBead{ID: bead.ID, Metadata: metadata}
 }
 
 // dispatchWakeFile returns the path of the dispatch-wake sentinel file.

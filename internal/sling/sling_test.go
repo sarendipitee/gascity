@@ -16,6 +16,7 @@ import (
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/formulatest"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/graphv2"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/pidutil"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -44,6 +45,58 @@ type getErrStore struct {
 
 func (s *getErrStore) Get(_ string) (beads.Bead, error) {
 	return beads.Bead{}, s.err
+}
+
+type graphApplyLockingStore struct {
+	*beads.MemStore
+	calls int
+}
+
+func (s *graphApplyLockingStore) ApplyGraphPlan(_ context.Context, plan *beads.GraphApplyPlan) (*beads.GraphApplyResult, error) {
+	s.calls++
+	ids := make(map[string]string, len(plan.Nodes))
+	for _, node := range plan.Nodes {
+		metadata := make(map[string]string, len(node.Metadata)+len(node.MetadataRefs))
+		for key, value := range node.Metadata {
+			metadata[key] = value
+		}
+		for key, ref := range node.MetadataRefs {
+			metadata[key] = ids[ref]
+		}
+		parentID := node.ParentID
+		if parentID == "" && node.ParentKey != "" {
+			parentID = ids[node.ParentKey]
+		}
+		created, err := s.MemStore.Create(beads.Bead{
+			Title:       node.Title,
+			Type:        node.Type,
+			Priority:    node.Priority,
+			Description: node.Description,
+			Assignee:    node.Assignee,
+			From:        node.From,
+			ParentID:    parentID,
+			Labels:      append([]string(nil), node.Labels...),
+			Metadata:    metadata,
+		})
+		if err != nil {
+			return nil, err
+		}
+		ids[node.Key] = created.ID
+	}
+	for _, edge := range plan.Edges {
+		fromID := edge.FromID
+		if fromID == "" {
+			fromID = ids[edge.FromKey]
+		}
+		toID := edge.ToID
+		if toID == "" {
+			toID = ids[edge.ToKey]
+		}
+		if err := s.MemStore.DepAdd(fromID, toID, edge.Type); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("bd create --graph: graph create: doltlite add dependencies: database is locked")
 }
 
 func newFakeRunner() *fakeRunner { return &fakeRunner{} }
@@ -2387,6 +2440,85 @@ func TestInstantiateSlingFormulaForceReplacesGraphV2Root(t *testing.T) {
 	}
 	if newRoot.Status == "closed" {
 		t.Fatalf("new root status = %q, want live", newRoot.Status)
+	}
+}
+
+func TestInstantiateSlingFormulaRecoversGraphV2RootAfterDoltLiteLock(t *testing.T) {
+	formulaDir := t.TempDir()
+	writeGraphV2ConvoyFormula(t, formulaDir)
+	cfg := graphV2SlingTestConfig(t, formulaDir)
+	store := &graphApplyLockingStore{MemStore: beads.NewMemStore()}
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	deps.Store = store
+	prevGraphApply := molecule.IsGraphApplyEnabled()
+	molecule.SetGraphApplyEnabled(true)
+	t.Cleanup(func() { molecule.SetGraphApplyEnabled(prevGraphApply) })
+	convoy, err := store.Create(beads.Bead{Title: "input", Type: "convoy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{graphv2.ConvoyIDVar: convoy.ID}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	result, err := InstantiateSlingFormula(context.Background(), "graph-work", []string{formulaDir}, molecule.Options{Vars: vars}, "", "default", "", a, deps)
+	if err != nil {
+		t.Fatalf("InstantiateSlingFormula: %v", err)
+	}
+	if store.calls != 1 {
+		t.Fatalf("ApplyGraphPlan calls = %d, want one failed partial apply followed by reconciliation", store.calls)
+	}
+	if result.RootID == "" {
+		t.Fatal("RootID is empty")
+	}
+	key := graphv2.RootKey(convoy.ID, "graph-work", vars, "default", "")
+	roots, err := store.ListByMetadata(map[string]string{"gc.graphv2_root_key": key}, 0, beads.WithBothTiers)
+	if err != nil {
+		t.Fatalf("ListByMetadata(root key): %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("roots for key %q = %d, want 1", key, len(roots))
+	}
+	steps, err := store.ListByMetadata(map[string]string{"gc.root_bead_id": result.RootID}, 0, beads.WithBothTiers)
+	if err != nil {
+		t.Fatalf("ListByMetadata(root): %v", err)
+	}
+	if len(steps) == 0 {
+		t.Fatalf("root %s has no step beads; partial apply was incorrectly treated as complete", result.RootID)
+	}
+}
+
+func TestInstantiateSlingFormulaRejectsIncompleteGraphV2Root(t *testing.T) {
+	formulaDir := t.TempDir()
+	writeGraphV2ConvoyFormula(t, formulaDir)
+	cfg := graphV2SlingTestConfig(t, formulaDir)
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	convoy, err := deps.Store.Create(beads.Bead{Title: "input", Type: "convoy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{graphv2.ConvoyIDVar: convoy.ID}
+	key := graphv2.RootKey(convoy.ID, "graph-work", vars, "default", "")
+	if _, err := deps.Store.Create(beads.Bead{
+		Title:  "partial workflow",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.kind":             "workflow",
+			"gc.formula_contract": "graph.v2",
+			"gc.input_convoy_id":  convoy.ID,
+			"gc.graphv2_root_key": key,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	_, err = InstantiateSlingFormula(context.Background(), "graph-work", []string{formulaDir}, molecule.Options{Vars: vars}, "", "default", "", a, deps)
+	if err == nil {
+		t.Fatal("InstantiateSlingFormula error = nil, want incomplete root diagnostic")
+	}
+	if !strings.Contains(err.Error(), "incomplete") || !strings.Contains(err.Error(), "step") {
+		t.Fatalf("error = %v, want incomplete step diagnostic", err)
 	}
 }
 

@@ -89,6 +89,55 @@ func TestBuildDoctorChecksSkipsNamedAlwaysMinConflictCheckWithoutConfig(t *testi
 	}
 }
 
+func TestBuildDoctorChecksDoltliteUsesPackManagedDoctorChecks(t *testing.T) {
+	clearInheritedBeadsEnv(t)
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+
+	packDir := filepath.Join(cityDir, ".gc", "system", "packs", "beads-doltlite")
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "demo"},
+		Beads:     config.BeadsConfig{Provider: "bd", Backend: "doltlite"},
+		PackDoctors: []config.DiscoveredDoctor{{
+			Name:      "check-sqlite3",
+			RunScript: filepath.Join(packDir, "doctor", "check-sqlite3", "run.sh"),
+			FixScript: filepath.Join(packDir, "doctor", "check-sqlite3", "fix.sh"),
+			PackDir:   packDir,
+			PackName:  "beads-doltlite",
+		}},
+	}
+
+	checks := buildDoctorChecks(cityDir, cfg, nil, buildDoctorChecksOpts{
+		ControllerRunning:    false,
+		SkipCityDoltCheck:    false,
+		SkipManagedDoltCheck: false,
+	})
+	names := doctorCheckNames(checks)
+
+	for _, legacyName := range []string{"dolt-topology", "dolt-drift", "dolt-server", "dolt-noms-size", "dolt-config", "dolt-version"} {
+		if idx := doctorCheckIndex(names, legacyName); idx >= 0 {
+			t.Fatalf("%s registered at %d for doltlite city; names=%v", legacyName, idx, names)
+		}
+	}
+
+	packIdx := doctorCheckIndex(names, "beads-doltlite:check-sqlite3")
+	if packIdx < 0 {
+		t.Fatalf("pack-managed doltlite doctor check missing; names=%v", names)
+	}
+	if !checks[packIdx].CanFix() {
+		t.Fatalf("pack-managed doltlite doctor check CanFix() = false, want true")
+	}
+}
+
 func doctorCheckNames(checks []doctor.Check) []string {
 	names := make([]string, 0, len(checks))
 	for _, check := range checks {

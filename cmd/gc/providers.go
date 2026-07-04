@@ -550,25 +550,6 @@ func rawBeadsProviderFromConfig(cityPath string) string {
 	return "bd"
 }
 
-func configuredBeadsBackendValue(cityPath string) string {
-	if v := strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND")); v != "" {
-		return v
-	}
-	return strings.TrimSpace(peekBeadsBackend(filepath.Join(cityPath, "city.toml")))
-}
-
-func beadsBackend(cityPath string) string {
-	backend := strings.ToLower(configuredBeadsBackendValue(cityPath))
-	if backend == "" {
-		return "dolt"
-	}
-	return backend
-}
-
-func cityUsesDoltliteBeadsBackend(cityPath string) bool {
-	return beadsBackend(cityPath) == "doltlite"
-}
-
 func providerUsesBdStoreContract(provider string) bool {
 	return contract.ProviderUsesBDContract(provider)
 }
@@ -578,7 +559,7 @@ func cityUsesBdStoreContract(cityPath string) bool {
 }
 
 func cityUsesManagedDoltBeadsLifecycle(cityPath string) bool {
-	return cityUsesBdStoreContract(cityPath) && !cityUsesDoltliteBeadsBackend(cityPath)
+	return cityUsesBdStoreContract(cityPath) && resolveBeadsBackend(cityPath).NeedsManagedServer()
 }
 
 func rawBeadsProviderForScope(scopeRoot, cityPath string) string {
@@ -663,7 +644,8 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 				"positively mark this scope as bd-backed, add "+
 				"%s/.beads/metadata.json (with backend=dolt and the dolt_database "+
 				"name).",
-			scopeRoot, scopeRoot)
+			scopeRoot, scopeRoot,
+		)
 	}
 	if strings.TrimSpace(os.Getenv("GC_BEADS")) != "" {
 		return "GC_BEADS env var overrides the provider. Unset it, or set GC_BEADS=bd for this scope."

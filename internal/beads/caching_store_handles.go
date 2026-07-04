@@ -236,10 +236,12 @@ func (c *CachingStore) cachedReadyOnly(query ReadyQuery) ([]Bead, error) {
 	}
 
 	statusByID := make(map[string]string, len(c.beads))
+	metadataByID := make(map[string]map[string]string, len(c.beads))
 	openBeads := make([]Bead, 0, len(c.beads))
 	now := time.Now().UTC()
 	for _, b := range c.beads {
 		statusByID[b.ID] = b.Status
+		metadataByID[b.ID] = b.Metadata
 		if !IsReadyCandidateForTier(b, now, query.TierMode) {
 			continue
 		}
@@ -264,7 +266,11 @@ func (c *CachingStore) cachedReadyOnly(query ReadyQuery) ([]Bead, error) {
 		default:
 			return nil, fmt.Errorf("reading ready deps from cache: %w", ErrCacheUnavailable)
 		}
-		if !cachedBeadReady(b, statusByID, deps) {
+		ready, known := cachedBeadReady(b, statusByID, metadataByID, deps, false)
+		if !known {
+			return nil, fmt.Errorf("reading ready dependency target from cache: %w", ErrCacheUnavailable)
+		}
+		if !ready {
 			continue
 		}
 		result = append(result, cloneBead(b))

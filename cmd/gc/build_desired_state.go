@@ -64,8 +64,10 @@ type DesiredStateResult struct {
 	// this scope before treating a bead as reachable work for that agent.
 	AssignedWorkStoreRefs []string
 	// NamedSessionDemand records which named-session identities have active
-	// direct assignee demand (Assignee == identity). The reconciler merges this
-	// into poolDesired so that on-demand named sessions remain config-eligible.
+	// wake demand. This is usually direct assignee demand (Assignee ==
+	// identity), plus the alias case where routed work targets the backing
+	// template name itself and no canonical named bead exists yet, so desired
+	// state must materialize the singleton directly.
 	NamedSessionDemand map[string]bool
 	// ReadyAssigned is the set of AssignedWorkBeads that carry real wake-demand
 	// readiness, keyed by store ref + bead ID: in-progress work, assigned
@@ -909,9 +911,11 @@ func buildDesiredStateWithSessionBeads(
 		namedSpecs[identity] = spec
 	}
 	namedWorkReady := make(map[string]bool, len(namedSpecs))
+	namedRouteReady := make(map[string]bool, len(namedSpecs))
 	for identity := range namedDefaultDemand {
 		if _, ok := namedSpecs[identity]; ok {
 			namedWorkReady[identity] = true
+			namedRouteReady[identity] = true
 		}
 	}
 	// Check assigned work beads: if any work bead's Assignee matches a named
@@ -968,6 +972,21 @@ func buildDesiredStateWithSessionBeads(
 	}
 	if len(assignedWorkBeads) > 0 {
 		fmt.Fprintf(stderr, "namedWorkReady: %d assigned beads, %d named specs, ready=%v\n", len(assignedWorkBeads), len(namedSpecs), namedWorkReady) //nolint:errcheck
+	}
+	for identity, spec := range namedSpecs {
+		if !namedRouteReady[identity] || spec.Mode != "on_demand" {
+			continue
+		}
+		template := strings.TrimSpace(namedSessionBackingTemplate(spec))
+		if template == "" || template != identity {
+			continue
+		}
+		if _, hasCanonical := findCanonicalNamedSessionBead(bp.sessionBeads, spec); hasCanonical {
+			delete(namedWorkReady, identity)
+			continue
+		}
+		delete(scaleCheckCounts, template)
+		delete(scaleCheckDemandByTemplate, template)
 	}
 	for identity, spec := range namedSpecs {
 		canonicalBead, hasCanonical := findCanonicalNamedSessionBead(bp.sessionBeads, spec)
@@ -1388,6 +1407,14 @@ func readyCapturedAssigneeSet(work []beads.Bead, storeRefs []string, readyAssign
 			continue
 		}
 		if bead.Status != "open" && bead.Status != "in_progress" {
+			continue
+		}
+		// Fail safe (probe rather than skip) when the index-aligned store ref
+		// is missing, so a short slice never suppresses a real Ready probe.
+		if i >= len(storeRefs) {
+			continue
+		}
+		if !readyAssigned[storeScopedBeadKey{StoreRef: storeRefs[i], ID: bead.ID}] {
 			continue
 		}
 		// Fail safe (probe rather than skip) when the index-aligned store ref
@@ -2744,6 +2771,16 @@ func bindPoolSessionTriggerBead(bp *agentBuildParams, cfgAgent *config.Agent, qu
 		// selection layer must re-stamp it deterministically to stay warm.
 		if strings.TrimSpace(sessionBead.Metadata[beadmeta.BrainParentSIDMetadataKey]) != "" {
 			metadata[beadmeta.BrainParentSIDMetadataKey] = ""
+		}
+		for _, key := range []string{
+			beadmeta.PackMetadataKey,
+			beadmeta.PackWorkspaceMetadataKey,
+			beadmeta.WorkDirMetadataKey,
+			beadmeta.LegacyWorkDirMetadataKey,
+		} {
+			if strings.TrimSpace(sessionBead.Metadata[key]) != "" {
+				metadata[key] = ""
+			}
 		}
 		if len(metadata) == 0 {
 			return sessionBead, nil

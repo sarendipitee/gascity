@@ -360,6 +360,22 @@ TEST_ENV = env -i \
 	CGO_LDFLAGS="$${CGO_LDFLAGS-}" \
 	$(EXTRA_TEST_ENV)
 
+DOLTLITE_TEST_LIB_CANDIDATES := $(strip \
+	$(DOLTLITE_LIB) \
+	$(GC_DOLTLITE_LIB) \
+	$(CURDIR)/../doltlite-work/build \
+	$(CURDIR)/../doltlite/build \
+	$(CURDIR)/../doltlite \
+	$(CURDIR)/doltlite-work/build \
+	$(CURDIR)/doltlite/build \
+	$(CURDIR)/doltlite \
+	/usr/local/lib \
+	/opt/homebrew/lib \
+	/usr/lib \
+	/usr/lib/$(shell dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null) \
+)
+DOLTLITE_TEST_LIB_DIR := $(firstword $(foreach dir,$(DOLTLITE_TEST_LIB_CANDIDATES),$(if $(wildcard $(dir)/libdoltlite.so $(dir)/libdoltlite.so.0 $(dir)/libdoltlite.dylib $(dir)/libdoltlite.a),$(dir))))
+
 ## test: run fast unit tests (skip integration-tagged and GC_FAST_UNIT-gated process tests)
 ## The skipped cmd/gc process-backed scenarios remain covered by
 ## `make test-cmd-gc-process` locally and the CI `cmd/gc process suite` job.
@@ -408,9 +424,21 @@ test-pack-registry-live:
 update-bundled-gastown-pack:
 	scripts/update-bundled-gastown-pack
 
-## test-native-doltlite-beads: compile and run the native DoltLite read-store suite
+## test-native-doltlite-beads: compile and run the native libdoltlite test suite
 test-native-doltlite-beads:
-	$(TEST_ENV) CGO_ENABLED=0 go test -tags gascity_native_beads ./internal/beads -count=1
+	@lib_dir="$(DOLTLITE_TEST_LIB_DIR)"; \
+	if [ -z "$$lib_dir" ]; then \
+		echo "libdoltlite not found. Set DOLTLITE_LIB/GC_DOLTLITE_LIB to a directory containing libdoltlite, install DoltLite, or build ../doltlite-work/build."; \
+		exit 2; \
+	fi; \
+	echo "Using libdoltlite from $$lib_dir"; \
+	$(TEST_ENV) CGO_ENABLED=1 \
+		DOLTLITE_LIB="$$lib_dir" \
+		GC_DOLTLITE_LIB="$$lib_dir" \
+		LD_LIBRARY_PATH="$$lib_dir:$${LD_LIBRARY_PATH-}" \
+		DYLD_LIBRARY_PATH="$$lib_dir:$${DYLD_LIBRARY_PATH-}" \
+		CGO_LDFLAGS="-L$$lib_dir $${CGO_LDFLAGS-}" \
+		scripts/test-native-doltlite
 
 ## sync-bd-corpus: vendor the bd contract corpus from a beads release (BD_CORPUS_TAG=vX.Y.Z)
 sync-bd-corpus:

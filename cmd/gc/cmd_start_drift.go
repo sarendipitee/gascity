@@ -465,8 +465,8 @@ func printUnreadableSupervisorRestartError(stderr io.Writer, pid int, exeErr err
 	fmt.Fprintf(stderr, "error: cannot auto-restart supervisor: /proc/%d/exe is owned by a different user (permission denied: %v). Either rerun gc start as the supervisor's uid, or pass --no-auto-restart to skip the restart and surface the drift as an error.\n", pid, exeErr) //nolint:errcheck // best-effort stderr
 }
 
-// readSupervisorExePath returns the resolved path of the supervisor's
-// executable via /proc/<pid>/exe. The kernel readlink resolves
+// readProcessExePath returns the resolved path of a process executable via
+// /proc/<pid>/exe. The kernel readlink resolves
 // symlinks for us — no extra realpath layer needed.
 //
 // When the binary on disk has been replaced (the typical drift case:
@@ -475,12 +475,18 @@ func printUnreadableSupervisorRestartError(stderr io.Writer, pid int, exeErr err
 // the link target with a literal " (deleted)" suffix. We strip that
 // suffix because the on-disk path is what the auto-restart needs to
 // spawn — the new bytes already live at the un-suffixed path.
-func readSupervisorExePath(pid int) (string, error) {
+func readProcessExePath(pid int) (string, error) {
 	target, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSuffix(target, " (deleted)"), nil
+}
+
+// readSupervisorExePath returns the resolved path of the supervisor's
+// executable via /proc/<pid>/exe.
+func readSupervisorExePath(pid int) (string, error) {
+	return readProcessExePath(pid)
 }
 
 // readDaemonAutoRestart loads city.toml's [daemon].auto_restart_on_drift

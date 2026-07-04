@@ -924,6 +924,8 @@ func TestBeadsDoltliteInitPackContainsBootstrapProvider(t *testing.T) {
 		`BEADS_BACKEND="doltlite"`,
 		"BEADS_DOLT_AUTO_START=0",
 		"init --backend doltlite",
+		`"attached_databases": [{"alias": "ops"`,
+		".gc/ops.sqlite",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("beads-doltlite init provider missing %q:\n%s", want, script)

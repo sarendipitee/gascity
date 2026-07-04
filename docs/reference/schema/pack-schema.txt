@@ -21,9 +21,17 @@
           "type": "string",
           "description": "WorkDir overrides the session working directory without changing the\nagent's qualified identity. Relative paths resolve against city root\nand may use the same template placeholders as session_setup."
         },
+        "pack": {
+          "type": "string",
+          "description": "Pack is the pack/workspace route key exposed to work_dir, pre_start,\nsession_setup, and tmux_alias templates as {{.Pack}}. This lets a\nmonorepo pack maintainer route agents by pack instead of by agent type.\nFor example, gascity-packs can put pack-maintenance agents in jj\nworkspaces whose sparse checkout includes only the target pack folder\nplus shared registry/test files, not every pack in the repository. When\nunset, the template context falls back to AgentBase for\nbackward-compatible routing."
+        },
+        "pack_root": {
+          "type": "string",
+          "description": "PackRoot overrides the resolved target pack directory exposed as\n{{.PackRoot}}. When unset, the template context uses RigRoot/Pack.\nRelative paths resolve against RigRoot when available, otherwise CityRoot."
+        },
         "tmux_alias": {
           "type": "string",
-          "description": "TmuxAlias overrides the tmux session_name for pool and factory-created\nmanual sessions of this agent. When unset, sessions fall back to the\nuniversal derivation (\"s-\u003cbeadID\u003e\" for ad-hoc sessions,\n\"\u003cbasename\u003e-\u003cbeadID\u003e\" for pool sessions). When set, it is expanded as a\nGo text/template using the same PathContext fields as work_dir /\nsession_setup (Agent, AgentBase, Rig, RigRoot, CityRoot, CityName),\nsanitized for tmux, and validated as an explicit session name. For pool\nsessions, a live-name collision appends the bead ID as a deterministic\nsuffix. For manual `gc session new` sessions, tmux_alias becomes the\nexplicit session_name and takes precedence over --alias, which remains the\ncommand/mail alias; duplicate explicit names fail closed. Configured named\nsessions keep their named-session runtime name instead of using\ntmux_alias. When no --alias is supplied, work_dir templates that use\n{{.Agent}} see the resolved tmux_alias as the concrete session identity."
+          "description": "TmuxAlias overrides the tmux session_name for pool and factory-created\nmanual sessions of this agent. When unset, sessions fall back to the\nuniversal derivation (\"s-\u003cbeadID\u003e\" for ad-hoc sessions,\n\"\u003cbasename\u003e-\u003cbeadID\u003e\" for pool sessions). When set, it is expanded as a\nGo text/template using the same PathContext fields as work_dir /\nsession_setup (Agent, AgentBase, Pack, Rig, RigRoot, CityRoot, CityName),\nsanitized for tmux, and validated as an explicit session name. For pool\nsessions, a live-name collision appends the bead ID as a deterministic\nsuffix. For manual `gc session new` sessions, tmux_alias becomes the\nexplicit session_name and takes precedence over --alias, which remains the\ncommand/mail alias; duplicate explicit names fail closed. Configured named\nsessions keep their named-session runtime name instead of using\ntmux_alias. When no --alias is supplied, work_dir templates that use\n{{.Agent}} see the resolved tmux_alias as the concrete session identity."
         },
         "scope": {
           "type": "string",
@@ -143,7 +151,7 @@
         },
         "scale_check": {
           "type": "string",
-          "description": "ScaleCheck is a shell command template whose output reports new\nunassigned session demand. In bead-backed reconciliation this is\nadditive: assigned work is resumed separately, and ScaleCheck reports\nonly how many new generic sessions to start, still bounded by all cap\nlevels. Legacy no-store evaluation continues to treat the output as\nthe desired session count. If it contains Go template placeholders, gc\nexpands them using the same PathContext fields as work_dir and\nsession_setup (Agent, AgentBase, Rig, RigRoot, CityRoot, CityName)\nbefore running the command."
+          "description": "ScaleCheck is a shell command template whose output reports new\nunassigned session demand. In bead-backed reconciliation this is\nadditive: assigned work is resumed separately, and ScaleCheck reports\nonly how many new generic sessions to start, still bounded by all cap\nlevels. Legacy no-store evaluation continues to treat the output as\nthe desired session count. If it contains Go template placeholders, gc\nexpands them using the same PathContext fields as work_dir and\nsession_setup (Agent, AgentBase, Pack, PackRoot, Rig, RigRoot, CityRoot, CityName)\nbefore running the command."
         },
         "drain_timeout": {
           "type": "string",
@@ -152,11 +160,11 @@
         },
         "on_boot": {
           "type": "string",
-          "description": "OnBoot is a shell command template run once at controller startup for\nthis agent. If it contains Go template placeholders, gc expands them\nusing the same PathContext fields as work_dir and session_setup\n(Agent, AgentBase, Rig, RigRoot, CityRoot, CityName) before running\nthe command."
+          "description": "OnBoot is a shell command template run once at controller startup for\nthis agent. If it contains Go template placeholders, gc expands them\nusing the same PathContext fields as work_dir and session_setup\n(Agent, AgentBase, Pack, PackRoot, Rig, RigRoot, CityRoot, CityName) before running\nthe command."
         },
         "on_death": {
           "type": "string",
-          "description": "OnDeath is a shell command template run when a session dies unexpectedly.\nIf it contains Go template placeholders, gc expands them using the same\nPathContext fields as work_dir and session_setup (Agent, AgentBase,\nRig, RigRoot, CityRoot, CityName) before running the command."
+          "description": "OnDeath is a shell command template run when a session dies unexpectedly.\nIf it contains Go template placeholders, gc expands them using the same\nPathContext fields as work_dir and session_setup (Agent, AgentBase,\nPack, PackRoot, Rig, RigRoot, CityRoot, CityName) before running the command."
         },
         "namepool": {
           "type": "string",
@@ -164,11 +172,11 @@
         },
         "work_query": {
           "type": "string",
-          "description": "WorkQuery is the shell command template to find available work for this\nagent. If it contains Go template placeholders, gc expands them using\nthe same PathContext fields as work_dir and session_setup (Agent,\nAgentBase, Rig, RigRoot, CityRoot, CityName) before probe, hook, and\nprompt-context execution. Used by gc hook and available in prompt\ntemplates as {{.WorkQuery}}.\nIf unset, Gas City uses a three-tier default query:\n  1. in_progress work assigned to this session/alias (crash recovery)\n  2. ready work assigned to this session/alias (pre-assigned work)\n  3. ready unassigned work with gc.routed_to=\u003cqualified-name\u003e\nWhen the controller probes for demand without session context, only the\nrouted_to tier applies. Override to integrate with external task systems."
+          "description": "WorkQuery is the shell command template to find available work for this\nagent. If it contains Go template placeholders, gc expands them using\nthe same PathContext fields as work_dir and session_setup (Agent,\nAgentBase, Pack, PackRoot, Rig, RigRoot, CityRoot, CityName) before probe, hook, and\nprompt-context execution. Used by gc hook and available in prompt\ntemplates as {{.WorkQuery}}.\nIf unset, Gas City uses a three-tier default query:\n  1. in_progress work assigned to this session/alias (crash recovery)\n  2. ready work assigned to this session/alias (pre-assigned work)\n  3. ready unassigned work with gc.routed_to=\u003cqualified-name\u003e\nWhen the controller probes for demand without session context, only the\nrouted_to tier applies. Override to integrate with external task systems."
         },
         "sling_query": {
           "type": "string",
-          "description": "SlingQuery is the command template to route a bead to this session config.\nIf it contains Go template placeholders, gc expands them using the same\nPathContext fields as work_dir and session_setup (Agent, AgentBase,\nRig, RigRoot, CityRoot, CityName) before replacing {} with the bead\nID. Used by gc sling to make a bead visible to the target's work_query.\nThe placeholder {} is replaced with the bead ID at runtime.\nDefault for all agents:\n\"bd update {} --set-metadata gc.routed_to=\u003cqualified-name\u003e\".\nRouting is metadata-based; sling stamps the target template and the\nreconciler/scale_check paths decide when sessions are created.\nCustom sling_query and work_query can be overridden independently."
+          "description": "SlingQuery is the command template to route a bead to this session config.\nIf it contains Go template placeholders, gc expands them using the same\nPathContext fields as work_dir and session_setup (Agent, AgentBase,\nPack, PackRoot, Rig, RigRoot, CityRoot, CityName) before replacing {} with the bead\nID. Used by gc sling to make a bead visible to the target's work_query.\nThe placeholder {} is replaced with the bead ID at runtime.\nDefault for all agents:\n\"bd update {} --set-metadata gc.routed_to=\u003cqualified-name\u003e\".\nRouting is metadata-based; sling stamps the target template and the\nreconciler/scale_check paths decide when sessions are created.\nCustom sling_query and work_query can be overridden independently."
         },
         "idle_timeout": {
           "type": "string",
@@ -373,6 +381,14 @@
         "work_dir": {
           "type": "string",
           "description": "WorkDir overrides the agent's session working directory."
+        },
+        "pack": {
+          "type": "string",
+          "description": "Pack overrides the pack/workspace route key exposed as {{.Pack}}."
+        },
+        "pack_root": {
+          "type": "string",
+          "description": "PackRoot overrides the target pack directory exposed as {{.PackRoot}}."
         },
         "tmux_alias": {
           "type": "string",
@@ -650,7 +666,7 @@
         },
         "version": {
           "type": "string",
-          "description": "Version is an optional semver constraint for git-backed imports (e.g.,\n\"^1.2\"). Empty for local paths. \"sha:\u003chex\u003e\" pins a specific commit."
+          "description": "Version is an optional semver constraint for git-backed imports (e.g.,\n\"^1.2\"). Empty for local paths. \"sha:\u003chex\u003e\" pins a specific commit;\n\"ref:\u003cname\u003e\" follows a branch, tag, or ref and records the resolved\ncommit in packs.lock."
         }
       },
       "additionalProperties": false,

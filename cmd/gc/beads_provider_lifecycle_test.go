@@ -26,6 +26,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func skipLegacyDoltScriptWhenDoltliteBackend(t *testing.T) {
+	t.Helper()
+	if inheritedTestBeadsBackendIsDoltlite() {
+		t.Skip("legacy bd/dolt materialized script coverage is not part of the DoltLite test profile")
+	}
+}
+
 func freeLoopbackPort(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -55,6 +62,30 @@ func mustProviderLifecycleProcessEnv(t *testing.T, cityPath, provider string) []
 		t.Fatalf("providerLifecycleProcessEnvWithError: %v", err)
 	}
 	return env
+}
+
+func TestMergeTypesCustomConfigAddsRequiredTypes(t *testing.T) {
+	input := []byte("issue_prefix: gc\ntypes.custom: pack_only,agent\n")
+	out, changed := mergeTypesCustomConfig(input, []string{"molecule", "agent", "step"})
+	if !changed {
+		t.Fatal("mergeTypesCustomConfig changed = false, want true")
+	}
+	got := string(out)
+	want := "types.custom: pack_only,agent,molecule,step"
+	if !strings.Contains(got, want) {
+		t.Fatalf("merged config missing %q:\n%s", want, got)
+	}
+}
+
+func TestMergeTypesCustomConfigIsIdempotent(t *testing.T) {
+	input := []byte("issue_prefix: gc\ntypes.custom: molecule,agent,step\n")
+	out, changed := mergeTypesCustomConfig(input, []string{"molecule", "agent", "step"})
+	if changed {
+		t.Fatalf("mergeTypesCustomConfig changed = true, want false:\n%s", out)
+	}
+	if string(out) != string(input) {
+		t.Fatalf("mergeTypesCustomConfig output changed:\n%s", out)
+	}
 }
 
 // TestEnsureBeadsProvider_file verifies that file provider is a no-op.
@@ -575,6 +606,8 @@ func TestGcBeadsBdShellFallbackSanitizesArchiveLevel(t *testing.T) {
 }
 
 func TestGcBeadsBdInitRejectsManagedProbeDatabaseName(t *testing.T) {
+	skipLegacyDoltScriptWhenDoltliteBackend(t)
+
 	for _, dbName := range []string{
 		managedDoltProbeDatabase,
 		strings.ToUpper(managedDoltProbeDatabase),
@@ -1196,6 +1229,49 @@ backend = "doltlite"
 	}
 	if err := ensureBeadsProvider(dir); err != nil {
 		t.Fatalf("ensureBeadsProvider = %v, want nil", err)
+	}
+}
+
+func TestNormalizeCanonicalBdScopeFilesForInitUsesDoltliteMetadata(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(`{
+  "backend": "dolt",
+  "database": "dolt",
+  "dolt_database": "hq",
+  "dolt_mode": "server"
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := normalizeCanonicalBdScopeFilesForInit(cityPath, cityPath, "dg", "hq"); err != nil {
+		t.Fatalf("normalizeCanonicalBdScopeFilesForInit: %v", err)
+	}
+
+	meta, err := os.ReadFile(filepath.Join(cityPath, ".beads", "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaText := string(meta)
+	for _, want := range []string{`"backend": "doltlite"`, `"database": "doltlite"`, `"dolt_database": "hq"`, `"attached_databases"`, `"alias": "ops"`, filepath.Join(cityPath, ".gc", "ops.sqlite")} {
+		if !strings.Contains(metaText, want) {
+			t.Fatalf("metadata missing %q:\n%s", want, metaText)
+		}
+	}
+	if strings.Contains(metaText, `"dolt_mode": "server"`) {
+		t.Fatalf("metadata retained server mode:\n%s", metaText)
 	}
 }
 
@@ -3922,6 +3998,8 @@ func TestInitBeadsForDir_bd_skip(t *testing.T) {
 }
 
 func TestInitBeadsForDirBdMaterializedScriptPreservesCityPath(t *testing.T) {
+	skipLegacyDoltScriptWhenDoltliteBackend(t)
+
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
@@ -3968,6 +4046,8 @@ esac
 }
 
 func TestInitBeadsForDirBdMaterializedScriptIgnoresAmbientCityRuntimeEnv(t *testing.T) {
+	skipLegacyDoltScriptWhenDoltliteBackend(t)
+
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {

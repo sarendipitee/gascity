@@ -6,15 +6,28 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
+
+// BeadsBackendCapabilities advertises optional backend behavior that Gas City
+// may use without hard-coding the concrete backend name at each call site.
+type BeadsBackendCapabilities struct {
+	ManagedServer       bool
+	DoltBinary          bool
+	BeadHooks           bool
+	DoltDoctorChecks    bool
+	OptimizedLocalStore bool
+	OptimizedStoreName  string
+}
 
 // BeadsBackend abstracts bead storage backend behavior so callers
 // dispatch on backend identity in one place instead of branching on
 // cityUsesDoltliteBeadsBackend() across the codebase.
 type BeadsBackend interface {
 	Name() string
+	Capabilities() BeadsBackendCapabilities
 	NeedsManagedServer() bool
 	NeedsDoltBinary() bool
 	MinBDVersion() string
@@ -24,16 +37,25 @@ type BeadsBackend interface {
 	MetadataEnforce(fs fsys.FS, scopeRoot, doltDatabase string) error
 	ProviderEnv() []string
 	RequiredBuiltinPacks() []string
+	OpenOptimizedStore(scopeRoot, cityPath string, store *beads.BdStore) (beads.Store, bool)
 }
 
 type doltBackend struct{}
 
-func (d *doltBackend) Name() string                   { return "dolt" }
-func (d *doltBackend) NeedsManagedServer() bool       { return true }
-func (d *doltBackend) NeedsDoltBinary() bool          { return true }
+func (d *doltBackend) Name() string { return "dolt" }
+func (d *doltBackend) Capabilities() BeadsBackendCapabilities {
+	return BeadsBackendCapabilities{
+		ManagedServer:    true,
+		DoltBinary:       true,
+		BeadHooks:        true,
+		DoltDoctorChecks: true,
+	}
+}
+func (d *doltBackend) NeedsManagedServer() bool       { return d.Capabilities().ManagedServer }
+func (d *doltBackend) NeedsDoltBinary() bool          { return d.Capabilities().DoltBinary }
 func (d *doltBackend) MinBDVersion() string           { return "1.0.4" }
-func (d *doltBackend) NeedsBeadHooks() bool           { return true }
-func (d *doltBackend) NeedsDoltDoctorChecks() bool    { return true }
+func (d *doltBackend) NeedsBeadHooks() bool           { return d.Capabilities().BeadHooks }
+func (d *doltBackend) NeedsDoltDoctorChecks() bool    { return d.Capabilities().DoltDoctorChecks }
 func (d *doltBackend) RequiredBuiltinPacks() []string { return []string{"dolt"} }
 
 func (d *doltBackend) MetadataInit(fs fsys.FS, scopeRoot, doltDatabase string, preserveExisting bool) error {
@@ -46,14 +68,24 @@ func (d *doltBackend) MetadataEnforce(fs fsys.FS, scopeRoot, doltDatabase string
 
 func (d *doltBackend) ProviderEnv() []string { return nil }
 
+func (d *doltBackend) OpenOptimizedStore(_, _ string, _ *beads.BdStore) (beads.Store, bool) {
+	return nil, false
+}
+
 type doltliteBackend struct{}
 
-func (dl *doltliteBackend) Name() string                   { return "doltlite" }
-func (dl *doltliteBackend) NeedsManagedServer() bool       { return false }
-func (dl *doltliteBackend) NeedsDoltBinary() bool          { return false }
+func (dl *doltliteBackend) Name() string { return "doltlite" }
+func (dl *doltliteBackend) Capabilities() BeadsBackendCapabilities {
+	return BeadsBackendCapabilities{
+		OptimizedLocalStore: true,
+		OptimizedStoreName:  beads.BeadsStoreNameBackendPluginStore,
+	}
+}
+func (dl *doltliteBackend) NeedsManagedServer() bool       { return dl.Capabilities().ManagedServer }
+func (dl *doltliteBackend) NeedsDoltBinary() bool          { return dl.Capabilities().DoltBinary }
 func (dl *doltliteBackend) MinBDVersion() string           { return "1.0.3" }
-func (dl *doltliteBackend) NeedsBeadHooks() bool           { return false }
-func (dl *doltliteBackend) NeedsDoltDoctorChecks() bool    { return false }
+func (dl *doltliteBackend) NeedsBeadHooks() bool           { return dl.Capabilities().BeadHooks }
+func (dl *doltliteBackend) NeedsDoltDoctorChecks() bool    { return dl.Capabilities().DoltDoctorChecks }
 func (dl *doltliteBackend) RequiredBuiltinPacks() []string { return []string{"beads-doltlite-init"} }
 
 func (dl *doltliteBackend) MetadataInit(fs fsys.FS, scopeRoot, doltDatabase string, preserveExisting bool) error {
@@ -68,16 +100,23 @@ func (dl *doltliteBackend) ProviderEnv() []string {
 	return []string{"GC_BEADS_BACKEND=doltlite", "BEADS_BACKEND=doltlite"}
 }
 
+func (dl *doltliteBackend) OpenOptimizedStore(scopeRoot, cityPath string, store *beads.BdStore) (beads.Store, bool) {
+	return openOptimizedDoltliteStore(scopeRoot, cityPath, store)
+}
+
 type externalBeadsBackend struct {
 	name string
 }
 
-func (b *externalBeadsBackend) Name() string                { return b.name }
-func (b *externalBeadsBackend) NeedsManagedServer() bool    { return false }
-func (b *externalBeadsBackend) NeedsDoltBinary() bool       { return false }
+func (b *externalBeadsBackend) Name() string { return b.name }
+func (b *externalBeadsBackend) Capabilities() BeadsBackendCapabilities {
+	return BeadsBackendCapabilities{}
+}
+func (b *externalBeadsBackend) NeedsManagedServer() bool    { return b.Capabilities().ManagedServer }
+func (b *externalBeadsBackend) NeedsDoltBinary() bool       { return b.Capabilities().DoltBinary }
 func (b *externalBeadsBackend) MinBDVersion() string        { return "1.0.3" }
-func (b *externalBeadsBackend) NeedsBeadHooks() bool        { return false }
-func (b *externalBeadsBackend) NeedsDoltDoctorChecks() bool { return false }
+func (b *externalBeadsBackend) NeedsBeadHooks() bool        { return b.Capabilities().BeadHooks }
+func (b *externalBeadsBackend) NeedsDoltDoctorChecks() bool { return b.Capabilities().DoltDoctorChecks }
 func (b *externalBeadsBackend) ProviderEnv() []string       { return nil }
 func (b *externalBeadsBackend) RequiredBuiltinPacks() []string {
 	return nil
@@ -89,6 +128,10 @@ func (b *externalBeadsBackend) MetadataInit(_ fsys.FS, _ string, _ string, _ boo
 
 func (b *externalBeadsBackend) MetadataEnforce(_ fsys.FS, _ string, _ string) error {
 	return fmt.Errorf("beads backend %q does not support managed metadata enforcement", b.name)
+}
+
+func (b *externalBeadsBackend) OpenOptimizedStore(_, _ string, _ *beads.BdStore) (beads.Store, bool) {
+	return nil, false
 }
 
 // resolveBeadsBackend returns the active backend for a city path.

@@ -184,6 +184,7 @@ const (
 	TerminalMetadataKey            = "gc.terminal"
 	TriggerBeadIDMetadataKey       = "gc.trigger_bead_id"
 	TriggerBeadStoreRefMetadataKey = "gc.trigger_bead_store_ref"
+	TriggerBeadTitleMetadataKey    = "gc.trigger_bead_title"
 	TruncatedMetadataKey           = "gc.truncated"
 	WorkBranchMetadataKey          = "gc.work_branch"
 	WorkCommitMetadataKey          = "gc.work_commit"
@@ -388,6 +389,7 @@ var KnownMetadataKeys = []string{
 	TerminalMetadataKey,
 	TriggerBeadIDMetadataKey,
 	TriggerBeadStoreRefMetadataKey,
+	TriggerBeadTitleMetadataKey,
 	TruncatedMetadataKey,
 	WorkBranchMetadataKey,
 	WorkCommitMetadataKey,

@@ -81,6 +81,32 @@ provider = "bd"
 	return cityPath
 }
 
+func TestApplyInitBeadsBackendDoltliteOptsIntoBD105(t *testing.T) {
+	var cfg config.City
+
+	applyInitBeadsBackend(&cfg, " doltlite ")
+
+	if got := cfg.Beads.Backend; got != "doltlite" {
+		t.Fatalf("Beads.Backend = %q, want doltlite", got)
+	}
+	if got := cfg.Beads.BDCompatibility; got != config.BeadsBDCompatibility105 {
+		t.Fatalf("Beads.BDCompatibility = %q, want %q", got, config.BeadsBDCompatibility105)
+	}
+}
+
+func TestApplyInitBeadsBackendDoltKeepsDefaultCompatibility(t *testing.T) {
+	var cfg config.City
+
+	applyInitBeadsBackend(&cfg, "dolt")
+
+	if got := cfg.Beads.Backend; got != "dolt" {
+		t.Fatalf("Beads.Backend = %q, want dolt", got)
+	}
+	if got := cfg.Beads.BDCompatibility; got != "" {
+		t.Fatalf("Beads.BDCompatibility = %q, want empty default", got)
+	}
+}
+
 func TestMaybePrintWizardProviderGuidanceNeedsAuth(t *testing.T) {
 	oldProbe := initProbeProvidersReadiness
 	initProbeProvidersReadiness = func(_ context.Context, _ []string, fresh bool) (map[string]api.ReadinessItem, error) {
@@ -976,12 +1002,13 @@ backend = "doltlite"
 	if err != nil {
 		t.Fatalf("reading env: %v", err)
 	}
-	if got, want := strings.TrimSpace(string(env)), "source=1 lib=1 ld= dyld=unset\nsource=1 lib=1 ld= dyld=unset"; got != want {
+	if got, want := strings.TrimSpace(string(env)), "source=1 lib=1 ld= dyld=\nsource=1 lib=1 ld= dyld="; got != want {
 		t.Fatalf("DoltLite skip env values = %q, want %q", got, want)
 	}
 	for _, want := range []string{
 		"gc beads-doltlite build bd --install --no-restart",
 		"gc beads-doltlite build gc --install --no-restart",
+		"Skipping automatic local source and libdoltlite discovery during fresh init builds.",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want command guidance %q", stdout.String(), want)

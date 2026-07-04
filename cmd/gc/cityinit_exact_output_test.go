@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -24,8 +25,9 @@ func TestCityInitExactOutput_DefaultScaffold(t *testing.T) {
 		"[5/8] Writing city configuration\n" +
 		"Welcome to Gas City!\n" +
 		"Initialized city \"bright-lights\" with default mayor agent.\n"
-	if stdout.String() != wantStdout {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), wantStdout)
+	gotStdout := stdoutAfterInitVersionBanner(t, stdout.String())
+	if gotStdout != wantStdout {
+		t.Fatalf("stdout after version banner = %q, want %q", gotStdout, wantStdout)
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -59,10 +61,24 @@ func TestCityInitExactOutput_CommandProviderSkipReadiness(t *testing.T) {
 		"Initialized city \"bright-lights\" with default provider \"codex\".\n" +
 		"[6/8] Skipping provider readiness checks\n" +
 		"[7/8] Registering city with supervisor\n"
-	if stdout.String() != wantStdout {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), wantStdout)
+	gotStdout := stdoutAfterInitVersionBanner(t, stdout.String())
+	if gotStdout != wantStdout {
+		t.Fatalf("stdout after version banner = %q, want %q", gotStdout, wantStdout)
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
+}
+
+func stdoutAfterInitVersionBanner(t *testing.T, stdout string) string {
+	t.Helper()
+
+	banner, rest, ok := strings.Cut(stdout, "\n")
+	if !ok {
+		t.Fatalf("stdout = %q, want version banner plus init output", stdout)
+	}
+	if !strings.HasPrefix(banner, "gc.test (") || !strings.Contains(banner, ") dev (commit: ") {
+		t.Fatalf("version banner = %q, want gc.test dev banner", banner)
+	}
+	return rest
 }

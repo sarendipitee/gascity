@@ -185,8 +185,9 @@ func hostedDoltBackendError(cityPath string) error {
 	if !cityUsesBdStoreContract(cityPath) {
 		return fmt.Errorf("--dolt-host requires a bd-backed beads provider (use the gascity or gastown template)")
 	}
-	if cityUsesDoltliteBeadsBackend(cityPath) {
-		return fmt.Errorf("--dolt-host configures an external Dolt server and is incompatible with the doltlite beads backend; unset the doltlite backend (GC_BEADS_BACKEND or [beads] backend) to use the dolt (server) backend")
+	backend := resolveBeadsBackend(cityPath)
+	if !backend.NeedsManagedServer() {
+		return fmt.Errorf("--dolt-host configures an external Dolt server and is incompatible with the %s beads backend; unset the embedded/external backend (GC_BEADS_BACKEND or [beads] backend) to use the dolt (server) backend", backend.Name())
 	}
 	return nil
 }

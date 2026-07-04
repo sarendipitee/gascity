@@ -1318,6 +1318,14 @@ func InstantiateSlingFormula(ctx context.Context, formulaName string, searchPath
 	result, err := molecule.Instantiate(ctx, graphStore, recipe, opts)
 	if err != nil {
 		SlingTracef("instantiate molecule-error formula=%s dur=%s err=%v", formulaName, time.Since(instantiateStart), err)
+		if graphWorkflow && len(replacedSnapshots) == 0 && molecule.IsTransientGraphApplyError(err) {
+			if recovered, recoverErr := recoverGraphV2RootAfterTransientInstantiateError(ctx, deps.Store, recipe, opts, err); recoverErr != nil {
+				return nil, recoverErr
+			} else if recovered != nil {
+				SlingTracef("instantiate graphv2 recovered formula=%s root=%s", formulaName, recovered.RootID)
+				return recovered, nil
+			}
+		}
 		if len(replacedSnapshots) > 0 {
 			var rollbackErr error
 			if cleanupErr := closeFailedGraphV2Roots(graphStore, recipe); cleanupErr != nil {
@@ -1338,6 +1346,30 @@ func InstantiateSlingFormula(ctx context.Context, formulaName string, searchPath
 	}
 	SlingTracef("instantiate done formula=%s dur=%s root=%s created=%d graph=%t", formulaName, time.Since(instantiateStart), result.RootID, result.Created, result.GraphWorkflow)
 	return result, nil
+}
+
+func recoverGraphV2RootAfterTransientInstantiateError(ctx context.Context, store beads.Store, recipe *formula.Recipe, opts molecule.Options, firstErr error) (*molecule.Result, error) {
+	existing, err := existingGraphV2Root(store, recipe)
+	if err != nil {
+		return nil, errors.Join(firstErr, err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	SlingTracef("instantiate graphv2 transient retry recipe=%s err=%v", recipe.Name, firstErr)
+	retry, retryErr := molecule.Instantiate(ctx, store, recipe, opts)
+	if retryErr == nil {
+		return retry, nil
+	}
+	existing, err = existingGraphV2Root(store, recipe)
+	if err != nil {
+		return nil, errors.Join(firstErr, retryErr, err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+	return nil, errors.Join(firstErr, retryErr)
 }
 
 func lockGraphV2Root(key string) func() {
@@ -1507,11 +1539,69 @@ func existingGraphV2Root(store beads.Store, recipe *formula.Recipe) (*molecule.R
 	if len(matches) > 1 {
 		return nil, fmt.Errorf("formulas v2 root key %s has multiple live roots: %s, %s", key, matches[0].ID, matches[1].ID)
 	}
+	idMapping, err := existingGraphV2RootIDMapping(store, recipe, key, matches[0].ID)
+	if err != nil {
+		return nil, err
+	}
 	return &molecule.Result{
 		RootID:        matches[0].ID,
 		GraphWorkflow: true,
-		IDMapping:     map[string]string{recipe.RootStep().ID: matches[0].ID},
+		IDMapping:     idMapping,
 	}, nil
+}
+
+func existingGraphV2RootIDMapping(store beads.Store, recipe *formula.Recipe, key, rootID string) (map[string]string, error) {
+	idMapping := map[string]string{recipe.RootStep().ID: rootID}
+	expected := expectedGraphV2StepRefs(recipe)
+	if len(expected) == 0 {
+		return idMapping, nil
+	}
+	steps, err := store.ListByMetadata(map[string]string{beadmeta.RootBeadIDMetadataKey: rootID}, 0, beads.WithBothTiers)
+	if err != nil {
+		return nil, fmt.Errorf("looking up formulas v2 root %s steps: %w", rootID, err)
+	}
+	seen := make(map[string]string, len(steps))
+	for _, step := range steps {
+		ref := strings.TrimSpace(step.Metadata[beadmeta.StepRefMetadataKey])
+		if ref == "" {
+			continue
+		}
+		if _, exists := seen[ref]; exists {
+			return nil, fmt.Errorf("formulas v2 root key %s has duplicate live step ref %s under root %s", key, ref, rootID)
+		}
+		seen[ref] = step.ID
+	}
+	var missing []string
+	for _, ref := range expected {
+		id := seen[ref]
+		if id == "" {
+			missing = append(missing, ref)
+			continue
+		}
+		idMapping[ref] = id
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("formulas v2 root key %s has incomplete live root %s: missing step refs: %s", key, rootID, strings.Join(missing, ", "))
+	}
+	return idMapping, nil
+}
+
+func expectedGraphV2StepRefs(recipe *formula.Recipe) []string {
+	if recipe == nil || len(recipe.Steps) <= 1 {
+		return nil
+	}
+	limit := len(recipe.Steps)
+	if recipe.RootOnly {
+		limit = 1
+	}
+	refs := make([]string, 0, limit-1)
+	for i := 1; i < limit; i++ {
+		ref := strings.TrimSpace(recipe.Steps[i].ID)
+		if ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 func privatizeAttachedRootOnlyWisp(recipe *formula.Recipe, sourceBeadID string) {
@@ -1569,7 +1659,8 @@ func PromoteWorkflowLaunchBead(store beads.Store, beadID string) error {
 		return nil
 	}
 	status := "in_progress"
-	return store.Update(beadID, beads.UpdateOpts{Status: &status})
+	expectedStatus := bead.Status
+	return store.Update(beadID, beads.UpdateOpts{Status: &status, ExpectedStatus: &expectedStatus})
 }
 
 // BeadCheckResult holds the result of pre-flight bead state checks.

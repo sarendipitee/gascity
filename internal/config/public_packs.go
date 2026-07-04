@@ -32,7 +32,6 @@ const (
 	// DoltLite operations pack. The gc binary only embeds the minimal
 	// beads-doltlite-init support pack; init imports this public pack when a
 	// city chooses [beads].backend = "doltlite".
-	//
 	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite"
 
 	// PublicBeadsDoltlitePackVersion follows the fork's main branch instead of
@@ -108,5 +107,4 @@ var SupersededPublicGascityPackVersions = []string{
 	"sha:7aedf80cfa39905bee4104095bfae8a02c67aaa1",
 	"sha:20ac017f5417b82a300f0bfdfa7cddab3773cb07",
 	"sha:ef528014c0fd6ec9d2bd6eded4fe800cf61758bc",
-	"sha:99464ed9240b1f6e6b7ab1d351f67016e1a973ff",
 }

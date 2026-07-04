@@ -42,6 +42,9 @@ jobs:
       # Snapshot mode reuses the exact release build config (CGO_ENABLED=0,
       # ldflags, archive layout) without requiring a tag, so the edge binary is
       # built identically to a real release.
+      - name: Prepare DoltLite release library
+        run: .github/scripts/prepare-doltlite-release-lib.sh
+
       - name: Build gc snapshot archives
         uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7
         with:
@@ -59,8 +62,14 @@ jobs:
             echo "no linux/amd64 gc archive produced by goreleaser snapshot" >&2
             exit 1
           fi
+          doltlite_arts=(dist/gascity-doltlite_*_linux_amd64.tar.gz)
+          if [[ ${#doltlite_arts[@]} -eq 0 ]]; then
+            echo "no linux/amd64 DoltLite-linked gc archive produced by goreleaser snapshot" >&2
+            exit 1
+          fi
           cp "${arts[0]}" gascity_edge_linux_amd64.tar.gz
-          sha256sum gascity_edge_linux_amd64.tar.gz | tee gascity_edge_checksums.txt
+          cp "${doltlite_arts[0]}" gascity_doltlite_edge_linux_amd64.tar.gz
+          sha256sum gascity_edge_linux_amd64.tar.gz gascity_doltlite_edge_linux_amd64.tar.gz | tee gascity_edge_checksums.txt
           notes="Rolling build of gascity main @ ${GITHUB_SHA}. Pre-release for cross-version contract radars; not for production."
           # Move the rolling edge tag to this commit. gh release edit does NOT
           # advance an existing tag (target_commitish is ignored once the tag
@@ -78,5 +87,5 @@ jobs:
           # narrows the cancel-in-progress window where notes and assets could
           # momentarily disagree.
           gh release upload edge \
-            gascity_edge_linux_amd64.tar.gz gascity_edge_checksums.txt --clobber
+            gascity_edge_linux_amd64.tar.gz gascity_doltlite_edge_linux_amd64.tar.gz gascity_edge_checksums.txt --clobber
           gh release edit edge --notes "${notes}"

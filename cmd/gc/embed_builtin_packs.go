@@ -150,15 +150,6 @@ func requiredBuiltinPackNames(cityPath string) []string {
 	return required
 }
 
-func appendRequiredBuiltinPack(required []string, name string) []string {
-	for _, existing := range required {
-		if existing == name {
-			return required
-		}
-	}
-	return append(required, name)
-}
-
 // bundledPackImportCommit is the commit tag bundled-source caches and lock
 // entries pin (config.BundledPackImportVersion without the "sha:" prefix).
 func bundledPackImportCommit() string {
@@ -200,9 +191,6 @@ func builtinImportsForInit(cityProvider, cityBackend string) (map[string]config.
 		resolvedBackend := resolveBeadsBackendName(backend)
 		if resolvedBackend.Name() != "doltlite" {
 			names = appendRequiredBuiltinPack(names, "bd")
-		}
-		for _, name := range resolvedBackend.RequiredBuiltinPacks() {
-			names = appendRequiredBuiltinPack(names, name)
 		}
 	}
 	return builtinImportsForNames(names)
@@ -575,6 +563,19 @@ func usesOSFS(fs fsys.FS) bool {
 	default:
 		return false
 	}
+}
+
+func appendRequiredBuiltinPack(names []string, name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return names
+	}
+	for _, existing := range names {
+		if existing == name {
+			return names
+		}
+	}
+	return append(names, name)
 }
 
 // packExists checks if a pack.toml exists in the given directory.

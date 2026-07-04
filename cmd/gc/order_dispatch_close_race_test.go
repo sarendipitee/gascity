@@ -99,6 +99,18 @@ func (s *latchedCloseStore) CloseAll(ids []string, metadata map[string]string) (
 	return s.Store.CloseAll(ids, metadata)
 }
 
+type closeAfterCloseAllStore struct {
+	*latchedCloseStore
+}
+
+func (s *closeAfterCloseAllStore) CloseAll(ids []string, metadata map[string]string) (int, error) {
+	n, err := s.latchedCloseStore.CloseAll(ids, metadata)
+	if err == nil {
+		_ = s.CloseStore()
+	}
+	return n, err
+}
+
 func (s *latchedCloseStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if err := s.guard("List"); err != nil {
 		return nil, err
@@ -162,5 +174,27 @@ func TestOrderDispatchDoesNotCloseStoreWhileDispatchInFlight(t *testing.T) {
 			t.Fatal("per-tick store was never closed after dispatch drained (handle leak)")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestCloseOrderTrackingBeadTreatsStoreClosedDuringVerificationAsBenign(t *testing.T) {
+	store := &closeAfterCloseAllStore{latchedCloseStore: newLatchedCloseStore()}
+	tracking, err := store.Create(beads.Bead{
+		Title:     "order:verifying",
+		Labels:    []string{"order-run:verifying", labelOrderTracking},
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("Create(tracking): %v", err)
+	}
+
+	if err := closeOrderTrackingBead(context.Background(), store, tracking.ID); err != nil {
+		t.Fatalf("closeOrderTrackingBead err = %v, want nil when verification hits a closed store", err)
+	}
+
+	if op, used := store.usedAfterClose(); !used {
+		t.Fatal("expected verification to touch the store after CloseAll closed it")
+	} else if op != "Get" {
+		t.Fatalf("post-close op = %q, want Get from verification", op)
 	}
 }

@@ -61,6 +61,13 @@ type (
 	hookRecordSessionPointersFunc func(ctx context.Context, dir string, env []string, assignee, sessionBeadID, runID, stepID string) error
 )
 
+type hookClaimDecodedBead struct {
+	ID       string                     `json:"id"`
+	Status   string                     `json:"status"`
+	Assignee string                     `json:"assignee"`
+	Metadata map[string]json.RawMessage `json:"metadata"`
+}
+
 type hookClaimJSONResult struct {
 	SchemaVersion        string   `json:"schema_version"`
 	OK                   bool     `json:"ok"`
@@ -609,15 +616,15 @@ func decodeHookClaimBeads(output string) ([]beads.Bead, error) {
 		output = extracted
 	}
 	output = normalizeWorkQueryOutput(output)
-	normalizedMetadata, err := normalizeHookClaimCandidateMetadata([]byte(output))
-	if err != nil {
+	var candidates []hookClaimDecodedBead
+	if err := json.Unmarshal([]byte(output), &candidates); err != nil {
 		return nil, err
 	}
-	var candidates []beads.Bead
-	if err := json.Unmarshal(normalizedMetadata, &candidates); err != nil {
-		return nil, err
+	out := make([]beads.Bead, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.toBead())
 	}
-	return candidates, nil
+	return out, nil
 }
 
 func normalizeHookClaimCandidateMetadata(output []byte) ([]byte, error) {
@@ -740,4 +747,29 @@ func hookLegacyWorkflowControlName(value string) string {
 		return ""
 	}
 	return strings.TrimSuffix(value, suffix) + "workflow-control"
+}
+
+func (b hookClaimDecodedBead) toBead() beads.Bead {
+	metadata := make(map[string]string, len(b.Metadata))
+	for key, raw := range b.Metadata {
+		metadata[key] = hookClaimMetadataValue(raw)
+	}
+	return beads.Bead{
+		ID:       b.ID,
+		Status:   b.Status,
+		Assignee: b.Assignee,
+		Metadata: metadata,
+	}
+}
+
+func hookClaimMetadataValue(raw json.RawMessage) string {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+	return value
 }

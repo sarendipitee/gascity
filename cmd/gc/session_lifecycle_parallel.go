@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
@@ -1139,6 +1140,7 @@ func retargetPreStartWorkDir(preStart []string, oldWorkDir, newWorkDir string) [
 	if oldWorkDir == "" || newWorkDir == "" || oldWorkDir == newWorkDir || len(preStart) == 0 {
 		return preStart
 	}
+	retargetPreStartSkillSnapshots(oldWorkDir, newWorkDir)
 	oldToken := shellquote.Join([]string{oldWorkDir})
 	newToken := shellquote.Join([]string{newWorkDir})
 	retargeted := make([]string, len(preStart))
@@ -1146,6 +1148,40 @@ func retargetPreStartWorkDir(preStart []string, oldWorkDir, newWorkDir string) [
 		retargeted[i] = strings.ReplaceAll(cmd, oldToken, newToken)
 	}
 	return retargeted
+}
+
+func retargetPreStartSkillSnapshots(oldWorkDir, newWorkDir string) {
+	oldTmp := filepath.Join(oldWorkDir, ".gc", "tmp")
+	entries, err := os.ReadDir(oldTmp)
+	if err != nil {
+		return
+	}
+	newTmp := filepath.Join(newWorkDir, ".gc", "tmp")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "skill-catalog-") || !strings.HasSuffix(name, ".b64") {
+			continue
+		}
+		if err := os.MkdirAll(newTmp, 0o700); err != nil {
+			return
+		}
+		oldPath := filepath.Join(oldTmp, name)
+		newPath := filepath.Join(newTmp, name)
+		if err := os.Rename(oldPath, newPath); err == nil {
+			continue
+		}
+		data, err := os.ReadFile(oldPath)
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(newPath, data, 0o600); err != nil {
+			continue
+		}
+		_ = os.Remove(oldPath)
+	}
 }
 
 func taskWorkDirAssignees(candidate startCandidate, cfg *config.City) []string {

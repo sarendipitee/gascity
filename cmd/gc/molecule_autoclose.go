@@ -58,10 +58,10 @@ func newMoleculeAutocloseCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 }
 
-// doMoleculeAutoclose is the CLI entry point. It opens the cwd-rooted
-// store through the provider-aware resolver and delegates to the
-// testable core. Mirrors doConvoyAutoclose so the on_close hook chain
-// has consistent failure semantics across the three auto-closers.
+// doMoleculeAutoclose is the CLI entry point. It resolves the store that owns
+// the closed bead and delegates to the testable core. Mirrors
+// doConvoyAutoclose so the on_close hook chain has consistent failure
+// semantics across the three auto-closers.
 func doMoleculeAutoclose(beadID string, stdout, stderr io.Writer) {
 	cwd, err := os.Getwd()
 	if err != nil {

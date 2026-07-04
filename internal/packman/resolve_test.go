@@ -104,15 +104,15 @@ func TestResolveVersionSupportsRefSelector(t *testing.T) {
 }
 
 func TestResolveVersionPeelsExplicitAnnotatedTagRef(t *testing.T) {
-	prev := runGit
+	prev := runNetworkGit
 	var gotArgs []string
-	runGit = func(_ string, args ...string) (string, error) {
+	runNetworkGit = func(_, _, _ string, args ...string) (string, error) {
 		gotArgs = append([]string(nil), args...)
 		return "tagobj\trefs/tags/v1.2.3\ncommit123\trefs/tags/v1.2.3^{}\n", nil
 	}
-	t.Cleanup(func() { runGit = prev })
+	t.Cleanup(func() { runNetworkGit = prev })
 
-	got, err := ResolveVersion("https://github.com/example/repo", "ref:refs/tags/v1.2.3")
+	got, err := ResolveVersion("", "https://github.com/example/repo", "ref:refs/tags/v1.2.3")
 	if err != nil {
 		t.Fatalf("ResolveVersion: %v", err)
 	}

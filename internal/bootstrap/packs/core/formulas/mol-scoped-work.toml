@@ -34,11 +34,11 @@ description = "Optional lint command"
 default = ""
 
 [vars.build_command]
-description = "Optional build command"
+description = "Reserved build command. Agents must not run builds."
 default = ""
 
 [vars.test_command]
-description = "Optional test command"
+description = "Optional focused test command"
 default = ""
 
 [[steps]]
@@ -115,15 +115,15 @@ on_exhausted = "hard_fail"
 
 [[steps]]
 id = "preflight-tests"
-title = "Run preflight checks on the base branch"
+title = "Inspect preflight context on the base branch"
 needs = ["workspace-setup"]
 description = """
-Run the configured checks before implementation.
+Run lightweight configured checks before implementation.
+Never run the full test suite locally. Run only focused tests or checks explicitly requested for the current task.
 
 ```bash
 {{typecheck_command}}
 {{lint_command}}
-{{test_command}}
 ```
 """
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.continuation_group" = "main", "gc.session_affinity" = "require" }
@@ -148,16 +148,16 @@ on_exhausted = "hard_fail"
 
 [[steps]]
 id = "self-review"
-title = "Review the diff and run verification"
+title = "Review the diff and focused verification"
 needs = ["implement"]
 description = """
 Inspect the change and run verification commands.
+Never run the full test suite locally. Run only focused tests or checks explicitly requested for the current task.
 
 ```bash
 git diff origin/{{base_branch}}...HEAD
 {{typecheck_command}}
 {{lint_command}}
-{{build_command}}
 {{test_command}}
 git status
 ```

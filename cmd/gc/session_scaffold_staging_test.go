@@ -25,10 +25,11 @@ func TestPrepareStartCandidateStagesScaffoldInResolvedTaskWorkDirWhenCWDIsShared
 	relativeTargetWorkDir := filepath.Join(".gc", "worktrees", "gascity", "builder", beadSlug)
 	targetWorkDir := filepath.Join(cityPath, relativeTargetWorkDir)
 	packOverlay := filepath.Join(cityPath, "packs", "core", "overlay")
+	settingsSrc := filepath.Join(cityPath, ".gc", "settings.json")
 
 	writeScaffoldFixture(t, filepath.Join(packOverlay, ".claude", "skills", "triage", "SKILL.md"), "---\nname: triage\n---\n")
 	writeScaffoldFixture(t, filepath.Join(packOverlay, ".codex", "hooks.json"), `{"hooks":{"SessionStart":[]}}`+"\n")
-	writeScaffoldFixture(t, filepath.Join(packOverlay, ".gc", "settings.json"), "{}\n")
+	writeScaffoldFixture(t, settingsSrc, "{}\n")
 	if err := os.MkdirAll(targetWorkDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", targetWorkDir, err)
 	}
@@ -78,7 +79,11 @@ func TestPrepareStartCandidateStagesScaffoldInResolvedTaskWorkDirWhenCWDIsShared
 				ProviderName:        "codex",
 				ProviderOverlayName: "codex",
 				PackOverlayDirs:     []string{packOverlay},
-				PreStart:            appendMaterializeSkillsPreStart(nil, "gascity/builder", leakedWorkDir),
+				CopyFiles: []runtime.CopyEntry{{
+					Src:    settingsSrc,
+					RelDst: filepath.Join(".gc", "settings.json"),
+				}},
+				PreStart: appendMaterializeSkillsPreStart(nil, "gascity/builder", leakedWorkDir),
 			},
 		},
 		order: 0,

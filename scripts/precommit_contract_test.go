@@ -83,20 +83,64 @@ func TestNativeDoltliteBeadsTargetRunsTaggedSuite(t *testing.T) {
 	}
 	command := string(out)
 	for _, want := range []string{
-		"CGO_ENABLED=0",
-		"-tags gascity_native_beads",
-		"./internal/beads",
-	} {
-		if !strings.Contains(command, want) {
-			t.Fatalf("test-native-doltlite-beads recipe missing %q:\n%s", want, command)
-		}
-	}
-	for _, banned := range []string{
 		"CGO_ENABLED=1",
-		"cgo,gascity_native_beads",
+		"DOLTLITE_LIB=",
+		"GC_DOLTLITE_LIB=",
+			"LD_LIBRARY_PATH=",
+			"CGO_LDFLAGS=\"-L$lib_dir",
+			"scripts/test-native-doltlite",
+		} {
+			if !strings.Contains(command, want) {
+				t.Fatalf("test-native-doltlite-beads recipe missing %q:\n%s", want, command)
+			}
+		}
+	for _, banned := range []string{
+		"CGO_ENABLED=0",
+		"modernc",
+		"cannot find -ldoltlite",
 	} {
 		if strings.Contains(command, banned) {
-			t.Fatalf("test-native-doltlite-beads recipe must not contain %q (doltlite store now uses pure-Go modernc):\n%s", banned, command)
+			t.Fatalf("test-native-doltlite-beads recipe must not contain %q:\n%s", banned, command)
+		}
+	}
+
+	runner, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "test-native-doltlite"))
+	if err != nil {
+		t.Fatalf("read native DoltLite test runner: %v", err)
+	}
+	runnerText := string(runner)
+	for _, want := range []string{
+		"git ls-files '*_test.go'",
+		"-tags gascity_doltlite_lib",
+		"go test",
+	} {
+		if !strings.Contains(runnerText, want) {
+			t.Fatalf("native DoltLite test runner missing %q:\n%s", want, runnerText)
+		}
+	}
+
+	listCmd := exec.Command(filepath.Join(repoRoot, "scripts", "test-native-doltlite"), "--list")
+	listCmd.Dir = repoRoot
+	listOut, err := listCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("list native DoltLite tests: %v\n%s", err, listOut)
+	}
+	list := string(listOut)
+	for _, want := range []string{
+		"./internal/beads\t",
+		"./cmd/gc\tTestDoltliteReadFastPathEnabled",
+	} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("native DoltLite test discovery missing %q:\n%s", want, list)
+		}
+	}
+	for _, unwanted := range []string{
+		"/.gc/",
+		"/workspaces/",
+		"./gc-",
+	} {
+		if strings.Contains(list, unwanted) {
+			t.Fatalf("native DoltLite test discovery included workspace path %q:\n%s", unwanted, list)
 		}
 	}
 }

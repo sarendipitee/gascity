@@ -265,6 +265,9 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 		_ = storage.Close()
 		return nil, fmt.Errorf("reading native issue prefix: %w", err)
 	}
+	if strings.TrimSpace(prefix) == "" {
+		prefix = strings.TrimSpace(env["GC_BEADS_PREFIX"])
+	}
 	if accessor, ok := storage.(rawDBGetter); ok {
 		for _, table := range idDefaultRepairTables {
 			if repairErr := repairIDDefault(accessor.DB(), table); repairErr != nil {
@@ -581,6 +584,16 @@ func (s *NativeDoltStore) Update(id string, opts UpdateOpts) error {
 // shared by the standalone Update (one op, one commit) and the multi-write
 // Store.Tx path (many ops, one commit) so both routes have identical semantics.
 func (s *NativeDoltStore) applyUpdateInTx(ctx context.Context, tx beadslib.Transaction, id string, opts UpdateOpts) error {
+	issue, err := tx.GetIssue(ctx, id)
+	if err != nil {
+		return nativeStoreError(id, err)
+	}
+	if issue == nil {
+		return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+	}
+	if opts.ExpectedStatus != nil && string(issue.Status) != *opts.ExpectedStatus {
+		return statusConflictError(id, *opts.ExpectedStatus, string(issue.Status))
+	}
 	if opts.ParentID != nil {
 		if err := s.validateUpdateParent(ctx, tx, *opts.ParentID); err != nil {
 			return err
@@ -996,28 +1009,38 @@ func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) err
 	defer release()
 	ctx, cancel := nativeDoltOperationContext(context.TODO())
 	defer cancel()
-	issue, err := storage.GetIssue(ctx, id)
+
+	err = storage.RunInTransaction(ctx, fmt.Sprintf("gc: update bead %s metadata", id), func(tx beadslib.Transaction) error {
+		issue, err := tx.GetIssue(ctx, id)
+		if err != nil {
+			return nativeStoreError(id, err)
+		}
+		if issue == nil {
+			return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+		}
+		metadata, err := metadataMapFromNative(issue.Metadata)
+		if err != nil {
+			return fmt.Errorf("parsing metadata for bead %q: %w", id, err)
+		}
+		if metadata == nil {
+			metadata = make(map[string]string, len(kvs))
+		}
+		for k, v := range kvs {
+			metadata[k] = v
+		}
+		raw, err := metadataRawFromMap(metadata)
+		if err != nil {
+			return err
+		}
+		if err := tx.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor); err != nil {
+			return nativeStoreError(id, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nativeStoreError(id, err)
 	}
-	if issue == nil {
-		return fmt.Errorf("bead %q: %w", id, ErrNotFound)
-	}
-	metadata, err := metadataMapFromNative(issue.Metadata)
-	if err != nil {
-		return fmt.Errorf("parsing metadata for bead %q: %w", id, err)
-	}
-	if metadata == nil {
-		metadata = make(map[string]string, len(kvs))
-	}
-	for k, v := range kvs {
-		metadata[k] = v
-	}
-	raw, err := metadataRawFromMap(metadata)
-	if err != nil {
-		return err
-	}
-	return nativeStoreError(id, storage.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor))
+	return nil
 }
 
 // Tx executes fn inside a single native Dolt transaction so every write in the
@@ -1552,7 +1575,7 @@ func beadFromNativeIssue(issue *beadslib.Issue) (Bead, error) {
 	b := Bead{
 		ID:          issue.ID,
 		Title:       issue.Title,
-		Status:      mapBdStatus(string(issue.Status)),
+		Status:      mapNativeBdStatus(string(issue.Status)),
 		Type:        string(issue.IssueType),
 		Priority:    nativePriorityFromIssue(issue),
 		CreatedAt:   issue.CreatedAt,
@@ -1584,6 +1607,17 @@ func beadFromNativeIssue(issue *beadslib.Issue) (Bead, error) {
 
 func isNativeIssueMetadataParseError(err error) bool {
 	return errors.Is(err, errNativeIssueMetadataParse)
+}
+
+func mapNativeBdStatus(s string) string {
+	switch s {
+	case "closed":
+		return "closed"
+	case "in_progress":
+		return "in_progress"
+	default:
+		return "open"
+	}
 }
 
 func nativePriorityFromIssue(issue *beadslib.Issue) *int {

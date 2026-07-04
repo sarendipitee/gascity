@@ -285,6 +285,7 @@ type memoryOrderDispatcher struct {
 	cfg                  *config.City
 	cityName             string
 	cityPath             string
+	checkRoleConfigured  func() error
 	cacheMu              sync.Mutex
 	lastRunCache         map[string]time.Time
 	gateBackoffUntil     map[string]time.Time
@@ -430,6 +431,12 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	if m.cfg != nil {
 		st, _ := loadSuspensionState(fsys.OSFS{}, m.cityPath)
 		if citySuspendedWithState(m.cfg, st) {
+			return
+		}
+	}
+	if m.checkRoleConfigured != nil {
+		if err := m.checkRoleConfigured(); err != nil {
+			logDispatchError(m.stderr, "gc: order dispatch: %v", err)
 			return
 		}
 	}
@@ -645,6 +652,43 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			return
 		}
 	}
+}
+
+func retryOrderStoreCreate(fn func() (beads.Bead, error)) (beads.Bead, error) {
+	var bead beads.Bead
+	err := retryOrderStoreWrite(func() error {
+		var createErr error
+		bead, createErr = fn()
+		return createErr
+	})
+	return bead, err
+}
+
+func retryOrderStoreUpdate(fn func() error) error {
+	return retryOrderStoreWrite(fn)
+}
+
+func retryOrderStoreWrite(fn func() error) error {
+	const attempts = 3
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err = fn()
+		if err == nil || !isTransientOrderStoreWriteError(err) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+	return err
+}
+
+func isTransientOrderStoreWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "busy")
 }
 
 // launchDispatchOne spawns dispatchOne with a context that cancels when
@@ -1271,6 +1315,7 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, front *orders.
 	env, err := orderExecEnvWithError(cityPath, m.cfg, target, a)
 	var output []byte
 	var execErrMsg string
+	var skipped bool
 	if err != nil {
 		redactionEnv := append(os.Environ(), env...)
 		redacted := redactOrderEnvError(err, redactionEnv)
@@ -1281,11 +1326,18 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, front *orders.
 		output, err = m.execRun(ctx, a.Exec, target.ScopeRoot, env)
 		if err != nil {
 			redactionEnv := append(os.Environ(), env...)
-			execErrMsg = execenv.RedactText(err.Error(), redactionEnv)
-			outcome = orders.RunOutcomeExecFailed
-			logDispatchError(m.stderr, "gc: order exec %s failed: %s", scoped, execErrMsg)
-			if len(output) > 0 {
-				logDispatchError(m.stderr, "gc: order exec %s output: %s", scoped, execenv.RedactText(string(output), redactionEnv))
+			if shouldSkipWorkspaceReportExec(a, output, err) {
+				execErrMsg = workspaceReportSkipOutcome(a.Name, output)
+				skipped = true
+				outcome = orders.RunOutcomeExecFailed
+				logDispatchError(m.stderr, "gc: order exec %s skipped: {\"outcome\":\"skipped\",\"reason\":%q}", scoped, execErrMsg)
+			} else {
+				execErrMsg = execenv.RedactText(err.Error(), redactionEnv)
+				outcome = orders.RunOutcomeExecFailed
+				logDispatchError(m.stderr, "gc: order exec %s failed: %s", scoped, execErrMsg)
+				if len(output) > 0 {
+					logDispatchError(m.stderr, "gc: order exec %s output: %s", scoped, execenv.RedactText(string(output), redactionEnv))
+				}
 			}
 		}
 	}
@@ -1306,7 +1358,7 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, front *orders.
 		})
 		return
 	}
-	if execErrMsg != "" {
+	if execErrMsg != "" && !skipped {
 		if hasEventCursor {
 			execErrMsg = fmt.Sprintf("seq=%d: %s", headSeq, execErrMsg)
 		}
@@ -1323,6 +1375,21 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, front *orders.
 		Actor:   "controller",
 		Subject: scoped,
 	})
+}
+
+func shouldSkipWorkspaceReportExec(a orders.Order, output []byte, err error) bool {
+	if err == nil || a.Name != "workspace-report" {
+		return false
+	}
+	return strings.Contains(string(output), "not in a jjw-enabled repository")
+}
+
+func workspaceReportSkipOutcome(orderName string, output []byte) string {
+	msg := strings.TrimSpace(string(output))
+	if msg == "" {
+		msg = "not in a jjw-enabled repository"
+	}
+	return fmt.Sprintf("%s skipped: %s", orderName, msg)
 }
 
 func prepareOrderWispRecipe(ctx context.Context, store beads.Store, a orders.Order, searchPaths []string) (*formula.Recipe, error) {

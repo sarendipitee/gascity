@@ -1672,6 +1672,17 @@ func openSourceWorkflowStores(cfg *config.City, cityPath, beadID string) ([]conv
 // rig stores without touching the filesystem.
 func openSourceWorkflowStoresWith(cfg *config.City, cityPath, beadID string, openStore func(string) (beads.Store, error)) ([]convoyStoreView, []sourceWorkflowStoreSkip, error) {
 	candidates := convoyStoreCandidates(cfg, cityPath, beadID)
+	sourceDir := ""
+	if strings.TrimSpace(beadID) != "" {
+		if cfg != nil {
+			if rd := rigDirForBead(cfg, beadID); rd != "" {
+				sourceDir = resolveStoreScopeRoot(cityPath, rd)
+			}
+		}
+		if sourceDir == "" {
+			sourceDir = cityPath
+		}
+	}
 	var (
 		stores   = make([]convoyStoreView, 0, len(candidates))
 		skips    []sourceWorkflowStoreSkip
@@ -1686,6 +1697,20 @@ func openSourceWorkflowStoresWith(cfg *config.City, cityPath, beadID string, ope
 				firstErr = wrapped
 			}
 			continue
+		}
+		if strings.TrimSpace(beadID) != "" {
+			storeRef := workflowStoreRefForDir(dir, cityPath, "", cfg)
+			if _, err := sourceworkflow.ListLiveRoots(store, beadID, "", storeRef); err != nil {
+				wrapped := fmt.Errorf("querying source workflow store %s: %w", dir, err)
+				if sourceDir != "" && samePath(dir, sourceDir) {
+					return nil, skips, wrapped
+				}
+				skips = append(skips, sourceWorkflowStoreSkip{path: dir, err: err})
+				if firstErr == nil {
+					firstErr = wrapped
+				}
+				continue
+			}
 		}
 		stores = append(stores, convoyStoreView{path: dir, store: store})
 	}

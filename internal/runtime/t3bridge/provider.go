@@ -1390,7 +1390,7 @@ func buildThreadEnv(env map[string]string) map[string]string {
 		if value == "" {
 			continue
 		}
-		if key == "GC_STARTUP_ENVELOPE" {
+		if key == "GC_STARTUP_ENVELOPE" || key == "GC_NATIVE_DOLTLITE_BEADS" {
 			continue
 		}
 		if strings.HasPrefix(key, "GC_") {

@@ -1023,6 +1023,38 @@ func TestBdStoreUpdatePassesPriority(t *testing.T) {
 	}
 }
 
+func TestBdStoreUpdateWithExpectedStatusSplitsConditionalStatusAndRemainingFields(t *testing.T) {
+	var calls []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "bd" && len(args) == 3 && args[0] == "show" && args[1] == "--json" && args[2] == "bd-42":
+			return []byte(`[{"id":"bd-42","title":"before","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}]`), nil
+		case name == "bd" && len(args) >= 2 && args[0] == "sql":
+			return []byte(`{"rows_affected":1,"schema_version":1}`), nil
+		case name == "bd" && len(args) == 5 && args[0] == "update" && args[1] == "--json" && args[2] == "bd-42" && args[3] == "--set-metadata" && args[4] == "gc.outcome=pass":
+			return []byte(`[{"id":"bd-42","title":"before","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","metadata":{"gc.outcome":"pass"}}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: bd %s", strings.Join(args, " "))
+		}
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	expected := "open"
+	next := "closed"
+	if err := s.Update("bd-42", beads.UpdateOpts{Status: &next, ExpectedStatus: &expected, Metadata: map[string]string{"gc.outcome": "pass"}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	wantCalls := []string{
+		"bd show --json bd-42",
+		"bd sql --json UPDATE issues SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = 'bd-42' AND status = 'open'",
+		"bd update --json bd-42 --set-metadata gc.outcome=pass",
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", calls, wantCalls)
+	}
+}
+
 func TestBdStoreTxCombinesWritesForSameBead(t *testing.T) {
 	var commands []string
 	closed := false
@@ -1927,6 +1959,9 @@ func TestBdStoreListDecodesIsBlockedProjection(t *testing.T) {
 	if got[0].IsBlocked == nil || !*got[0].IsBlocked {
 		t.Fatalf("got[0].IsBlocked = %v, want true", got[0].IsBlocked)
 	}
+	if got[0].DependencyCount != 2 {
+		t.Fatalf("got[0].DependencyCount = %d, want 2", got[0].DependencyCount)
+	}
 	if got[1].IsBlocked == nil || *got[1].IsBlocked {
 		t.Fatalf("got[1].IsBlocked = %v, want false", got[1].IsBlocked)
 	}
@@ -2457,6 +2492,32 @@ func TestBdStoreReadyDoesNotSpecialCaseSyntheticMetadata(t *testing.T) {
 	}
 	if got[0].ID != "bd-synthetic" {
 		t.Fatalf("Ready(limit)[0].ID = %q, want bd-synthetic", got[0].ID)
+	}
+}
+
+func TestBdStoreReadyWithPluralAssigneesFiltersClientSide(t *testing.T) {
+	runner := fakeRunner(map[string]struct {
+		out []byte
+		err error
+	}{
+		`bd ready --json --include-ephemeral --limit 0`: {
+			out: []byte(`[
+				{"id":"bd-worker-1","title":"ready one","status":"open","issue_type":"task","assignee":"worker-1","created_at":"2025-01-15T10:30:00Z"},
+				{"id":"bd-worker-3","title":"wrong assignee","status":"open","issue_type":"task","assignee":"worker-3","created_at":"2025-01-15T10:31:00Z"},
+				{"id":"bd-worker-2","title":"ready two","status":"open","issue_type":"task","assignee":"worker-2","created_at":"2025-01-15T10:32:00Z","ephemeral":true}
+			]`),
+		},
+	})
+	s := beads.NewBdStore("/city", runner)
+	got, err := s.Ready(beads.ReadyQuery{
+		Assignees: []string{"worker-1", "worker-2"},
+		TierMode:  beads.TierBoth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := beadIDs(got); !reflect.DeepEqual(ids, []string{"bd-worker-1", "bd-worker-2"}) {
+		t.Fatalf("Ready plural assignees ids = %v, want [bd-worker-1 bd-worker-2]", ids)
 	}
 }
 
@@ -3191,6 +3252,72 @@ func TestBdStoreSetMetadataBatchRetriesDoltSerializationFailure(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestBdStoreSetMetadataBatchRetriesDatabaseLocked(t *testing.T) {
+	calls := 0
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("exit status 1: insert issue into wisps: database is locked")
+		}
+		return []byte(`{"id":"bd-42"}`), nil
+	}
+	s := beads.NewBdStore(doltliteBdStoreTestDir(t), runner)
+	err := s.SetMetadataBatch("bd-42", map[string]string{"state": "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestBdStoreSetMetadataBatchSerializesDoltliteWrites(t *testing.T) {
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return []byte(`{"id":"bd-42"}`), nil
+	}
+	s := beads.NewBdStore(doltliteBdStoreTestDir(t), runner)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			<-start
+			errs <- s.SetMetadataBatch("bd-42", map[string]string{
+				fmt.Sprintf("state-%d", i): "active",
+			})
+		}()
+	}
+	close(start)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mu.Lock()
+	got := maxActive
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("max concurrent writes = %d, want serialized writes", got)
 	}
 }
 

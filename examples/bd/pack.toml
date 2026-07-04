@@ -1,17 +1,20 @@
-# BD — Dolt-backed beads provider pack.
+# BD — Beads provider pack.
 #
-# Ships the bd (beads) CLI integration with Dolt SQL server.
-# Includes the dolt pack for server lifecycle, health monitoring,
-# operational formulas, and CLI commands.
+# Ships the bd (beads) CLI integration via the gc-beads-bd.sh exec
+# provider script, which supports both Dolt SQL server and doltlite
+# embedded backends. The doctor checks ensure the bd binary meets
+# minimum version requirements.
 #
 # This pack is bundled with the gc binary and active by default.
 # The SDK's default [beads].provider = "bd" relies on this pack's
-# doctor checks and the dolt pack's gc-beads-bd exec: provider script.
+# gc-beads-bd exec: provider script.
+#
+# For Dolt SQL server backends, also include the dolt pack for
+# server lifecycle, health monitoring, and operational formulas.
+#
+# For doltlite backends, include the beads-doltlite pack for
+# embedded maintenance (flatten, gc, health).
 
 [pack]
 name = "bd"
 schema = 2
-
-[imports.dolt]
-source = "./dolt"
-export = true

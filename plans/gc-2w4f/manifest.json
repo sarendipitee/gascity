@@ -8,9 +8,18 @@
   "artifact_root_relative": "plans/gc-2w4f",
   "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/gc-2w4f/manifest.json",
   "manifest_path_relative": "plans/gc-2w4f/manifest.json",
-  "docs_change_id": "psyzlloltxotvpqxlprtzxvozyzsrmur",
+  "docs_change_id": "onknwkypkzmnpxswutroxzntqxrvxzxl",
   "source_workspace": "",
   "source_workspace_path": "",
   "source_change_id": "",
-  "documents": []
+  "documents": [
+    {
+      "name": "requirements",
+      "schema": "gc.build.requirements.v1",
+      "path": "plans/gc-2w4f/requirements.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/gc-2w4f/requirements.md",
+      "hash": "sha256:55a33a612850d5f4d6a1e30b6a27aa6782192d86f73a78c49c50f24e8e810974",
+      "change_id": "onknwkypkzmnpxswutroxzntqxrvxzxl"
+    }
+  ]
 }

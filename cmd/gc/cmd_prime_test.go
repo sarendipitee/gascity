@@ -73,6 +73,60 @@ func TestBuildPrimeContextUsesBD105ReadyCompatibility(t *testing.T) {
 	}
 }
 
+func TestBuildPrimeContextPopulatesBeadsCommandFields(t *testing.T) {
+	cityPath := filepath.Join(t.TempDir(), "demo-city")
+	rigs := []config.Rig{{Name: "demo", Path: filepath.Join(cityPath, "repos", "demo")}}
+
+	ctx := buildPrimeContextForBeads(cityPath, "", &config.Agent{
+		Name:       "worker",
+		Dir:        "demo",
+		SlingQuery: "dispatch {} --route={{.Rig}}/{{.AgentBase}} --city={{.CityName}}",
+	}, rigs, config.BeadsConfig{BDCompatibility: config.BeadsBDCompatibility105}, nil)
+
+	for field, value := range map[string]string{
+		"WorkQuery":               ctx.WorkQuery,
+		"AssignedInProgressQuery": ctx.AssignedInProgressQuery,
+		"AssignedReadyQuery":      ctx.AssignedReadyQuery,
+		"RoutedPoolQuery":         ctx.RoutedPoolQuery,
+		"SlingQuery":              ctx.SlingQuery,
+	} {
+		if strings.TrimSpace(value) == "" {
+			t.Fatalf("%s is empty", field)
+		}
+	}
+
+	if !strings.Contains(ctx.WorkQuery, `bd list --status in_progress --assignee="$id"`) {
+		t.Fatalf("WorkQuery = %q, want assigned in-progress tier", ctx.WorkQuery)
+	}
+	if !strings.Contains(ctx.WorkQuery, `bd ready --include-ephemeral --assignee="$id"`) {
+		t.Fatalf("WorkQuery = %q, want assigned ready tier", ctx.WorkQuery)
+	}
+	if !strings.Contains(ctx.WorkQuery, `probe_pool_demand "$1"`) {
+		t.Fatalf("WorkQuery = %q, want routed pool tier", ctx.WorkQuery)
+	}
+	if !strings.Contains(ctx.AssignedInProgressQuery, `bd list --status in_progress --assignee="$id"`) {
+		t.Fatalf("AssignedInProgressQuery = %q, want assigned in-progress query", ctx.AssignedInProgressQuery)
+	}
+	if strings.Contains(ctx.AssignedInProgressQuery, "probe_pool_demand") {
+		t.Fatalf("AssignedInProgressQuery = %q, must not include routed pool tier", ctx.AssignedInProgressQuery)
+	}
+	if !strings.Contains(ctx.AssignedReadyQuery, `bd ready --include-ephemeral --assignee="$id"`) {
+		t.Fatalf("AssignedReadyQuery = %q, want assigned ready query", ctx.AssignedReadyQuery)
+	}
+	if strings.Contains(ctx.AssignedReadyQuery, "probe_pool_demand") {
+		t.Fatalf("AssignedReadyQuery = %q, must not include routed pool tier", ctx.AssignedReadyQuery)
+	}
+	if !strings.Contains(ctx.RoutedPoolQuery, `bd ready --include-ephemeral --metadata-field "gc.routed_to=$target" --unassigned`) {
+		t.Fatalf("RoutedPoolQuery = %q, want routed pool query", ctx.RoutedPoolQuery)
+	}
+	if strings.Contains(ctx.RoutedPoolQuery, `--assignee="$id"`) {
+		t.Fatalf("RoutedPoolQuery = %q, must not include assigned tiers", ctx.RoutedPoolQuery)
+	}
+	if ctx.SlingQuery != "dispatch {} --route=demo/worker --city=demo-city" {
+		t.Fatalf("SlingQuery = %q, want expanded custom sling query", ctx.SlingQuery)
+	}
+}
+
 func TestBuildPrimeContextLogsTemplateExpansionWarning(t *testing.T) {
 	cityPath := filepath.Join(t.TempDir(), "demo-city")
 	var stderr bytes.Buffer

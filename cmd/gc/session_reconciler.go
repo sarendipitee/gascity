@@ -974,6 +974,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	// take the unwrapped store. It is the same underlying store value, so
 	// behavior is unchanged.
 	store := sessStore.Store
+	// Every tick counts as a cycle, including ticks aborted by context
+	// cancellation after real work (e.g. starts) already executed — the
+	// counter means "cycles", not "cycles that ran to completion". started
 	// The typed session front door is constructed once at this reconciler root
 	// and threaded to the session-only leaves it calls (heal, drift deferral,
 	// circuit metadata, rate-limit/wake-failure/churn accounting, lease clears,

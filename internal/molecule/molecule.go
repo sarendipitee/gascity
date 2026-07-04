@@ -472,6 +472,7 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 	if len(recipe.Steps) == 0 {
 		return nil, fmt.Errorf("recipe %q has no steps", recipe.Name)
 	}
+	graphWorkflow := preservesGraphActionTypes(recipe)
 	if !opts.DeferAssignees && IsGraphApplyEnabled() {
 		if applier, ok := beads.GraphApplyFor(store); ok {
 			result, err := instantiateViaGraphApply(ctx, applier, recipe, opts)
@@ -479,6 +480,10 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 				return result, nil
 			}
 			if !isTransientGraphApplyError(err) {
+				return nil, err
+			}
+			if graphWorkflow {
+				graphApplyTracef("graph-apply graph-workflow transient-error return-for-reconcile recipe=%s err=%v", recipe.Name, err)
 				return nil, err
 			}
 			graphApplyTracef("graph-apply transient-error retry recipe=%s err=%v", recipe.Name, err)
@@ -512,7 +517,6 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 	var createdIDs []string
 	embeddedDeps := make(map[string]bool)
 	pendingAssignees := make(map[string]string)
-	graphWorkflow := preservesGraphActionTypes(recipe)
 	fenceGraphWorkflow := graphWorkflow && !opts.DeferAssignees
 	externalDepsByStep, err := groupExternalDeps(opts.ExternalDeps)
 	if err != nil {

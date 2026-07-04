@@ -109,6 +109,74 @@ func TestOpenSourceWorkflowStoresSkipsBrokenRigs(t *testing.T) {
 	}
 }
 
+type listFailingStore struct {
+	beads.Store
+}
+
+func (s listFailingStore) List(beads.ListQuery) ([]beads.Bead, error) {
+	return nil, errors.New("simulated schema_migrations missing")
+}
+
+func TestOpenSourceWorkflowStoresSkipsOpenedButUnqueryableNonSourceRig(t *testing.T) {
+	cityPath := "/city"
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs: []config.Rig{
+			{Name: "alpha", Prefix: "al", Path: "rigs/alpha"},
+			{Name: "broken", Prefix: "br", Path: "rigs/broken"},
+		},
+	}
+
+	openStore := func(dir string) (beads.Store, error) {
+		if strings.Contains(dir, "rigs/broken") {
+			return listFailingStore{Store: beads.NewMemStore()}, nil
+		}
+		return beads.NewMemStore(), nil
+	}
+
+	stores, skips, err := openSourceWorkflowStoresWith(cfg, cityPath, "al-123", openStore)
+	if err != nil {
+		t.Fatalf("openSourceWorkflowStoresWith returned err = %v; want tolerance of unqueryable non-source rig", err)
+	}
+	for _, s := range stores {
+		if strings.Contains(s.path, "rigs/broken") {
+			t.Fatalf("unqueryable non-source rig should have been skipped, got path %q", s.path)
+		}
+	}
+	if len(skips) != 1 || !strings.Contains(skips[0].path, "rigs/broken") {
+		t.Fatalf("skips = %#v, want the unqueryable non-source rig recorded", skips)
+	}
+	if !strings.Contains(formatSourceWorkflowStoreSkips(skips), "schema_migrations") {
+		t.Fatalf("skip warning = %q, want underlying query error surfaced", formatSourceWorkflowStoreSkips(skips))
+	}
+}
+
+func TestOpenSourceWorkflowStoresFailsWhenSourceRigUnqueryable(t *testing.T) {
+	cityPath := "/city"
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs: []config.Rig{
+			{Name: "alpha", Prefix: "al", Path: "rigs/alpha"},
+			{Name: "beta", Prefix: "be", Path: "rigs/beta"},
+		},
+	}
+
+	openStore := func(dir string) (beads.Store, error) {
+		if strings.Contains(dir, "rigs/alpha") {
+			return listFailingStore{Store: beads.NewMemStore()}, nil
+		}
+		return beads.NewMemStore(), nil
+	}
+
+	_, _, err := openSourceWorkflowStoresWith(cfg, cityPath, "al-123", openStore)
+	if err == nil {
+		t.Fatal("openSourceWorkflowStoresWith returned nil error; want source rig query failure")
+	}
+	if !strings.Contains(err.Error(), "schema_migrations") {
+		t.Fatalf("error = %v, want source rig query failure surfaced", err)
+	}
+}
+
 func TestOpenSourceWorkflowStoresFailsOnlyWhenEverythingBroken(t *testing.T) {
 	// If every candidate store is unopenable, the singleton check cannot
 	// run safely — surface the first underlying error so the caller knows
@@ -1870,6 +1938,156 @@ func TestRunWorkflowServeProcessesReadyControlBeadsThenExits(t *testing.T) {
 	}
 }
 
+func TestRunWorkflowServeCitySingletonFansAcrossRigStores(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	cityDir := t.TempDir()
+	rigDir := t.TempDir()
+	cityToml := fmt.Sprintf(
+		"[workspace]\nname = \"test-city\"\n\n[daemon]\nformula_v2 = true\n\n[[rigs]]\nname = \"testrig\"\npath = %q\n",
+		rigDir,
+	) + testControlDispatcherAgentTOML("")
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+
+	prevCityFlag := cityFlag
+	prevList := workflowServeList
+	prevControl := controlDispatcherServe
+	prevInterval := workflowServeIdlePollInterval
+	prevAttempts := workflowServeIdlePollAttempts
+	cityFlag = ""
+	workflowServeIdlePollInterval = 0
+	workflowServeIdlePollAttempts = 0
+	t.Cleanup(func() {
+		cityFlag = prevCityFlag
+		workflowServeList = prevList
+		controlDispatcherServe = prevControl
+		workflowServeIdlePollInterval = prevInterval
+		workflowServeIdlePollAttempts = prevAttempts
+	})
+
+	var gotDirs []string
+	envByDir := map[string]map[string]string{}
+	rigQueue := []hookBead{{ID: "gr-ctrl-1", Metadata: map[string]string{"gc.kind": "workflow-finalize"}}}
+	workflowServeList = func(_, dir string, env map[string]string) ([]hookBead, error) {
+		gotDirs = append(gotDirs, dir)
+		envByDir[canonicalTestPath(dir)] = maps.Clone(env)
+		if canonicalTestPath(dir) == canonicalTestPath(rigDir) && len(rigQueue) > 0 {
+			next := rigQueue
+			rigQueue = nil
+			return next, nil
+		}
+		return nil, nil
+	}
+	type controlledCall struct {
+		storePath string
+		beadID    string
+	}
+	var controlled []controlledCall
+	controlDispatcherServe = func(_, storePath string, beadID string, _ io.Writer, _ io.Writer) error {
+		controlled = append(controlled, controlledCall{storePath: storePath, beadID: beadID})
+		return nil
+	}
+
+	if err := runWorkflowServe("", false, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runWorkflowServe: %v", err)
+	}
+
+	// The city-singleton dispatcher owns rig-routed control beads
+	// (config.PreferredDeterministicControlDispatcher prefers it), so its
+	// serve loop must scan the rig store too — a city-only scan strands rig
+	// control beads (gastownhall/gascity#3872 incident 2).
+	sawCity, sawRig := false, false
+	for _, dir := range gotDirs {
+		switch canonicalTestPath(dir) {
+		case canonicalTestPath(cityDir):
+			sawCity = true
+		case canonicalTestPath(rigDir):
+			sawRig = true
+		default:
+			t.Fatalf("workflowServeList queried unexpected dir %q", dir)
+		}
+	}
+	if !sawCity || !sawRig {
+		t.Fatalf("workflowServeList dirs = %#v, want both city %q and rig %q scanned", gotDirs, cityDir, rigDir)
+	}
+	cityEnv := envByDir[canonicalTestPath(cityDir)]
+	if cityEnv["GC_STORE_ROOT"] != cityDir || cityEnv["GC_STORE_SCOPE"] != "city" {
+		t.Fatalf("city query env = root %q scope %q, want root %q scope city", cityEnv["GC_STORE_ROOT"], cityEnv["GC_STORE_SCOPE"], cityDir)
+	}
+	rigEnv := envByDir[canonicalTestPath(rigDir)]
+	if canonicalTestPath(rigEnv["GC_STORE_ROOT"]) != canonicalTestPath(rigDir) || rigEnv["GC_STORE_SCOPE"] != "rig" || rigEnv["GC_RIG"] != "testrig" {
+		t.Fatalf("rig query env = root %q scope %q rig %q, want root %q scope rig rig testrig", rigEnv["GC_STORE_ROOT"], rigEnv["GC_STORE_SCOPE"], rigEnv["GC_RIG"], rigDir)
+	}
+	if len(controlled) != 1 || controlled[0].beadID != "gr-ctrl-1" {
+		t.Fatalf("controlled = %#v, want exactly the rig-store control bead gr-ctrl-1", controlled)
+	}
+	if canonicalTestPath(controlled[0].storePath) != canonicalTestPath(rigDir) {
+		t.Fatalf("control bead dispatched against store %q, want the rig store %q that holds it", controlled[0].storePath, rigDir)
+	}
+}
+
+func TestRunWorkflowServeRigScopedDispatcherQueriesOnlyItsRigStore(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	cityDir := t.TempDir()
+	rigDir := t.TempDir()
+	otherRigDir := t.TempDir()
+	cityToml := fmt.Sprintf(
+		"[workspace]\nname = \"test-city\"\n\n[daemon]\nformula_v2 = true\n\n[[rigs]]\nname = \"testrig\"\npath = %q\n\n[[rigs]]\nname = \"otherrig\"\npath = %q\n",
+		rigDir, otherRigDir,
+	) + testControlDispatcherAgentTOML("testrig")
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+
+	prevCityFlag := cityFlag
+	prevList := workflowServeList
+	prevControl := controlDispatcherServe
+	prevInterval := workflowServeIdlePollInterval
+	prevAttempts := workflowServeIdlePollAttempts
+	cityFlag = ""
+	workflowServeIdlePollInterval = 0
+	workflowServeIdlePollAttempts = 0
+	t.Cleanup(func() {
+		cityFlag = prevCityFlag
+		workflowServeList = prevList
+		controlDispatcherServe = prevControl
+		workflowServeIdlePollInterval = prevInterval
+		workflowServeIdlePollAttempts = prevAttempts
+	})
+
+	var gotDirs []string
+	workflowServeList = func(_, dir string, _ map[string]string) ([]hookBead, error) {
+		gotDirs = append(gotDirs, dir)
+		return nil, nil
+	}
+	controlDispatcherServe = func(_, _ string, _ string, _ io.Writer, _ io.Writer) error {
+		return nil
+	}
+
+	if err := runWorkflowServe("control-dispatcher", false, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runWorkflowServe: %v", err)
+	}
+
+	// A rig-scoped dispatcher instance owns only its rig's control beads;
+	// fanning it across the city or sibling rigs would double-dispatch
+	// against the city singleton.
+	if len(gotDirs) == 0 {
+		t.Fatal("workflowServeList never called")
+	}
+	for _, dir := range gotDirs {
+		if canonicalTestPath(dir) != canonicalTestPath(rigDir) {
+			t.Fatalf("workflowServeList dir = %q, want only the agent's rig store %q", dir, rigDir)
+		}
+	}
+}
+
 func TestRunWorkflowServeDrainsReadyBatchBeforeRequery(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
@@ -3003,6 +3221,110 @@ func TestWorkflowServeControlReadyQueryBD105IncludesEphemeral(t *testing.T) {
 		if !strings.Contains(query, want) {
 			t.Fatalf("workflowServeControlReadyQueryForBeads(bd-1.0.5) missing %q in %q", want, query)
 		}
+	}
+}
+
+func TestWorkflowServeControlBeadsFromStoreMatchesControlQueryTiers(t *testing.T) {
+	store := beads.NewMemStore()
+	create := func(title string, bead beads.Bead) beads.Bead {
+		bead.Title = title
+		created, err := store.Create(bead)
+		if err != nil {
+			t.Fatalf("create %s: %v", title, err)
+		}
+		return created
+	}
+
+	assigned := create("assigned", beads.Bead{
+		Assignee: "test-city--control-dispatcher",
+		Metadata: map[string]string{beadmeta.KindMetadataKey: "scope-check"},
+	})
+	legacyAssigned := create("legacy assigned", beads.Bead{
+		Assignee: "test-city--workflow-control",
+		Metadata: map[string]string{beadmeta.KindMetadataKey: "legacy-check"},
+	})
+	routedRun := create("routed run target", beads.Bead{
+		Metadata: map[string]string{
+			beadmeta.KindMetadataKey:      "workflow-finalize",
+			beadmeta.RunTargetMetadataKey: "gascity/control-dispatcher",
+		},
+	})
+	routedTo := create("routed to", beads.Bead{
+		Metadata: map[string]string{
+			beadmeta.KindMetadataKey:     "scope-check",
+			beadmeta.RoutedToMetadataKey: "workflow-control",
+		},
+	})
+	dualRouted := create("dual routed", beads.Bead{
+		Metadata: map[string]string{
+			beadmeta.KindMetadataKey:      "scope-check",
+			beadmeta.RunTargetMetadataKey: "gascity/control-dispatcher",
+			beadmeta.RoutedToMetadataKey:  "gascity/control-dispatcher",
+		},
+	})
+	create("instantiating filtered", beads.Bead{
+		Assignee: "test-city--control-dispatcher",
+		Metadata: map[string]string{beadmeta.InstantiatingMetadataKey: "1"},
+	})
+	create("epic filtered", beads.Bead{
+		Type:     "epic",
+		Assignee: "test-city--control-dispatcher",
+	})
+	create("assigned route filtered", beads.Bead{
+		Assignee: "worker",
+		Metadata: map[string]string{beadmeta.RunTargetMetadataKey: "gascity/control-dispatcher"},
+	})
+
+	got, err := workflowServeControlBeadsFromStore(store, map[string]string{
+		"GC_CONTROL_SESSION_NAME":  "test-city--control-dispatcher",
+		"GC_CONTROL_TARGET":        "gascity/control-dispatcher",
+		"GC_CONTROL_LEGACY_TARGET": "workflow-control",
+	})
+	if err != nil {
+		t.Fatalf("workflowServeControlBeadsFromStore: %v", err)
+	}
+	var gotIDs []string
+	for _, bead := range got {
+		gotIDs = append(gotIDs, bead.ID)
+	}
+	wantIDs := []string{assigned.ID, legacyAssigned.ID, routedRun.ID, dualRouted.ID, routedTo.ID}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("ready IDs = %#v, want %#v", gotIDs, wantIDs)
+	}
+}
+
+func TestNextWorkflowServeBeadsUsesStoreForMarkedControlQuery(t *testing.T) {
+	store := beads.NewMemStore()
+	ready, err := store.Create(beads.Bead{
+		Title:    "assigned control",
+		Assignee: "test-city--control-dispatcher",
+	})
+	if err != nil {
+		t.Fatalf("create ready bead: %v", err)
+	}
+	prevOpen := workflowServeOpenControlStore
+	t.Cleanup(func() { workflowServeOpenControlStore = prevOpen })
+
+	var gotStorePath, gotCityPath string
+	workflowServeOpenControlStore = func(storePath, cityPath string) (beads.Store, error) {
+		gotStorePath = storePath
+		gotCityPath = cityPath
+		return store, nil
+	}
+
+	got, err := nextWorkflowServeBeads("sh -c 'printf shell-used >&2; exit 7'", "/tmp/rig-store", map[string]string{
+		workflowServeControlStoreQueryEnv: "true",
+		"GC_CITY":                         "/tmp/city",
+		"GC_CONTROL_SESSION_NAME":         "test-city--control-dispatcher",
+	})
+	if err != nil {
+		t.Fatalf("nextWorkflowServeBeads: %v", err)
+	}
+	if gotStorePath != "/tmp/rig-store" || gotCityPath != "/tmp/city" {
+		t.Fatalf("open store = (%q, %q), want (%q, %q)", gotStorePath, gotCityPath, "/tmp/rig-store", "/tmp/city")
+	}
+	if len(got) != 1 || got[0].ID != ready.ID {
+		t.Fatalf("ready beads = %#v, want %s", got, ready.ID)
 	}
 }
 
@@ -4903,9 +5225,8 @@ func TestRunWorkflowServeFollowUsesSweepFallback(t *testing.T) {
 	err := runWorkflowServeFollow(
 		wfcAgent,
 		t.TempDir(),
-		t.TempDir(),
+		[]workflowServeTarget{{storePath: t.TempDir()}},
 		wfcAgent.EffectiveWorkQuery(),
-		nil,
 		io.Discard,
 	)
 	if err == nil || !strings.Contains(err.Error(), "synthetic dispatch failure") {
@@ -4985,7 +5306,7 @@ func TestRunWorkflowServeFollowResetsBackoffForProcessedEventAndPending(t *testi
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), []workflowServeTarget{{storePath: t.TempDir()}}, agent.EffectiveWorkQuery(), io.Discard)
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runWorkflowServeFollow error = %v, want %v", err, stopErr)
 	}
@@ -5075,7 +5396,7 @@ func TestRunWorkflowServeFollowDrainsObservedWakeBeforeSurfacingWatcherErr(t *te
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), []workflowServeTarget{{storePath: t.TempDir()}}, agent.EffectiveWorkQuery(), io.Discard)
 	if !errors.Is(err, watcherErr) {
 		t.Fatalf("runWorkflowServeFollow error = %v, want %v", err, watcherErr)
 	}
@@ -5126,7 +5447,7 @@ func TestRunWorkflowServeFollowSurvivesTransientWorkQueryTimeout(t *testing.T) {
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), []workflowServeTarget{{storePath: t.TempDir()}}, agent.EffectiveWorkQuery(), io.Discard)
 	if !errors.Is(err, fatalErr) {
 		t.Fatalf("runWorkflowServeFollow err = %v, want fatal error after surviving the transient timeout", err)
 	}

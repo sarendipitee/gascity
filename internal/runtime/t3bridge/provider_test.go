@@ -346,7 +346,7 @@ func TestBuildThreadEnv_DropsStartupEnvelopeAndDoltliteServerEnv(t *testing.T) {
 	if env["GC_SESSION_NAME"] != "gc--mayor" {
 		t.Fatalf("GC_SESSION_NAME = %q, want gc--mayor", env["GC_SESSION_NAME"])
 	}
-	for _, key := range []string{"GC_DOLT_HOST", "GC_DOLT_PORT", "BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT", "BEADS_DOLT_SERVER_MODE"} {
+	for _, key := range []string{"GC_DOLT_HOST", "GC_DOLT_PORT", "GC_NATIVE_DOLTLITE_BEADS", "BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT", "BEADS_DOLT_SERVER_MODE"} {
 		if _, ok := env[key]; ok {
 			t.Fatalf("%s should not persist into DoltLite thread env", key)
 		}
@@ -384,7 +384,7 @@ func TestBuildThreadEnv_MirrorsDoltEndpointForNonDoltliteSessions(t *testing.T) 
 			t.Fatalf("%s = %q, want %q", key, env[key], value)
 		}
 	}
-	for _, key := range []string{"GC_STARTUP_ENVELOPE", "BEADS_DOLT_SHARED_SERVER", "NOT_GC"} {
+	for _, key := range []string{"GC_STARTUP_ENVELOPE", "GC_NATIVE_DOLTLITE_BEADS", "BEADS_DOLT_SHARED_SERVER", "NOT_GC"} {
 		if _, ok := env[key]; ok {
 			t.Fatalf("%s should not persist into non-DoltLite thread env", key)
 		}

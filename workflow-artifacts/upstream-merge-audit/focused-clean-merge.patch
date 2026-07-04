@@ -1,0 +1,289 @@
+diff --git a/cmd/gc/cmd_bd.go b/cmd/gc/cmd_bd.go
+index 719cb339c4..9ff76462df 100644
+--- a/cmd/gc/cmd_bd.go
++++ b/cmd/gc/cmd_bd.go
+@@ -79,6 +79,11 @@
+ the rig automatically from the --rig flag or by detecting the bead prefix
+ in the arguments.
+ 
++Use --rig <name> to pin a specific rig store, or --city <path> to pin the
++city (HQ) store. An explicit --city is a true scope override: it forces the
++city store and disables rig auto-detection (GC_RIG, cwd, bead prefix), so a
++deliberate city-scoped query is never silently downgraded to a rig store.
++
+ All arguments after "gc bd" are forwarded to bd unchanged, except the
+ gc-only "heartbeat <issue-id>" subcommand, which rewrites to
+ "update <issue-id> --set-metadata gc.last_heartbeat_at=<RFC3339 UTC now>"
+@@ -93,6 +98,7 @@
+   gc bd --rig my-project create "New task"
+   gc bd show my-project-abc          # auto-detects rig from bead prefix
+   gc bd list --rig my-project -s open
++  gc bd --city /path/to/city list    # pins the city (HQ) store, no rig auto-detect
+   gc bd heartbeat my-project-abc     # stamp gc.last_heartbeat_at=now
+   gc bd release-if-current my-project-abc worker-1`,
+ 		DisableFlagParsing: true,
+@@ -212,7 +218,7 @@
+ 		return 1
+ 	}
+ 
+-	target, err := resolveBdScopeTarget(cfg, cityPath, rigName, bdArgs)
++	target, err := resolveBdScopeTarget(cfg, cityPath, rigName, bdArgs, cityName != "")
+ 	if err != nil {
+ 		fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
+ 		return 1
+@@ -653,8 +659,8 @@
+ }
+ 
+ // resolveBdScopeTarget determines the canonical scope root for a bd command.
+-// Priority: explicit rig name > bead prefix auto-detection > GC_RIG env > enclosing rig > city root.
+-func resolveBdScopeTarget(cfg *config.City, cityPath, rigName string, args []string) (execStoreTarget, error) {
++// Priority: explicit rig name > explicit city > bead prefix auto-detection > GC_RIG env > enclosing rig > city root.
++func resolveBdScopeTarget(cfg *config.City, cityPath, rigName string, args []string, cityExplicit bool) (execStoreTarget, error) {
+ 	resolveRigPaths(cityPath, cfg.Rigs)
+ 	if rigName != "" {
+ 		rig, ok := rigByName(cfg, rigName)
+@@ -668,6 +674,16 @@
+ 	}
+ 
+ 	cityTarget := bdCityScopeTarget(cityPath, cfg)
++
++	// An explicit --city pins the city store, symmetric with explicit --rig:
++	// a deliberate city scope must never be silently downgraded to a rig store
++	// by bead-prefix / GC_RIG-env / cwd auto-detection below. Without this,
++	// `gc bd --city <path> list` returned cwd/rig-scoped results, mis-scoping
++	// scripts that trusted the flag. (gastownhall/gascity#3410)
++	if cityExplicit {
++		return cityTarget, nil
++	}
++
+ 	cityPrefix := config.EffectiveHQPrefix(cfg)
+ 	if cityPrefix != "" {
+ 		for _, arg := range args {
+diff --git a/cmd/gc/cmd_convoy_dispatch.go b/cmd/gc/cmd_convoy_dispatch.go
+index 9a9dc5bb33..19393b1391 100644
+--- a/cmd/gc/cmd_convoy_dispatch.go
++++ b/cmd/gc/cmd_convoy_dispatch.go
+@@ -564,7 +564,7 @@
+ 		if binding, ok := controlRoutes[rigContext]; ok {
+ 			return binding, nil
+ 		}
+-		binding, err := controlDispatcherBinding(store, cityName, cfg, rigContext)
++		binding, err := graphroute.ControlDispatcherBinding(store, cityName, cfg, rigContext, cliGraphrouteDeps(cityPath))
+ 		if err != nil {
+ 			return graphRouteBinding{}, err
+ 		}
+diff --git a/cmd/gc/cmd_sling.go b/cmd/gc/cmd_sling.go
+index 4852244c6c..80ba2e88e2 100644
+--- a/cmd/gc/cmd_sling.go
++++ b/cmd/gc/cmd_sling.go
+@@ -564,6 +564,13 @@
+ 	deps.Notify = &cliNotifier{}
+ 	deps.DirectSessionResolver = cliDirectSessionResolver
+ 	deps.Router = cliBeadRouter{deps: deps}
++	// Wire the rig→city control-dispatcher fallback (#3454) into the sling
++	// graph-routing path. deps.CityPath is read lazily at routing time, and the
++	// closure short-circuits before opening a store when no city.toml exists, so
++	// it never spins up a managed Dolt backend on a bare working dir.
++	deps.ControlDispatcherRuntimeMissing = func(qualifiedName string) bool {
++		return controlDispatcherSessionRuntimeMissing(deps.CityPath, qualifiedName)
++	}
+ }
+ 
+ func cliDirectSessionResolver(store beads.Store, cityName, cityPath string, cfg *config.City, target, rigContext string) (string, bool, error) {
+diff --git a/internal/beads/bdstore_ready_projection.go b/internal/beads/bdstore_ready_projection.go
+index 5a8c41f56e..1147e6415b 100644
+--- a/internal/beads/bdstore_ready_projection.go
++++ b/internal/beads/bdstore_ready_projection.go
+@@ -21,7 +21,13 @@
+ 	ids := make([]string, 0, len(items))
+ 	seen := make(map[string]struct{}, len(items))
+ 	for _, item := range items {
+-		if item.ID == "" || item.Status == "closed" || item.IsBlocked != nil {
++		// Message (mail) beads are never dependency-blocked ready work, and
++		// bd's denormalized is_blocked column flaps NULL<->false for ephemeral
++		// mail wisps. Enriching them makes the CachingStore reconciler re-emit
++		// bead.updated for every open mail bead on every cycle (an event flood
++		// that starves gc-hook work queries). Leave their IsBlocked at bd's nil
++		// fallback so the reconcile diff converges.
++		if item.ID == "" || item.Status == "closed" || item.IsBlocked != nil || item.Type == "message" {
+ 			continue
+ 		}
+ 		if _, ok := seen[item.ID]; ok {
+@@ -48,7 +54,7 @@
+ 	enriched := make([]Bead, len(items))
+ 	copy(enriched, items)
+ 	for i := range enriched {
+-		if enriched[i].ID == "" || enriched[i].Status == "closed" || enriched[i].IsBlocked != nil {
++		if enriched[i].ID == "" || enriched[i].Status == "closed" || enriched[i].IsBlocked != nil || enriched[i].Type == "message" {
+ 			continue
+ 		}
+ 		blocked, ok := projection[enriched[i].ID]
+diff --git a/internal/graphroute/graphroute.go b/internal/graphroute/graphroute.go
+index e1a2dff099..a778a83f8e 100644
+--- a/internal/graphroute/graphroute.go
++++ b/internal/graphroute/graphroute.go
+@@ -24,6 +24,11 @@
+ 	GraphExecutionRigContextMetaKey = beadmeta.ExecutionRigContextMetadataKey
+ )
+ 
++// poolWorkflowContinuationGroup is the continuation group value stamped on
++// pool-routed graph.v2 steps so preassignHookContinuationGroup keeps all steps
++// of a molecule on the same pool slot (fixes #2978).
++const poolWorkflowContinuationGroup = "pool-workflow"
++
+ // AgentResolver resolves an agent name to a config.Agent.
+ type AgentResolver interface {
+ 	ResolveAgent(cfg *config.City, name, rigContext string) (config.Agent, bool)
+@@ -38,6 +43,14 @@
+ 	Resolver              AgentResolver
+ 	CityPath              string
+ 	DirectSessionResolver DirectSessionResolver
++	// ControlDispatcherRuntimeMissing reports whether the named control-
++	// dispatcher agent's session is currently asleep with reason
++	// runtime-missing. When set and it returns true for a rig-local
++	// dispatcher, ControlDispatcherBinding falls back to the city-level
++	// dispatcher (#3454). Session beads are city-scoped, so the rig-scoped
++	// routing store cannot answer this — the cmd layer injects a city-store-
++	// backed implementation. Nil disables the fallback.
++	ControlDispatcherRuntimeMissing func(qualifiedName string) bool
+ }
+ 
+ // GraphRouteBinding captures how a graph.v2 step is routed to an agent.
+@@ -50,6 +63,11 @@
+ 	DirectSessionID string
+ 	RigContext      string
+ 	MetadataOnly    bool
++	// ControlFallbackFrom records the unhealthy rig-local control-dispatcher
++	// this binding replaced when the rig→city fallback fired (#3454). Empty in
++	// the normal path. ApplyGraphControlRouteBinding stamps it onto control
++	// steps as gc.control_dispatcher_fallback for operator observability.
++	ControlFallbackFrom string
+ }
+ 
+ type graphStepTarget struct {
+@@ -183,6 +201,11 @@
+ 	}
+ 	step.Metadata[beadmeta.RoutedToMetadataKey] = binding.QualifiedName
+ 	if binding.MetadataOnly {
++		// Pool-routed step: stamp continuation group so preassignHookContinuationGroup
++		// pre-assigns all molecule steps to the claiming slot, preventing scatter
++		// across pool slots (fixes #2978).
++		step.Metadata[beadmeta.ContinuationGroupMetadataKey] = poolWorkflowContinuationGroup
++		step.Metadata[beadmeta.SessionAffinityMetadataKey] = "require"
+ 		step.Assignee = ""
+ 		return
+ 	}
+@@ -203,6 +226,14 @@
+ 	// current binding when a control step is re-decorated (#2843).
+ 	delete(step.Metadata, beadmeta.SessionNameMetadataKey)
+ 	delete(step.Metadata, beadmeta.SessionIDMetadataKey)
++	// Record (or clear, on re-decoration) the rig→city control-dispatcher
++	// fallback so operators can detect silent rig-local dispatcher decay with
++	// `bd list --has-metadata-key gc.control_dispatcher_fallback` (#3454).
++	if binding.ControlFallbackFrom != "" {
++		step.Metadata[beadmeta.ControlDispatcherFallbackMetadataKey] = binding.ControlFallbackFrom + "->" + binding.QualifiedName
++	} else {
++		delete(step.Metadata, beadmeta.ControlDispatcherFallbackMetadataKey)
++	}
+ 	if binding.QualifiedName != "" {
+ 		step.Metadata[beadmeta.RoutedToMetadataKey] = binding.QualifiedName
+ 	} else {
+@@ -252,9 +283,43 @@
+ 	return WorkflowExecutionRouteFromMeta(bead.Metadata)
+ }
+ 
+-// ControlDispatcherBinding resolves the graph routing binding for the
+-// control dispatcher agent.
+-func ControlDispatcherBinding(_ beads.Store, _ string, cfg *config.City, rigContext string, deps Deps) (GraphRouteBinding, error) {
++// ControlDispatcherBinding resolves the graph routing binding for the control
++// dispatcher agent.
++//
++// When routing is rig-scoped and the resolved rig-local dispatcher is detected
++// unhealthy (asleep with reason runtime-missing, via
++// deps.ControlDispatcherRuntimeMissing), it falls back to the city-level
++// dispatcher resolved with an empty rig context (#3454). A rig-local dispatcher
++// can sit runtime-missing for weeks, silently stranding every molecule's
++// auto-injected workflow-finalize step pinned to its dead session; the
++// city-level dispatcher is the healthy fallback. The fallback binding records
++// the replaced dispatcher in ControlFallbackFrom for observability.
++func ControlDispatcherBinding(store beads.Store, cityName string, cfg *config.City, rigContext string, deps Deps) (GraphRouteBinding, error) {
++	binding, err := resolveControlDispatcherBinding(store, cityName, cfg, rigContext, deps)
++	if err != nil {
++		return binding, err
++	}
++	// Only rig-scoped routes can decay to an unhealthy rig-local dispatcher;
++	// the city-level route (empty rig context) is already the fallback target.
++	if rigContext == "" || deps.ControlDispatcherRuntimeMissing == nil {
++		return binding, nil
++	}
++	if !deps.ControlDispatcherRuntimeMissing(binding.QualifiedName) {
++		return binding, nil
++	}
++	cityBinding, cityErr := resolveControlDispatcherBinding(store, cityName, cfg, "", deps)
++	if cityErr != nil || cityBinding.QualifiedName == binding.QualifiedName {
++		// No distinct city-level dispatcher to fall back to: keep the original
++		// binding rather than mis-route (the decay stays localized, not worse).
++		return binding, nil
++	}
++	cityBinding.ControlFallbackFrom = binding.QualifiedName
++	return cityBinding, nil
++}
++
++// resolveControlDispatcherBinding resolves the control-dispatcher binding for a
++// rig context without the health fallback (the raw resolution).
++func resolveControlDispatcherBinding(_ beads.Store, _ string, cfg *config.City, rigContext string, deps Deps) (GraphRouteBinding, error) {
+ 	if cfg == nil {
+ 		return GraphRouteBinding{}, fmt.Errorf("control-dispatcher route requires config")
+ 	}
+diff --git a/internal/runtime/staging.go b/internal/runtime/staging.go
+index c4d3eaa15d..f7610cca18 100644
+--- a/internal/runtime/staging.go
++++ b/internal/runtime/staging.go
+@@ -33,7 +33,7 @@
+ // process. Nonfatal overlay preservation warnings are written to warnings.
+ func StageSessionWorkDirWithWarnings(cfg Config, warnings io.Writer) error {
+ 	if cfg.WorkDir != "" {
+-		overlayProviders := OverlayProviderNames(cfg)
++		overlayProviders := EffectiveOverlayProviderNames(cfg)
+ 		for _, od := range cfg.PackOverlayDirs {
+ 			if err := StageProviderOverlayDir(od, cfg.WorkDir, overlayProviders, warnings); err != nil {
+ 				return fmt.Errorf("pack overlay %q -> %q: %w", od, cfg.WorkDir, err)
+@@ -48,6 +48,38 @@
+ 	return stageCopyFiles(cfg.WorkDir, cfg.CopyFiles)
+ }
+ 
++// EffectiveOverlayProviderNames returns the provider overlay slots to stage for
++// cfg, resolving the concrete-vs-family primary against cfg's overlay sources.
++// The concrete cfg.ProviderOverlayName is honored only when a
++// per-provider/<concrete>/ directory exists in one of cfg's overlay source dirs
++// (PackOverlayDirs or OverlayDir); otherwise it is dropped so the slot list
++// falls back to the launch family cfg.ProviderName. This keeps a provider that
++// ships its own overlay (e.g. Kiro) on its concrete overlay, while letting a
++// custom provider with no concrete overlay dir (e.g. base="builtin:pi"
++// "pi-vllm", which has no per-provider/pi-vllm/) fall back to the family overlay
++// (per-provider/pi/) where its lifecycle hooks live (gc-6bw8o).
++//
++// The pure OverlayProviderNames is retained for fingerprinting, which must stay
++// filesystem-independent.
++func EffectiveOverlayProviderNames(cfg Config) []string {
++	overlayName := strings.TrimSpace(cfg.ProviderOverlayName)
++	if overlayName != "" && !overlayProviderDirExists(cfg, overlayName) {
++		overlayName = ""
++	}
++	return OverlayProviderNamesFromParts(cfg.ProviderName, overlayName, cfg.InstallAgentHooks)
++}
++
++// overlayProviderDirExists reports whether any of cfg's overlay source dirs
++// contains a per-provider/<providerName>/ overlay directory.
++func overlayProviderDirExists(cfg Config, providerName string) bool {
++	for _, od := range cfg.PackOverlayDirs {
++		if overlay.HasProviderDir(od, providerName) {
++			return true
++		}
++	}
++	return cfg.OverlayDir != "" && overlay.HasProviderDir(cfg.OverlayDir, providerName)
++}
++
+ func stageCopyFiles(workDir string, copyFiles []CopyEntry) error {
+ 	for _, cf := range copyFiles {
+ 		dst := workDir

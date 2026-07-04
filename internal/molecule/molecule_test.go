@@ -628,7 +628,7 @@ func TestInstantiateRetriesTransientGraphApplyBeforeFallback(t *testing.T) {
 	recipe := &formula.Recipe{
 		Name: "wf",
 		Steps: []formula.RecipeStep{
-			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true, Metadata: map[string]string{"gc.kind": "workflow"}},
+			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true},
 			{ID: "wf.step", Title: "Work", Type: "task"},
 		},
 		Deps: []formula.RecipeDep{
@@ -666,7 +666,7 @@ func TestInstantiateFallsBackWhenGraphApplyDoltConnectionTimesOut(t *testing.T) 
 	recipe := &formula.Recipe{
 		Name: "wf",
 		Steps: []formula.RecipeStep{
-			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true, Metadata: map[string]string{"gc.kind": "workflow"}},
+			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true},
 			{ID: "wf.step", Title: "Work", Type: "task"},
 		},
 		Deps: []formula.RecipeDep{
@@ -706,7 +706,7 @@ func TestInstantiateFallsBackWhenNativeGraphApplyCycleCheckTimesOut(t *testing.T
 	recipe := &formula.Recipe{
 		Name: "wf",
 		Steps: []formula.RecipeStep{
-			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true, Metadata: map[string]string{"gc.kind": "workflow"}},
+			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true},
 			{ID: "wf.step", Title: "Work", Type: "task"},
 		},
 		Deps: []formula.RecipeDep{
@@ -771,6 +771,55 @@ func TestIsTransientGraphApplyErrorTreatsCommandTimeoutAsTransient(t *testing.T)
 	err := fmt.Errorf("bd create --graph: timed out after 45s")
 	if !isTransientGraphApplyError(err) {
 		t.Fatalf("isTransientGraphApplyError(%v) = false, want true", err)
+	}
+}
+
+func TestIsTransientGraphApplyErrorTreatsDoltLiteLockAsTransient(t *testing.T) {
+	tests := []error{
+		fmt.Errorf("bd create --graph: graph create: doltlite add dependencies: database is locked"),
+		fmt.Errorf("native graph apply: adding edge wf->step: database is busy"),
+		fmt.Errorf("bd create --graph: graph create: adding edge bd-1->bd-2: SQLITE_BUSY"),
+		fmt.Errorf("bd create --graph: graph create: adding edge bd-1->bd-2: database table is locked"),
+	}
+	for _, err := range tests {
+		if !isTransientGraphApplyError(err) {
+			t.Fatalf("isTransientGraphApplyError(%v) = false, want true", err)
+		}
+	}
+}
+
+func TestInstantiateGraphWorkflowDoltLiteLockDoesNotFallbackSequentially(t *testing.T) {
+	store := &graphApplySpyStore{
+		MemStore: beads.NewMemStore(),
+		err:      fmt.Errorf("bd create --graph: graph create: doltlite add dependencies: database is locked"),
+	}
+	prev := IsGraphApplyEnabled()
+	SetGraphApplyEnabled(true)
+	t.Cleanup(func() { SetGraphApplyEnabled(prev) })
+	recipe := &formula.Recipe{
+		Name: "wf",
+		Steps: []formula.RecipeStep{
+			{ID: "wf", Title: "Workflow", Type: "task", IsRoot: true, Metadata: map[string]string{"gc.kind": "workflow"}},
+			{ID: "wf.step", Title: "Work", Type: "task"},
+		},
+		Deps: []formula.RecipeDep{
+			{StepID: "wf.step", DependsOnID: "wf", Type: "parent-child"},
+		},
+	}
+
+	_, err := Instantiate(context.Background(), store, recipe, Options{})
+	if err == nil {
+		t.Fatal("Instantiate error = nil, want graph apply lock error")
+	}
+	if store.calls != 1 {
+		t.Fatalf("ApplyGraphPlan calls = %d, want 1 so sling can reconcile before retrying", store.calls)
+	}
+	beads, listErr := store.ListOpen()
+	if listErr != nil {
+		t.Fatalf("ListOpen: %v", listErr)
+	}
+	if len(beads) != 0 {
+		t.Fatalf("fallback created %d beads after graph workflow lock", len(beads))
 	}
 }
 

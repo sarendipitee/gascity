@@ -37,8 +37,8 @@ func newWispAutocloseCmd(stdout, stderr io.Writer) *cobra.Command {
 }
 
 // doWispAutoclose is the CLI entry point for wisp autoclose.
-// It resolves the current store through the provider-aware resolver using the
-// projected store-root environment and delegates to the testable core.
+// It resolves the store that owns the closed bead and delegates to the
+// testable core.
 func doWispAutoclose(beadID string, stdout, _ io.Writer) {
 	cwd, err := os.Getwd()
 	if err != nil {

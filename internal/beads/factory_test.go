@@ -155,6 +155,54 @@ func TestOpenStoreAtForCityContextDriftFallsBackWithPreflightDiagnostic(t *testi
 	}
 }
 
+func TestOpenStoreAtForCityDoltliteOpensNativeStore(t *testing.T) {
+	scope := t.TempDir()
+	files := fsys.NewFake()
+	files.Dirs[filepath.Join(scope, ".beads")] = true
+	files.Files[filepath.Join(scope, ".beads", "metadata.json")] = []byte(factoryPreflightDoltliteMetadata())
+	nativeStore := NewMemStore()
+	var nativeOpened bool
+
+	result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+		ScopeRoot: scope,
+		Provider:  "bd",
+		PreflightChecker: contract.PreflightChecker{
+			FS:                  files,
+			Provider:            "bd",
+			BeadsLibraryVersion: "1.0.5",
+			BDContext: func(string) (contract.PreflightBDContext, error) {
+				return contract.PreflightBDContext{Backend: "doltlite", DoltMode: "embedded", BDVersion: "1.0.5", SchemaVersion: 1}, nil
+			},
+			DatabaseProjectID: func(string) (string, bool, error) {
+				return "", false, nil
+			},
+		},
+		OpenBdStore: func() (Store, error) {
+			t.Fatal("OpenBdStore called for doltlite scope")
+			return nil, nil
+		},
+		OpenNativeStore: func() (Store, error) {
+			nativeOpened = true
+			return nativeStore, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenStoreAtForCity() error = %v", err)
+	}
+	if !nativeOpened {
+		t.Fatal("OpenNativeStore was not called")
+	}
+	if result.Store != nativeStore {
+		t.Fatalf("Store = %T, want native store", result.Store)
+	}
+	if result.Diagnostic.Store != storeNameNativeDoltStore {
+		t.Fatalf("diagnostic store = %q, want %q", result.Diagnostic.Store, storeNameNativeDoltStore)
+	}
+	if !result.Diagnostic.NativeStoreEligible {
+		t.Fatal("diagnostic native_store_eligible = false, want true")
+	}
+}
+
 func TestOpenStoreAtForCityForceFallbackSkipsPreflightAndNativeOpen(t *testing.T) {
 	t.Setenv(nativeForceFallbackEnv, "1")
 
@@ -412,5 +460,13 @@ func factoryPreflightDoltMetadata() string {
 		"dolt_mode": "server",
 		"dolt_database": "gascity",
 		"project_id": "gc-local"
+	}`
+}
+
+func factoryPreflightDoltliteMetadata() string {
+	return `{
+		"backend": "doltlite",
+		"database": "doltlite",
+		"dolt_database": "gascity"
 	}`
 }

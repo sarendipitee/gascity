@@ -182,6 +182,7 @@ jobs:
         with:
           dolt-version: ${{ env.DOLT_VERSION }}
           bd-version: ${{ env.BD_VERSION }}
+          install-doltlite: "true"
           install-claude-cli: "false"
       - name: Install tools
         run: make install-tools

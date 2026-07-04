@@ -966,6 +966,67 @@ func TestNativeDoltStoreSetMetadataBatchRejectsInvalidExistingMetadata(t *testin
 	}
 }
 
+func TestNativeDoltStoreSetMetadataBatchRunsInTransactionAndMergesMetadata(t *testing.T) {
+	var inTransaction bool
+	runInTransactionCalled := false
+	var storage *nativeDoltStorageSpy
+	storage = &nativeDoltStorageSpy{
+		getIssue: func(context.Context, string) (*beadslib.Issue, error) {
+			if !inTransaction {
+				t.Fatal("GetIssue was called outside RunInTransaction")
+			}
+			raw, err := metadataRawFromMap(map[string]string{
+				"existing": "keep",
+			})
+			if err != nil {
+				t.Fatalf("metadataRawFromMap: %v", err)
+			}
+			return &beadslib.Issue{
+				ID:        "gc-race",
+				Title:     "concurrent metadata",
+				Status:    beadslib.StatusOpen,
+				IssueType: beadslib.TypeTask,
+				Priority:  2,
+				Metadata:  raw,
+			}, nil
+		},
+		updateIssue: func(_ context.Context, _ string, updates map[string]interface{}, _ string) error {
+			if !inTransaction {
+				t.Fatal("UpdateIssue was called outside RunInTransaction")
+			}
+			raw, ok := updates["metadata"].(json.RawMessage)
+			if !ok {
+				t.Fatalf("metadata update type = %T, want json.RawMessage", updates["metadata"])
+			}
+			merged, err := metadataMapFromNative(raw)
+			if err != nil {
+				t.Fatalf("metadataMapFromNative: %v", err)
+			}
+			if merged["existing"] != "keep" {
+				t.Fatalf("merged metadata existing = %q, want keep", merged["existing"])
+			}
+			if merged["new"] != "value" {
+				t.Fatalf("merged metadata new = %q, want value", merged["new"])
+			}
+			return nil
+		},
+		runInTransaction: func(_ context.Context, _ string, fn func(beadslib.Transaction) error) error {
+			runInTransactionCalled = true
+			inTransaction = true
+			defer func() { inTransaction = false }()
+			return fn(nativeDoltTransactionForTest{storage: storage})
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	if err := store.SetMetadataBatch("gc-race", map[string]string{"new": "value"}); err != nil {
+		t.Fatalf("SetMetadataBatch: %v", err)
+	}
+	if !runInTransactionCalled {
+		t.Fatal("RunInTransaction was not called")
+	}
+}
+
 func TestNativeDoltStoreReadyFiltersGasCityExcludedTypesBeforeLimit(t *testing.T) {
 	storage := &nativeDoltStorageSpy{
 		getReadyWork: func(_ context.Context, filter beadslib.WorkFilter) ([]*beadslib.Issue, error) {
@@ -1531,6 +1592,30 @@ func TestOpenNativeDoltStoreAtProjectsScopedEnvDuringOpen(t *testing.T) {
 	}
 	if got := os.Getenv("BEADS_DOLT_SERVER_PORT"); got != "9999" {
 		t.Fatalf("BEADS_DOLT_SERVER_PORT after open = %q, want ambient restored", got)
+	}
+}
+
+func TestOpenNativeDoltStoreAtFallsBackToEnvIssuePrefix(t *testing.T) {
+	oldOpen := nativeDoltOpenBestAvailable
+	t.Cleanup(func() {
+		nativeDoltOpenBestAvailable = oldOpen
+	})
+	nativeDoltOpenBestAvailable = func(context.Context, string) (beadslib.Storage, error) {
+		return &nativeDoltStorageSpy{
+			getConfig: func(context.Context, string) (string, error) {
+				return "", nil
+			},
+		}, nil
+	}
+
+	store, err := OpenNativeDoltStoreAt(context.Background(), filepath.Join(t.TempDir(), "scope"), map[string]string{
+		"GC_BEADS_PREFIX": "dg",
+	})
+	if err != nil {
+		t.Fatalf("OpenNativeDoltStoreAt: %v", err)
+	}
+	if got := store.IDPrefix(); got != "dg" {
+		t.Fatalf("IDPrefix = %q, want env prefix dg", got)
 	}
 }
 

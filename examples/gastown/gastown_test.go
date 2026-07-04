@@ -236,7 +236,7 @@ func renderGastownPromptForPack(t *testing.T, rel, agentName, templateName, rigN
 
 	ctx := map[string]string{
 		"AgentName":               agentName,
-		"AssignedInProgressQuery": `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"; bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_NAME"; bd list --include-ephemeral --status in_progress --assignee="$GC_ALIAS"`,
+		"AssignedInProgressQuery": `bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1; bd ready --include-ephemeral --assignee="$GC_SESSION_NAME" --json --limit=1; bd ready --include-ephemeral --assignee="$GC_ALIAS" --json --limit=1`,
 		"AssignedReadyQuery":      "bd ready --include-ephemeral --assignee=<session>",
 		"BindingName":             bindingName,
 		"BindingPrefix":           bindingPrefix,
@@ -2048,9 +2048,9 @@ func TestDogStartupPromptUsesSplitClaimFirstQueries(t *testing.T) {
 	// fragment: split queries expand, claim precedes inspection, and the
 	// source-aware verification guidance survives rendering.
 	assertContainsInOrder(t, renderedDogPrompt,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_NAME"`,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_ALIAS"`,
+		`bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1`,
+		`bd ready --include-ephemeral --assignee="$GC_SESSION_NAME" --json --limit=1`,
+		`bd ready --include-ephemeral --assignee="$GC_ALIAS" --json --limit=1`,
 		"bd ready --include-ephemeral --assignee=<session>",
 		"bd ready --metadata-field gc.routed_to=<canonical> --unassigned",
 		"gc bd update <id> --claim",
@@ -2073,7 +2073,7 @@ func TestDogStartupPromptUsesSplitClaimFirstQueries(t *testing.T) {
 func TestNonDogStartupPromptsUseCompatibilityAwareWorkLookup(t *testing.T) {
 	const (
 		assignedInProgressTemplate = "{{ .AssignedInProgressQuery }}"
-		assignedInProgressRendered = `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`
+		assignedInProgressRendered = `bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1`
 		hookClaimJSON              = "gc hook --claim --json"
 	)
 	checks := []struct {
@@ -3801,14 +3801,22 @@ func TestPackPromptFilesExist(t *testing.T) {
 
 func TestCityAgentsFilter(t *testing.T) {
 	// Verify config.LoadWithIncludes with both packs produces
-	// only city-scoped agents when no rigs are registered:
+	// only city-scoped explicit agents when no rigs are registered:
 	// mayor/deacon/boot + the gastown dog pool + the dolt maintenance dog
-	// contributed by the composed builtin bd pack + the core control dispatcher
-	// = 6. The two dogs keep distinct binding-qualified identities
+	// contributed by the composed builtin bd pack = 5. The builtin core
+	// control-dispatcher may also be present, but it is implicit and should not
+	// affect the explicit-agent count. The two dogs keep distinct
+	// binding-qualified identities
 	// (gastown.dog vs bd.dog).
 	cfg := loadExpanded(t)
 
-	cityAgents := map[string]bool{"mayor": true, "deacon": true, "boot": true, "dog": true, "control-dispatcher": true}
+	cityAgents := map[string]bool{
+		"mayor":              true,
+		"deacon":             true,
+		"boot":               true,
+		"control-dispatcher": true,
+		"dog":                true,
+	}
 	var explicit int
 	for _, a := range cfg.Agents {
 		if a.Implicit {
@@ -3822,8 +3830,8 @@ func TestCityAgentsFilter(t *testing.T) {
 			t.Errorf("city agent %q: dir = %q, want empty", a.Name, a.Dir)
 		}
 	}
-	if explicit != 6 {
-		t.Errorf("got %d explicit agents, want 6 city-scoped agents (incl. both dogs and control-dispatcher)", explicit)
+	if explicit != 5 {
+		t.Errorf("got %d explicit agents, want 5 explicit city-scoped agents (implicit control-dispatcher excluded)", explicit)
 	}
 }
 
@@ -4019,6 +4027,7 @@ func TestWitnessPatrolNextIterationBurnIsIdempotentSafe(t *testing.T) {
 		t.Error("witness next-iteration has no clean exit after burn")
 	}
 }
+
 // TestRefineryPromptUsesCanonicalAgentIdentity verifies the refinery
 // prompt's wisp lookup and assignment commands use $GC_AGENT, which the
 // session harness guarantees (internal/session/lifecycle.go). $GC_ALIAS

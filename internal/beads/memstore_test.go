@@ -160,6 +160,35 @@ func TestMemStoreReleaseIfCurrentDoesNotClobberConcurrentClaim(t *testing.T) {
 	}
 }
 
+func TestMemStoreUpdateRejectsStaleExpectedStatus(t *testing.T) {
+	s := beads.NewMemStore()
+	b, err := s.Create(beads.Bead{Title: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "open"
+	closed := "closed"
+	if err := s.Update(b.ID, beads.UpdateOpts{Status: &closed, ExpectedStatus: &expected}); err != nil {
+		t.Fatalf("initial status transition: %v", err)
+	}
+
+	staleExpected := "open"
+	reopen := "open"
+	err = s.Update(b.ID, beads.UpdateOpts{Status: &reopen, ExpectedStatus: &staleExpected})
+	if !errors.Is(err, beads.ErrStatusConflict) {
+		t.Fatalf("stale transition error = %v, want ErrStatusConflict", err)
+	}
+
+	got, err := s.Get(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("status = %q, want closed after stale conflict", got.Status)
+	}
+}
+
 func TestMemStoreListByLabel(t *testing.T) {
 	s := beads.NewMemStore()
 
@@ -628,6 +657,37 @@ func TestMemStoreReadyRespectsBlockingDeps(t *testing.T) {
 	}
 	if got[0].ID != blocked.ID || got[1].ID != ready.ID {
 		t.Fatalf("Ready() after closing blocker IDs = [%s %s], want [%s %s]", got[0].ID, got[1].ID, blocked.ID, ready.ID)
+	}
+}
+
+func TestMemStoreReadyFailedClosedDependencyStillBlocks(t *testing.T) {
+	s := beads.NewMemStore()
+
+	blocker, err := s.Create(beads.Bead{Title: "blocker", Type: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := s.Create(beads.Bead{Title: "blocked", Type: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := s.Create(beads.Bead{Title: "ready", Type: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DepAdd(blocked.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CloseAll([]string{blocker.ID}, map[string]string{"gc.outcome": "fail"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Ready()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != ready.ID {
+		t.Fatalf("Ready() after failed blocker = %#v, want only %s", got, ready.ID)
 	}
 }
 

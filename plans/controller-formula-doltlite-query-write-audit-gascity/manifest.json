@@ -1,0 +1,49 @@
+{
+  "schema": "gascity.workflow-docs.v1",
+  "workflow_root": "gc-9d37",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity",
+  "artifact_root_relative": "plans/controller-formula-doltlite-query-write-audit-gascity",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity/manifest.json",
+  "manifest_path_relative": "plans/controller-formula-doltlite-query-write-audit-gascity/manifest.json",
+  "docs_change_id": "ortwotztprouozqnyqzlskszyvsyyoup",
+  "source_workspace": "missing",
+  "source_workspace_path": "missing",
+  "source_change_id": "missing",
+  "documents": [
+    {
+      "name": "implementation-summary",
+      "schema": "gc.build.implementation-summary.v1",
+      "path": "plans/controller-formula-doltlite-query-write-audit-gascity/implementation-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity/implementation-summary.md",
+      "hash": "sha256:5e0d6d885ff8af91b9e1e6a6c9c3006e0872ac2513b4ecb751a72af5cf0b45d5",
+      "change_id": "wprslqwzkmtnylqtutxpsmkotzxumrto"
+    },
+    {
+      "name": "final-report",
+      "schema": "gc.build.final-report.v1",
+      "path": "plans/controller-formula-doltlite-query-write-audit-gascity/final-report.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity/final-report.md",
+      "hash": "sha256:72dd8ec6ab1c824b1a2c3651ad43406fb5d7d19e5412773765cb09317fd9d4cd",
+      "change_id": "zxpqxvmxnprmqswnslnuqxyvsnwktqro"
+    },
+    {
+      "name": "review",
+      "schema": "gc.build.review.v1",
+      "path": "plans/controller-formula-doltlite-query-write-audit-gascity/review.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity/review.md",
+      "hash": "sha256:cbe57274d81bb72ac4725ffea88c21b20a2b13c9e9ce385b161d03c735cdf737",
+      "change_id": "ortwotztprouozqnyqzlskszyvsyyoup"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/controller-formula-doltlite-query-write-audit-gascity/plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/controller-formula-doltlite-query-write-audit-gascity/plan.md",
+      "hash": "sha256:7d8a5732338073c2ac30dc16de7ba8d32d468af7c6e61e72640ec909857ca7e0",
+      "change_id": "ortwotztprouozqnyqzlskszyvsyyoup"
+    }
+  ]
+}
