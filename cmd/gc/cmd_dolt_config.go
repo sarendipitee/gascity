@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/spf13/cobra"
 )
@@ -38,6 +40,7 @@ func newDoltConfigCmd(_ io.Writer, stderr io.Writer) *cobra.Command {
 		scopeDir     string
 		issuePrefix  string
 		doltDatabase string
+		customTypes  string
 	)
 
 	writeManaged := &cobra.Command{
@@ -113,6 +116,49 @@ func newDoltConfigCmd(_ io.Writer, stderr io.Writer) *cobra.Command {
 	_ = normalizeScope.MarkFlagRequired("dir")
 	_ = normalizeScope.MarkFlagRequired("prefix")
 	cmd.AddCommand(normalizeScope)
+
+	repairDoltliteRuntime := &cobra.Command{
+		Use:    "repair-doltlite-runtime",
+		Short:  "Repair canonical DoltLite runtime config after backend init",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if cityPath == "" {
+				fmt.Fprintln(stderr, "gc dolt-config repair-doltlite-runtime: missing --city") //nolint:errcheck
+				return errExit
+			}
+			if scopeDir == "" {
+				fmt.Fprintln(stderr, "gc dolt-config repair-doltlite-runtime: missing --dir") //nolint:errcheck
+				return errExit
+			}
+			if issuePrefix == "" {
+				fmt.Fprintln(stderr, "gc dolt-config repair-doltlite-runtime: missing --prefix") //nolint:errcheck
+				return errExit
+			}
+			if err := normalizeCanonicalBdScopeFilesForInit(cityPath, scopeDir, issuePrefix, doltDatabase); err != nil {
+				fmt.Fprintf(stderr, "gc dolt-config repair-doltlite-runtime: %v\n", err) //nolint:errcheck
+				return errExit
+			}
+			required := doctor.RequiredCustomTypes
+			if trimmed := strings.TrimSpace(customTypes); trimmed != "" {
+				required = splitCustomTypeList(trimmed)
+			}
+			if err := ensureCustomTypesForInit(scopeDir, required); err != nil {
+				fmt.Fprintf(stderr, "gc dolt-config repair-doltlite-runtime: %v\n", err) //nolint:errcheck
+				return errExit
+			}
+			return nil
+		},
+	}
+	repairDoltliteRuntime.Flags().StringVar(&cityPath, "city", "", "city root")
+	repairDoltliteRuntime.Flags().StringVar(&scopeDir, "dir", "", "scope root to normalize")
+	repairDoltliteRuntime.Flags().StringVar(&issuePrefix, "prefix", "", "scope issue prefix")
+	repairDoltliteRuntime.Flags().StringVar(&doltDatabase, "dolt-database", "", "pinned Dolt database")
+	repairDoltliteRuntime.Flags().StringVar(&customTypes, "custom-types", "", "comma-separated custom bead types")
+	_ = repairDoltliteRuntime.MarkFlagRequired("city")
+	_ = repairDoltliteRuntime.MarkFlagRequired("dir")
+	_ = repairDoltliteRuntime.MarkFlagRequired("prefix")
+	cmd.AddCommand(repairDoltliteRuntime)
 	return cmd
 }
 

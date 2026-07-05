@@ -1021,13 +1021,13 @@ func finalizeCanonicalBdScopeInit(cityPath, dir, prefix, doltDatabase string) er
 	return verifyCanonicalBdScopeStoreReady(store)
 }
 
-func ensureRequiredCustomTypesForInit(dir string) error {
+func ensureCustomTypesForInit(dir string, required []string) error {
 	configPath := filepath.Join(dir, ".beads", "config.yaml")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
 	}
-	next, changed := mergeTypesCustomConfig(data, doctor.RequiredCustomTypes)
+	next, changed := mergeTypesCustomConfig(data, required)
 	if !changed {
 		return nil
 	}
@@ -1035,6 +1035,10 @@ func ensureRequiredCustomTypesForInit(dir string) error {
 		return fmt.Errorf("write required custom bead types: %w", err)
 	}
 	return nil
+}
+
+func ensureRequiredCustomTypesForInit(dir string) error {
+	return ensureCustomTypesForInit(dir, doctor.RequiredCustomTypes)
 }
 
 func mergeTypesCustomConfig(data []byte, required []string) ([]byte, bool) {

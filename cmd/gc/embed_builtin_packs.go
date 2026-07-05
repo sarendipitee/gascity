@@ -192,6 +192,9 @@ func builtinImportsForInit(cityProvider, cityBackend string) (map[string]config.
 		if resolvedBackend.Name() != "doltlite" {
 			names = appendRequiredBuiltinPack(names, "bd")
 		}
+		for _, name := range resolvedBackend.RequiredBuiltinPacks() {
+			names = appendRequiredBuiltinPack(names, name)
+		}
 	}
 	return builtinImportsForNames(names)
 }
