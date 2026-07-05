@@ -837,6 +837,15 @@ func shutdownBeadsProvider(cityPath string) error {
 // exec providers get the scope's bead directory in the subprocess env and
 // providers that run bd init elsewhere (for example gc-beads-k8s inside the
 // pod) must set it in their own wrapper before invoking bd init.
+// doltliteScopeStoreExists reports whether an embedded DoltLite bead store
+// already exists for the scope dir (.beads/doltlite/*.db). Used to make
+// beads-init idempotent for existing DoltLite stores without relying on
+// init error-string matching (hs-373vk).
+func doltliteScopeStoreExists(dir string) bool {
+	matches, err := filepath.Glob(filepath.Join(dir, ".beads", "doltlite", "*.db"))
+	return err == nil && len(matches) > 0
+}
+
 func initBeadsForDir(cityPath, dir, prefix, doltDatabase string) error {
 	backend := resolveBeadsBackend(cityPath)
 	if cityUsesBdStoreContract(cityPath) && gcDoltSkip() {
@@ -856,6 +865,16 @@ func initBeadsForDir(cityPath, dir, prefix, doltDatabase string) error {
 		}
 		script := strings.TrimPrefix(provider, "exec:")
 		if execProviderUsesCanonicalBdScopeFiles(provider) && !backend.NeedsManagedServer() {
+			// hs-373vk: existence-keyed idempotency for DoltLite. If an embedded
+			// DoltLite store already exists on this scope, skip re-init — the
+			// lifecycle's `bd init --backend doltlite` fails on an existing store
+			// (and post-swap the plugin bd rejects the doltlite backend outright).
+			// Keyed on STORE EXISTENCE, never on init error-string matching (a
+			// blanket match would also skip a real FRESH init and leave no store).
+			// Plugin serve metadata is written separately by `bd backend install`.
+			if doltliteScopeStoreExists(dir) {
+				return nil
+			}
 			env, err := providerLifecycleProcessEnvWithError(cityPath, provider)
 			if err != nil {
 				return err
