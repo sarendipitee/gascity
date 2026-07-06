@@ -2601,6 +2601,20 @@ doltlite_maintenance_due() {
     [ $((now - last)) -ge "$interval" ]
 }
 
+# run_doltlite_reindex rebuilds the DoltLite store's secondary indexes.
+# `bd flatten`/`bd gc` rewrite the store (like a clone/pull) and leave the
+# secondary indexes stale, so index-path reads (count/status/list) silently
+# return wrong results until a REINDEX (ga-7hei). It runs through the same
+# libdoltlite-linked bd used for flatten/gc above, so bd resolves the store's
+# .db from .beads/metadata.json and REINDEX targets exactly the database the
+# read path opens (no glob that could pick the wrong file). Best-effort and
+# non-fatal: stdout ("OK, 0 rows affected") is suppressed, but any SQL error
+# reaches the maintenance log via stderr and the caller warns on non-zero exit.
+run_doltlite_reindex() {
+    local dir="$1"
+    run_bd_doltlite "$dir" sql 'REINDEX' >/dev/null
+}
+
 run_doltlite_existing_db_maintenance() {
     local dir="$1"
     local stamp="$dir/.beads/doltlite/.gc-maintenance.stamp"
@@ -2610,6 +2624,9 @@ run_doltlite_existing_db_maintenance() {
     echo "gc-beads-bd: running doltlite maintenance for $dir" >&2
     run_bd_doltlite "$dir" flatten --force --json >/dev/null 2>&1 || echo "warning: bd flatten failed for $dir" >&2
     run_bd_doltlite "$dir" gc --skip-decay --force --json >/dev/null 2>&1 || echo "warning: bd gc failed for $dir" >&2
+    # flatten/gc leave the SQLite secondary indexes stale; rebuild them so
+    # index-path reads don't silently return wrong data (ga-7hei).
+    run_doltlite_reindex "$dir" || echo "warning: doltlite reindex failed for $dir" >&2
     mkdir -p "$dir/.beads/doltlite" 2>/dev/null || true
     date +%s > "$stamp" 2>/dev/null || true
 }
