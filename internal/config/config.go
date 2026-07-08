@@ -91,38 +91,61 @@ func IsDeterministicControlDispatcher(agent *Agent) bool {
 }
 
 // PreferredDeterministicControlDispatcher returns the deterministic control-
-// dispatcher to route a scope's control beads to, binding-agnostic. The
-// city-level singleton (Dir == "") is preferred for every scope — given
-// max_active_sessions=1, it is the one whose session actually runs and claims
-// the control queue — and a rig-scoped instance (Dir == rigContext) is used only
-// when no city-level deterministic dispatcher is configured. Routing to a
-// rig-scoped copy when a city singleton exists strands the control bead, since
-// the singleton session never claims a <rig>/... route. This is the canonical
-// selection shared by the graph.v2 decoration path (internal/graphroute) and the
-// attempt-time control re-route path (internal/dispatch); keep them in lockstep.
+// dispatcher to route a scope's control beads to, binding-agnostic. A RESIDENT
+// rig-scoped instance (Dir == rigContext, kept live by a [[named_session]]
+// mode="always" or a min_active_sessions>=1 floor) is preferred when one exists.
+// Otherwise the city-level singleton (Dir == "") is preferred, and a rig-scoped
+// copy is used as a last resort only when no city-level dispatcher is configured.
 func PreferredDeterministicControlDispatcher(cfg *City, rigContext string) (Agent, bool) {
 	if cfg == nil {
 		return Agent{}, false
 	}
 	rigContext = strings.TrimSpace(rigContext)
-	var rigScoped Agent
-	haveRigScoped := false
+	var citySingleton, rigScoped Agent
+	haveCity, haveRig := false, false
 	for _, a := range cfg.Agents {
 		if !IsDeterministicControlDispatcher(&a) {
 			continue
 		}
 		if strings.TrimSpace(a.Dir) == "" {
-			return a, true
+			if !haveCity {
+				citySingleton, haveCity = a, true
+			}
+			continue
 		}
-		if !haveRigScoped && strings.TrimSpace(a.Dir) == rigContext {
-			rigScoped = a
-			haveRigScoped = true
+		if !haveRig && rigContext != "" && strings.TrimSpace(a.Dir) == rigContext {
+			rigScoped, haveRig = a, true
 		}
 	}
-	if haveRigScoped {
+	if haveRig && controlDispatcherIsResident(cfg, &rigScoped) {
+		return rigScoped, true
+	}
+	if haveCity {
+		return citySingleton, true
+	}
+	if haveRig {
 		return rigScoped, true
 	}
 	return Agent{}, false
+}
+
+// controlDispatcherIsResident reports whether a control-dispatcher agent is
+// kept live by the controller.
+func controlDispatcherIsResident(cfg *City, agent *Agent) bool {
+	if cfg == nil || agent == nil {
+		return false
+	}
+	if agent.MinActiveSessions != nil && *agent.MinActiveSessions >= 1 {
+		return true
+	}
+	qn := agent.QualifiedName()
+	for i := range cfg.NamedSessions {
+		ns := &cfg.NamedSessions[i]
+		if ns.ModeOrDefault() == "always" && ns.TemplateQualifiedName() == qn {
+			return true
+		}
+	}
+	return false
 }
 
 // BindingQualifiedName returns the binding-qualified agent identity without a
@@ -658,6 +681,10 @@ type AgentOverride struct {
 	// WorkDir overrides the agent's working directory without changing
 	// its qualified identity or rig association.
 	WorkDir *string `toml:"work_dir,omitempty"`
+	// Pack overrides the pack/workspace route key exposed as {{.Pack}}.
+	Pack *string `toml:"pack,omitempty"`
+	// PackRoot overrides the target pack directory exposed as {{.PackRoot}}.
+	PackRoot *string `toml:"pack_root,omitempty"`
 	// TmuxAlias overrides the tmux session name template
 	// (see Agent.TmuxAlias for semantics).
 	TmuxAlias *string `toml:"tmux_alias,omitempty"`
@@ -1569,9 +1596,9 @@ func durationFloorOr(raw string, def, floor time.Duration) time.Duration {
 }
 
 // SetupTimeoutDuration returns the setup timeout as a time.Duration.
-// Defaults to 10s if empty or unparseable.
+// Defaults to 60s if empty or unparseable.
 func (s *SessionConfig) SetupTimeoutDuration() time.Duration {
-	return durationOr(s.SetupTimeout, 10*time.Second)
+	return durationOr(s.SetupTimeout, 60*time.Second)
 }
 
 // NudgeReadyTimeoutDuration returns the nudge ready timeout as a time.Duration.
@@ -2436,6 +2463,23 @@ type DaemonConfig struct {
 	// accumulate without bound across pool recycles. Set to false to
 	// retain worktrees for post-session diagnostics.
 	AutoPruneWorkerDir *bool `toml:"auto_prune_worker_dir,omitempty" jsonschema:"default=true"`
+	// SessionLivenessChecks configures per-session freshness monitoring.
+	SessionLivenessChecks []SessionLivenessCheck `toml:"session_liveness_checks,omitempty"`
+}
+
+// SessionLivenessCheck is one entry in DaemonConfig.SessionLivenessChecks.
+type SessionLivenessCheck struct {
+	// Sessions lists the runtime session names to monitor for freshness.
+	Sessions []string `toml:"sessions"`
+	// FreshnessWindow is the maximum allowed gap since last session activity.
+	FreshnessWindow string `toml:"freshness_window"`
+	// EscalateTo is an optional session name to nudge when any listed session is stale.
+	EscalateTo string `toml:"escalate_to,omitempty"`
+}
+
+// FreshnessWindowDuration parses FreshnessWindow, returning 0 on empty or invalid input.
+func (c *SessionLivenessCheck) FreshnessWindowDuration() time.Duration {
+	return durationOr(c.FreshnessWindow, 0)
 }
 
 // AutoRestartOnDriftEnabled reports whether the supervisor should be
@@ -2882,6 +2926,10 @@ type Agent struct {
 	// agent's qualified identity. Relative paths resolve against city root
 	// and may use the same template placeholders as session_setup.
 	WorkDir string `toml:"work_dir,omitempty"`
+	// Pack is the pack/workspace route key exposed to path templates as {{.Pack}}.
+	Pack string `toml:"pack,omitempty"`
+	// PackRoot overrides the resolved target pack directory exposed as {{.PackRoot}}.
+	PackRoot string `toml:"pack_root,omitempty"`
 	// TmuxAlias overrides the tmux session_name for pool and factory-created
 	// manual sessions of this agent. When unset, sessions fall back to the
 	// universal derivation ("s-<beadID>" for ad-hoc sessions,

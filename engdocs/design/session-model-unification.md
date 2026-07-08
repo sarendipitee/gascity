@@ -560,11 +560,18 @@ It must not become a second general-purpose routing channel.
 It declares a step's intended config/pool target in recipe metadata, for
 steps where `assignee` cannot be used (e.g. check and control-dispatch
 steps). The stampers resolve it into `gc.routed_to` before a bead is
-persisted, so no runtime demand/claim/scale reader consults it:
-`gc.routed_to` is the sole persisted routing key (ga-eld2x). A bare
-`gc.run_target` left on a stored bead is inert authoring provenance;
-`gc doctor --fix` backfills `gc.routed_to` for any pre-migration workflow
-root that still carries only `gc.run_target`.
+persisted. `gc.routed_to` is the sole normal persisted routing key
+(ga-eld2x).
+
+During the migration window, runtime demand readers may keep the narrow
+dispatch fallback documented in the dispatch architecture: a
+`gc.run_target=<target>` workflow root with empty `gc.routed_to` remains
+visible as generic demand until `gc doctor --fix` backfills
+`gc.routed_to`. That fallback is workflow-root-only, must not apply to
+child beads, must be shared by the controller count form and worker claim
+form, and must be removed once the migration gate closes. A bare
+`gc.run_target` left on any other stored bead is inert authoring
+provenance.
 
 ### Claiming Generic Work
 
@@ -635,6 +642,38 @@ The synthesized default remains, but becomes origin-aware at runtime:
 Named and manual sessions stop at explicit ownership.
 
 Custom `work_query` and `scale_check` remain escape hatches.
+
+### Controller demand snapshot reuse
+
+The controller may reuse a previously computed generic demand snapshot
+across patrol ticks only when demand inputs are event-backed and still
+fresh. Snapshot reuse is an optimization; it must not become a second
+demand source or weaken the `scale_check` / `work_query` correspondence.
+
+Reusable snapshots are allowed only when all generic demand for the city is
+derived from default bead-backed routing predicates. Any configured custom
+`scale_check` makes demand non-event-backed for this purpose and forces the
+controller back to bounded patrol re-evaluation.
+
+A patrol snapshot is valid only while all of these inputs remain unchanged:
+
+- config revision / effective agent config
+- session-bead snapshot used to compute exact continuity and cap state
+- ready generic work visible through the city and rig bead stores
+- the bounded maximum snapshot age
+
+The ready-work invalidation key must be derived from live store state, not
+only from an in-process cache. It should include only fields that can affect
+generic demand or the temporary migration fallback, such as bead ID,
+status, type, `assignee`, update time, `gc.routed_to`, `gc.kind`, and the
+workflow-root-only `gc.run_target` migration field. If the invalidation
+read fails or is partial, the controller must fail open by refreshing the
+snapshot rather than reusing a stale one.
+
+Non-patrol triggers such as explicit controller pokes, config reload, and
+dispatch events rebuild immediately. A reused snapshot may install
+idempotent runtime side effects derived from the snapshot, but it may not
+rerun or reinterpret prompt-side `work_query`.
 
 ## Runtime Environment
 

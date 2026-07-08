@@ -1,0 +1,18 @@
+{
+  "gc.kind": "github_source",
+  "gc.github.kind": "pull",
+  "gc.github.repo": "gastownhall/gascity",
+  "gc.github.number": "3617",
+  "gc.github.url": "https://github.com/gastownhall/gascity/pull/3617",
+  "gc.github.title": "Route pack pool sessions from trigger beads",
+  "gc.github.state": "open",
+  "gc.github.author": "duncan4123",
+  "gc.github.body_hash": "sha256:ee70f8a2f52bc3e5f628a73610394da776fef8cfc9f9759a259587067b7428f9",
+  "gc.github.head_sha": "540ce3457b9bdeb113da08f1dafbe8a6e1d74257",
+  "gc.github.head_ref": "trigger-bead-pack-workspaces",
+  "gc.github.head_repo": "duncan4123/gascity",
+  "gc.github.base_ref": "main",
+  "gc.github.base_repo": "gastownhall/gascity",
+  "gc.github.snapshot_path": "/data/projects/doltlite-gascity/gascity/gc-plans/github/pulls/gastownhall/gascity/3617/source.json",
+  "gc.github.updated_at": "2026-06-21T04:46:28Z"
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,14 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 )
+
+func cmdOrderSweepNudgeMailRunForTest(store beads.Store, nudgeState *nudgequeue.State, now time.Time, nudgeTTL, mailTTL time.Duration, quiet bool, stdout, stderr io.Writer) int {
+	return cmdOrderSweepNudgeMailRun(beads.NudgesStore{Store: store}, beads.MailStore{Store: store}, nudgeState, now, nudgeTTL, mailTTL, quiet, stdout, stderr)
+}
+
+func cmdOrderSweepNudgeMailDryRunForTest(store beads.Store, nudgeState *nudgequeue.State, now time.Time, nudgeTTL, mailTTL time.Duration, quiet bool, stdout, stderr io.Writer) int {
+	return cmdOrderSweepNudgeMailDryRun(beads.NudgesStore{Store: store}, beads.MailStore{Store: store}, nudgeState, now, nudgeTTL, mailTTL, quiet, stdout, stderr)
+}
 
 // nudgeSeed builds a seed Bead for NewMemStoreFrom representing an open nudge bead.
 // id must be unique within the seed slice.
@@ -453,7 +462,7 @@ func TestCmdOrderSweepNudgeMailRun_NothingToClose(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, nil, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if !strings.Contains(stdout.String(), "nothing to close") {
 		t.Errorf("expected 'nothing to close' message, got: %q", stdout.String())
 	}
@@ -468,7 +477,7 @@ func TestCmdOrderSweepNudgeMailRun_NormalOutput(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, seed, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	out := stdout.String()
 	if !strings.Contains(out, "nudge-mail-sweep: closed") {
 		t.Errorf("expected 'nudge-mail-sweep: closed' in output, got: %q", out)
@@ -491,7 +500,7 @@ func TestCmdOrderSweepNudgeMailRun_CapReachedMessage(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, seed, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if !strings.Contains(stdout.String(), "cap reached") {
 		t.Errorf("expected 'cap reached' in output when budget is full, got: %q", stdout.String())
 	}
@@ -508,7 +517,7 @@ func TestCmdOrderSweepNudgeMailRun_PerBeadErrorPrintedToStderr(t *testing.T) {
 	store := &nudgeSweepFailingClose{MemStore: mem, failIDs: map[string]bool{failID: true}}
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if !strings.Contains(stderr.String(), "ERROR") {
 		t.Errorf("expected ERROR line on stderr for failing bead, got: %q", stderr.String())
 	}
@@ -523,7 +532,7 @@ func TestCmdOrderSweepNudgeMailRun_QuietSuppressesOutput(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, nil, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, true, &stdout, &stderr)
+	cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, true, &stdout, &stderr)
 	if stdout.String() != "" {
 		t.Errorf("expected empty stdout with --quiet, got: %q", stdout.String())
 	}
@@ -534,7 +543,7 @@ func TestCmdOrderSweepNudgeMailDryRun_NothingToClose(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, nil, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailDryRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailDryRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if !strings.Contains(stdout.String(), "nothing to close") {
 		t.Errorf("expected 'nothing to close' for empty store dry-run, got: %q", stdout.String())
 	}
@@ -549,7 +558,7 @@ func TestCmdOrderSweepNudgeMailDryRun_ShowsWouldClose(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, seed, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailDryRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailDryRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	out := stdout.String()
 	if !strings.HasPrefix(out, "[DRY RUN]") {
 		t.Errorf("expected '[DRY RUN]' prefix, got: %q", out)
@@ -571,7 +580,7 @@ func TestCmdOrderSweepNudgeMailDryRun_NoBeadsClosed(t *testing.T) {
 	store := beads.NewMemStoreFrom(100, seed, nil)
 
 	var stdout, stderr bytes.Buffer
-	cmdOrderSweepNudgeMailDryRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	cmdOrderSweepNudgeMailDryRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 
 	// The bead should remain open.
 	open, _ := store.ListOpen()
@@ -597,7 +606,7 @@ func TestCmdOrderSweepNudgeMailDryRun_ListErrorReturnsNonZero(t *testing.T) {
 	store := &nudgeSweepFailingList{MemStore: beads.NewMemStoreFrom(100, nil, nil)}
 
 	var stdout, stderr bytes.Buffer
-	code := cmdOrderSweepNudgeMailDryRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	code := cmdOrderSweepNudgeMailDryRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if code == 0 {
 		t.Errorf("expected non-zero exit code on list error, got %d", code)
 	}
@@ -617,7 +626,7 @@ func TestCmdOrderSweepNudgeMailRun_ListErrorReturnsNonZero(t *testing.T) {
 	store := &nudgeSweepFailingList{MemStore: beads.NewMemStoreFrom(100, nil, nil)}
 
 	var stdout, stderr bytes.Buffer
-	code := cmdOrderSweepNudgeMailRun(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
+	code := cmdOrderSweepNudgeMailRunForTest(store, nil, now, nudgeMailSweepDefaultNudgeTTL, nudgeMailSweepDefaultMailTTL, false, &stdout, &stderr)
 	if code == 0 {
 		t.Errorf("expected non-zero exit code on list error, got %d", code)
 	}

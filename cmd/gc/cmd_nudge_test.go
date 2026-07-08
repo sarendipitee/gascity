@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -459,14 +460,14 @@ func TestExpiredNudgeCleanupSurvivesNilFrontDoor(t *testing.T) {
 		}
 	}
 }
-
-func TestDeliverSessionNudgeWithProviderWaitIdleQueuesForCodex(t *testing.T) {
+func TestDeliverSessionNudgeWithProviderWaitIdleDeliversCodexImmediately(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
 	fake := runtime.NewFake()
 	if err := fake.Start(context.Background(), "sess-worker", runtime.Config{}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	fake.WaitForIdleErrors["sess-worker"] = context.DeadlineExceeded
 
 	target := nudgeTarget{
 		cityPath:    dir,
@@ -480,30 +481,39 @@ func TestDeliverSessionNudgeWithProviderWaitIdleQueuesForCodex(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("deliverSessionNudgeWithProvider = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Queued nudge for worker") {
-		t.Fatalf("stdout = %q, want queued confirmation", stdout.String())
+	if !strings.Contains(stdout.String(), "Nudged worker") {
+		t.Fatalf("stdout = %q, want delivered confirmation", stdout.String())
 	}
+	var waitForIdle, nudgeNow int
 	for _, call := range fake.Calls {
-		if call.Method == "Nudge" {
+		switch call.Method {
+		case "WaitForIdle":
+			waitForIdle++
+		case "NudgeNow":
+			nudgeNow++
+		case "Nudge":
 			t.Fatalf("unexpected direct nudge call: %+v", call)
 		}
+	}
+	if waitForIdle != 1 {
+		t.Fatalf("WaitForIdle calls = %d, want 1", waitForIdle)
+	}
+	if nudgeNow != 1 {
+		t.Fatalf("NudgeNow calls = %d, want 1", nudgeNow)
 	}
 
 	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now())
 	if err != nil {
 		t.Fatalf("listQueuedNudges: %v", err)
 	}
-	if len(pending) != 1 {
-		t.Fatalf("pending = %d, want 1", len(pending))
+	if len(pending) != 0 {
+		t.Fatalf("pending = %d, want 0", len(pending))
 	}
 	if len(inFlight) != 0 {
 		t.Fatalf("inFlight = %d, want 0", len(inFlight))
 	}
 	if len(dead) != 0 {
 		t.Fatalf("dead = %d, want 0", len(dead))
-	}
-	if pending[0].Source != "session" {
-		t.Fatalf("source = %q, want session", pending[0].Source)
 	}
 }
 
@@ -1050,7 +1060,7 @@ func TestDeliverSessionNudgeWithWorkerWaitIdleQueuesUnsupportedProviderAfterResu
 	fake := runtime.NewFake()
 	mgr := newSessionManagerWithConfig(dir, store, fake, nil)
 
-	info, err := mgr.Create(context.Background(), "worker", "Worker", "codex", dir, "codex", nil, session.ProviderResume{}, runtime.Config{})
+	info, err := mgr.Create(context.Background(), "worker", "Worker", "pi", dir, "pi", nil, session.ProviderResume{}, runtime.Config{})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1103,7 +1113,7 @@ func TestDeliverSessionNudgeWithWorkerWaitIdleQueuesUnsupportedProviderAfterResu
 	}
 }
 
-func TestDeliverSessionNudgeWithProviderWaitIdleStartsCodexPollerWhenQueued(t *testing.T) {
+func TestDeliverSessionNudgeWithProviderWaitIdleStartsUnsupportedProviderPollerWhenQueued(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
 	fake := runtime.NewFake()
@@ -1114,7 +1124,7 @@ func TestDeliverSessionNudgeWithProviderWaitIdleStartsCodexPollerWhenQueued(t *t
 	target := nudgeTarget{
 		cityPath:    dir,
 		agent:       config.Agent{Name: "worker"},
-		resolved:    &config.ResolvedProvider{Name: "codex"},
+		resolved:    &config.ResolvedProvider{Name: "pi"},
 		sessionName: "sess-worker",
 	}
 
@@ -2017,7 +2027,7 @@ func TestSendMailNotifyWithProviderStartsCodexPollerWhenQueueingRunningSession(t
 	target := nudgeTarget{
 		cityPath:    dir,
 		agent:       config.Agent{Name: "mayor", MaxActiveSessions: intPtrNudge(1)},
-		resolved:    &config.ResolvedProvider{Name: "codex"},
+		resolved:    &config.ResolvedProvider{Name: "pi"},
 		sessionName: "sess-mayor",
 	}
 
@@ -2095,7 +2105,7 @@ func TestSendMailNotifyWithWorkerStartsPollerBySessionIDForAliasedTarget(t *test
 		alias:       "mayor",
 		agent:       config.Agent{Name: "mayor", MaxActiveSessions: intPtrNudge(1)},
 		sessionID:   info.ID,
-		resolved:    &config.ResolvedProvider{Name: "codex"},
+		resolved:    &config.ResolvedProvider{Name: "pi"},
 		sessionName: info.SessionName,
 	}
 
@@ -2463,12 +2473,15 @@ func TestTryDeliverQueuedNudgesByPollerDeliversAndAcks(t *testing.T) {
 
 	var nudgeCalls []runtime.Call
 	for _, call := range fake.Calls {
-		if call.Method == "Nudge" {
+		if call.Method == "NudgeNow" {
 			nudgeCalls = append(nudgeCalls, call)
+		}
+		if call.Method == "Nudge" {
+			t.Fatalf("unexpected provider-default nudge call: %+v", call)
 		}
 	}
 	if len(nudgeCalls) != 1 {
-		t.Fatalf("nudge calls = %d, want 1", len(nudgeCalls))
+		t.Fatalf("NudgeNow calls = %d, want 1", len(nudgeCalls))
 	}
 	if !strings.Contains(nudgeCalls[0].Message, "<system-reminder>") {
 		t.Fatalf("nudge message = %q, want system-reminder wrapper", nudgeCalls[0].Message)
@@ -2888,12 +2901,15 @@ func TestTryDeliverQueuedNudgesByPollerDeliversDespiteStaleFenceBeadMarkFailure(
 
 	var nudgeCalls []runtime.Call
 	for _, call := range fake.Calls {
-		if call.Method == "Nudge" {
+		if call.Method == "NudgeNow" {
 			nudgeCalls = append(nudgeCalls, call)
+		}
+		if call.Method == "Nudge" {
+			t.Fatalf("unexpected provider-default nudge call: %+v", call)
 		}
 	}
 	if len(nudgeCalls) != 1 {
-		t.Fatalf("nudge calls = %d, want 1", len(nudgeCalls))
+		t.Fatalf("NudgeNow calls = %d, want 1", len(nudgeCalls))
 	}
 	if !strings.Contains(nudgeCalls[0].Message, "wake up and resume your wisp") {
 		t.Fatalf("nudge message = %q, want fence-matching reminder", nudgeCalls[0].Message)
@@ -3035,6 +3051,74 @@ func TestCmdNudgePollSurvivesTransientObserveErrors(t *testing.T) {
 	}
 }
 
+func TestCmdNudgePollSleepsAfterSuccessfulDelivery(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	writeNamedSessionCityTOML(t, cityDir)
+	t.Setenv("GC_CITY", cityDir)
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	created, err := store.Create(beads.Bead{
+		Title:  "Session: worker",
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+			"state":        string(session.StateActive),
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create session: %v", err)
+	}
+
+	observeCalls := 0
+	origObserve := nudgeObserveTarget
+	nudgeObserveTarget = func(_ nudgeTarget, _ beads.Store, _ runtime.Provider) (worker.LiveObservation, error) {
+		observeCalls++
+		if observeCalls == 1 {
+			return worker.LiveObservation{Running: true}, nil
+		}
+		return worker.LiveObservation{Running: false}, nil
+	}
+	defer func() { nudgeObserveTarget = origObserve }()
+
+	deliverCalls := 0
+	origDeliver := deliverQueuedNudgesByPoller
+	deliverQueuedNudgesByPoller = func(nudgeTarget, beads.Store, runtime.Provider, time.Duration, worker.LiveObservation) (bool, error) {
+		deliverCalls++
+		return true, nil
+	}
+	defer func() { deliverQueuedNudgesByPoller = origDeliver }()
+
+	var slept []time.Duration
+	origSleep := nudgePollSleep
+	nudgePollSleep = func(d time.Duration) {
+		slept = append(slept, d)
+	}
+	defer func() { nudgePollSleep = origSleep }()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNudgePoll([]string{created.ID}, "worker-session", 5*time.Millisecond, 0, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgePoll = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if deliverCalls != 1 {
+		t.Fatalf("deliver calls = %d, want 1", deliverCalls)
+	}
+	if len(slept) != 1 || slept[0] != 5*time.Millisecond {
+		t.Fatalf("slept = %v, want one poll interval after successful delivery", slept)
+	}
+}
+
 func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -3104,6 +3188,83 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 				t.Fatalf("%s timestamp drift %s is outside the 1-minute test window (raw=%q)", session.MetadataLastNudgeDeliveredAt, drift, raw)
 			}
 		})
+	}
+}
+
+func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_INJECT_CLOCK", "1")
+
+	cityDir := t.TempDir()
+	writeNamedSessionCityTOML(t, cityDir)
+	t.Setenv("GC_CITY", cityDir)
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	created, err := store.Create(beads.Bead{
+		Title:  "Session: worker",
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+			"state":        string(session.StateActive),
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create session: %v", err)
+	}
+	lockPath := nudgequeue.LockPath(cityDir)
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll lock dir: %v", err)
+	}
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile lock: %v", err)
+	}
+	defer lockFile.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("Flock lock: %v", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	origTimeout := nudgeDrainInjectTimeout
+	nudgeDrainInjectTimeout = 25 * time.Millisecond
+	defer func() { nudgeDrainInjectTimeout = origTimeout }()
+
+	start := time.Now()
+	var stdout, stderr bytes.Buffer
+	code := cmdNudgeDrainWithFormat([]string{created.ID}, true, "codex", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgeDrainWithFormat = %d, want degraded success; stderr=%s", code, stderr.String())
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("Flock unlock: %v", err)
+	}
+	if err := nudgequeue.WithState(cityDir, func(*nudgequeue.State) error { return nil }); err != nil {
+		t.Fatalf("waiting for background drain to release queue lock: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cmdNudgeDrainWithFormat took %s, want bounded hook return", elapsed)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty degraded hook stderr", stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "UserPromptSubmit") {
+		t.Fatalf("stdout = %q, want provider-formatted UserPromptSubmit context", out)
+	}
+	if !strings.Contains(out, "gc nudge drain degraded") {
+		t.Fatalf("stdout = %q, want degraded hook notice", out)
+	}
+	if !strings.Contains(out, "Current time:") {
+		t.Fatalf("stdout = %q, want clock context preserved", out)
 	}
 }
 

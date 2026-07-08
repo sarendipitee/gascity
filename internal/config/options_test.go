@@ -1103,12 +1103,12 @@ func TestBuiltinProviders_ClaudeHasNilArgsAndOptionDefaults(t *testing.T) {
 	}
 }
 
-func TestBuiltinProviders_CodexHasNilArgsAndOptionDefaults(t *testing.T) {
+func TestBuiltinProviders_CodexHasBaseArgsAndOptionDefaults(t *testing.T) {
 	builtins := BuiltinProviders()
 	codex := builtins["codex"]
 
 	if codex.Args != nil {
-		t.Errorf("codex Args should be nil, got %v", codex.Args)
+		t.Errorf("codex Args = %v, want nil", codex.Args)
 	}
 	if codex.OptionDefaults == nil {
 		t.Fatal("codex OptionDefaults should not be nil")

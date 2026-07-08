@@ -174,6 +174,55 @@ func TestManagedDoltOpsCheckDiscoversRigMetadataOnConfigError(t *testing.T) {
 	}
 }
 
+func TestBuildDoctorChecksSkipsManagedDoltChecksForDoltliteBackend(t *testing.T) {
+	clearInheritedBeadsEnv(t)
+
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "demo"},
+		Beads: config.BeadsConfig{
+			Provider: "bd",
+			Backend:  "doltlite",
+		},
+	}
+
+	if !managedDoltOpsCheckSkip(cityDir, cfg, nil) {
+		t.Fatal("managedDoltOpsCheckSkip() = false, want true for doltlite backend")
+	}
+
+	checks := buildDoctorChecks(cityDir, cfg, nil, buildDoctorChecksOpts{
+		ControllerRunning:    false,
+		SkipCityDoltCheck:    false,
+		SkipManagedDoltCheck: false,
+	})
+
+	names := make([]string, 0, len(checks))
+	for _, check := range checks {
+		names = append(names, check.Name())
+	}
+
+	for _, legacyName := range []string{"dolt-server", "dolt-noms-size", "dolt-config", "dolt-version"} {
+		for _, name := range names {
+			if name == legacyName {
+				t.Fatalf("%s registered for doltlite backend; names=%v", legacyName, names)
+			}
+		}
+	}
+}
+
 func TestDoDoctorRunsCityDoltCheckForInheritedBdRigUnderFileBackedCity(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := filepath.Join(cityDir, "frontend")

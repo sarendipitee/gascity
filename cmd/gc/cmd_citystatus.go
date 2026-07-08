@@ -48,10 +48,12 @@ type HealthJSON struct {
 
 // ControllerJSON represents controller state in JSON output.
 type ControllerJSON struct {
-	Running bool   `json:"running"`
-	PID     int    `json:"pid,omitempty"`
-	Mode    string `json:"mode,omitempty"`
-	Status  string `json:"status,omitempty"`
+	Running bool             `json:"running"`
+	PID     int              `json:"pid,omitempty"`
+	Mode    string           `json:"mode,omitempty"`
+	Status  string           `json:"status,omitempty"`
+	Binary  string           `json:"binary,omitempty"`
+	Build   *BinaryBuildJSON `json:"build,omitempty"`
 }
 
 // StatusAgentJSON represents an agent in the JSON status output.
@@ -613,6 +615,8 @@ func controllerStatusForCity(cityPath string) ControllerJSON {
 		if pid := supervisorAliveHook(); pid != 0 {
 			supervisorWasAlive = true
 			ctrl.PID = pid
+			ctrl.Binary = processBinaryForPID(pid)
+			ctrl.Build = processBuildCheckForCity(cityPath, ctrl.Binary)
 			if running, status, known := supervisorCityRunningHook(cityPath); known {
 				ctrl.Running = running
 				ctrl.Status = status
@@ -626,16 +630,33 @@ func controllerStatusForCity(cityPath string) ControllerJSON {
 	}
 	if supervisorWasAlive {
 		if pid := controllerAliveWithin(cityPath, controllerStatusStandaloneFallbackTimeout); pid != 0 {
-			return ControllerJSON{Running: true, PID: pid, Mode: "supervisor"}
+			binary := processBinaryForPID(pid)
+			return ControllerJSON{Running: true, PID: pid, Mode: "supervisor", Binary: binary, Build: processBuildCheckForCity(cityPath, binary)}
 		}
 	}
 	if pid := controllerAlive(cityPath); pid != 0 {
-		return ControllerJSON{Running: true, PID: pid, Mode: "standalone"}
+		binary := processBinaryForPID(pid)
+		return ControllerJSON{Running: true, PID: pid, Mode: "standalone", Binary: binary, Build: processBuildCheckForCity(cityPath, binary)}
 	}
 	if err == nil && registered {
 		return ControllerJSON{Mode: "supervisor"}
 	}
 	return ControllerJSON{}
+}
+
+func processBinaryForPID(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	path, err := readProcessExePath(pid)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func pidBinarySuffix(binary string) string {
+	return processDetailsSuffix(binary, nil)
 }
 
 func controllerAliveWithin(cityPath string, timeout time.Duration) int {
@@ -679,15 +700,15 @@ func controllerStatusLine(ctrl ControllerJSON) string {
 	switch ctrl.Mode {
 	case "supervisor":
 		if ctrl.Running {
-			return fmt.Sprintf("supervisor-managed (PID %d)", ctrl.PID)
+			return fmt.Sprintf("supervisor-managed (PID %d%s)", ctrl.PID, processDetailsSuffix(ctrl.Binary, ctrl.Build))
 		}
 		if ctrl.PID != 0 {
-			return fmt.Sprintf("supervisor-managed (PID %d, %s)", ctrl.PID, controllerSupervisorStatusText(ctrl.Status))
+			return fmt.Sprintf("supervisor-managed (PID %d, %s%s)", ctrl.PID, controllerSupervisorStatusText(ctrl.Status), processDetailsSuffix(ctrl.Binary, ctrl.Build))
 		}
 		return "supervisor-managed (supervisor not running)"
 	case "standalone":
 		if ctrl.Running {
-			return fmt.Sprintf("standalone-managed (PID %d)", ctrl.PID)
+			return fmt.Sprintf("standalone-managed (PID %d%s)", ctrl.PID, processDetailsSuffix(ctrl.Binary, ctrl.Build))
 		}
 	}
 	return "stopped"
@@ -705,6 +726,7 @@ func controllerStatusGuidance(ctrl ControllerJSON, cityPath string) []string {
 		authority := "Authority: standalone controller"
 		if ctrl.PID != 0 {
 			authority = fmt.Sprintf("Authority: standalone controller PID %d", ctrl.PID)
+			authority += processAuthoritySuffix(ctrl.Binary, ctrl.Build)
 		}
 		return []string{
 			authority,
@@ -717,7 +739,9 @@ func controllerStatusGuidance(ctrl ControllerJSON, cityPath string) []string {
 				"Next: " + startCommand + " to start the supervisor and reconcile this city",
 			}
 		}
-		lines := []string{fmt.Sprintf("Authority: supervisor process PID %d", ctrl.PID)}
+		authority := fmt.Sprintf("Authority: supervisor process PID %d", ctrl.PID)
+		authority += processAuthoritySuffix(ctrl.Binary, ctrl.Build)
+		lines := []string{authority}
 		if ctrl.Running {
 			return lines
 		}

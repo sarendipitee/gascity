@@ -381,7 +381,7 @@ func TestCheckVersionCompatSourceBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := PreflightChecker{BeadsLibraryVersion: tt.libVersion}
-			got := c.checkVersionCompat(tt.ctx, nil)
+			got := c.checkVersionCompat(preflightMetadata{Backend: "dolt"}, tt.ctx, nil)
 			if got.ID != PreflightCheckVersionCompat {
 				t.Fatalf("ID = %q, want %q", got.ID, PreflightCheckVersionCompat)
 			}

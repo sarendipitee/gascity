@@ -166,6 +166,34 @@ func TestDoltliteRuntimeConfigUsesSQLiteParameters(t *testing.T) {
 	}
 }
 
+func TestDoltliteInitCreatesBackendDirectoryBeforeBdInit(t *testing.T) {
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	fn := extractShellFunction(t, string(data), "op_init")
+
+	permissionsIdx := strings.Index(fn, `ensure_beads_dir_permissions "$dir"`)
+	mkdirIdx := strings.Index(fn, `mkdir -p "$dir/.beads/doltlite"`)
+	readyIdx := strings.Index(fn, `doltlite_bd_schema_ready "$dir" "$prefix"`)
+	initIdx := strings.Index(fn, `ensure_doltlite_bd_schema "$dir" "$prefix" "$database"`)
+	for name, idx := range map[string]int{
+		"ensure_beads_dir_permissions": permissionsIdx,
+		"mkdir -p .beads/doltlite":     mkdirIdx,
+		"doltlite_bd_schema_ready":     readyIdx,
+		"ensure_doltlite_bd_schema":    initIdx,
+	} {
+		if idx < 0 {
+			t.Fatalf("op_init missing %s:\n%s", name, fn)
+		}
+	}
+	if permissionsIdx >= mkdirIdx || mkdirIdx >= readyIdx || readyIdx >= initIdx {
+		t.Fatalf("op_init must create .beads/doltlite after permission setup and before DoltLite schema checks/init:\n%s", fn)
+	}
+}
+
 func TestDoltliteMaintenanceDueUsesPortableStatFallback(t *testing.T) {
 	root := repoRootForLint(t)
 	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
@@ -178,6 +206,36 @@ func TestDoltliteMaintenanceDueUsesPortableStatFallback(t *testing.T) {
 	want := `stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp" 2>/dev/null || echo 0`
 	if !strings.Contains(fn, want) {
 		t.Fatalf("doltlite_maintenance_due missing portable GNU/BSD stat fallback %q:\n%s", want, fn)
+	}
+}
+
+// TestDoltliteReindexUsesBdSQL pins the ga-7hei maintenance-path heal to the
+// shipped, libdoltlite-linked bd. `bd flatten`/`bd gc` rewrite the DoltLite
+// store and leave its secondary indexes stale, so run_doltlite_reindex must
+// rebuild them with `bd sql 'REINDEX'` through run_bd_doltlite (the same
+// wrapper flatten/gc use, which resolves the store's .db from metadata.json).
+// It must NOT reach for a standalone doltlite-client (a debug tool not shipped
+// on stock deployments) or stock sqlite3 (cannot open the CTLD-format DoltLite
+// .db — "file is not a database"): either exits non-zero, silently no-ops, and
+// leaves the stale-index corruption live everywhere the tool is absent.
+func TestDoltliteReindexUsesBdSQL(t *testing.T) {
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	fn := extractShellFunction(t, string(data), "run_doltlite_reindex")
+
+	if !strings.Contains(fn, `run_bd_doltlite "$dir" sql 'REINDEX'`) {
+		t.Fatalf("run_doltlite_reindex must reindex via run_bd_doltlite \"$dir\" sql 'REINDEX' (ga-7hei):\n%s", fn)
+	}
+	for _, forbidden := range []string{"doltlite-client", "DOLTLITE_CLIENT_BIN", "sqlite3"} {
+		if strings.Contains(fn, forbidden) {
+			t.Fatalf("run_doltlite_reindex must not use %q: doltlite-client is not shipped on stock "+
+				"deployments and stock sqlite3 cannot open the CTLD-format DoltLite .db, so either "+
+				"silently no-ops and leaves the stale-index corruption live (ga-7hei):\n%s", forbidden, fn)
+		}
 	}
 }
 

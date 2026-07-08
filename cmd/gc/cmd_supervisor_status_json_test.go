@@ -203,3 +203,33 @@ func TestSupervisorAPIReachable_StatusFiltering(t *testing.T) {
 		})
 	}
 }
+
+func TestSupervisorStatusLineIncludesBinary(t *testing.T) {
+	if got, want := supervisorStatusLine(4242, "/home/ubuntu/.local/bin/gc", nil), "Supervisor is running (PID 4242, binary /home/ubuntu/.local/bin/gc)"; got != want {
+		t.Fatalf("supervisorStatusLine() = %q, want %q", got, want)
+	}
+}
+
+func TestSupervisorStatusLineIncludesBuildCheck(t *testing.T) {
+	build := &BinaryBuildJSON{Status: "matched"}
+	if got, want := supervisorStatusLine(4242, "/home/ubuntu/.local/bin/gc", build), "Supervisor is running (PID 4242, binary /home/ubuntu/.local/bin/gc, build matches beads-doltlite stamp)"; got != want {
+		t.Fatalf("supervisorStatusLine() = %q, want %q", got, want)
+	}
+}
+
+func TestSupervisorStatusPayloadIncludesBinary(t *testing.T) {
+	build := &BinaryBuildJSON{Status: "matched"}
+	payload := supervisorStatusPayload("/tmp/gc.sock", 4242, "/usr/local/bin/gc", build)
+	if got, ok := payload["binary"].(string); !ok || got != "/usr/local/bin/gc" {
+		t.Fatalf("payload binary = %#v, want /usr/local/bin/gc", payload["binary"])
+	}
+	if got, ok := payload["build"].(*BinaryBuildJSON); !ok || got != build {
+		t.Fatalf("payload build = %#v, want build pointer", payload["build"])
+	}
+	if got, ok := payload["running"].(bool); !ok || !got {
+		t.Fatalf("payload running = %#v, want true", payload["running"])
+	}
+	if got, ok := payload["pid"].(int); !ok || got != 4242 {
+		t.Fatalf("payload pid = %#v, want 4242", payload["pid"])
+	}
+}

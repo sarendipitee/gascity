@@ -1,0 +1,48 @@
+{
+  "schema": "gascity.workflow-docs.v1",
+  "workflow_root": "gc-kg86",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build",
+  "artifact_root_relative": "plans/doltlite-gap-fix-build",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build/manifest.json",
+  "manifest_path_relative": "plans/doltlite-gap-fix-build/manifest.json",
+  "docs_change_id": "ozlnroyvvzplkwxoxqyvttxkoxkuswvx",
+  "source_workspace": "default",
+  "source_change_id": "vorpomlsorrwykqxnuxvtzutrvrzpqxu",
+  "documents": [
+    {
+      "name": "beads-doltlite-gap-summary",
+      "schema": "markdown",
+      "path": "plans/doltlite-gap-fix-build/beads-doltlite-gap-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build/beads-doltlite-gap-summary.md",
+      "hash": "sha256:130ef6071ee09803f37d70c33e40473c699d67cdeb929fa0efcabf1c7db9f0d8",
+      "change_id": "vorpomlsorrwykqxnuxvtzutrvrzpqxu"
+    },
+    {
+      "name": "fix-handoff",
+      "schema": "markdown",
+      "path": "plans/doltlite-gap-fix-build/fix-handoff.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build/fix-handoff.md",
+      "hash": "sha256:881fdbcf8fbcd9d03d3c72c99a3da41782b6c19714637c2218f9fe5e254bc93e",
+      "change_id": "vorpomlsorrwykqxnuxvtzutrvrzpqxu"
+    },
+    {
+      "name": "decomposition",
+      "schema": "gc.build.decomposition.v1",
+      "path": "plans/doltlite-gap-fix-build/decomposition.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build/decomposition.md",
+      "hash": "sha256:d455bc91e783cc9ae2c30c312bbe8dcabd67adc492c2b2e0c93a28cb642efb8a",
+      "change_id": "nspqruzk"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/doltlite-gap-fix-build/implementation-plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/doltlite-gap-fix-build/implementation-plan.md",
+      "hash": "sha256:041a99ce93edcc673a912ea9219071d28ba734495a26535d0e2fe1df10b3057b",
+      "change_id": "ozlnroyvvzplkwxoxqyvttxkoxkuswvx"
+    }
+  ]
+}

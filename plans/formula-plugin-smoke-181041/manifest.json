@@ -1,0 +1,30 @@
+{
+  "schema": "gascity.jj-doc-manifest.v1",
+  "workflow_root_bead_id": "gc-wisp-b5v",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "docs_artifact_root": "/data/projects/doltlite-gascity/gascity/plans/formula-plugin-smoke-181041",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/formula-plugin-smoke-181041/manifest.json",
+  "docs_change_id": "tmtwnlmxmkqtlsyprnwmkytnzvotnpmx",
+  "source": {},
+  "documents": [
+    {
+      "name": "requirements",
+      "schema": "gc.build.requirements.v1",
+      "path": "plans/formula-plugin-smoke-181041/requirements.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/formula-plugin-smoke-181041/requirements.md",
+      "hash": "sha256:a74b87556a6e7ffa02323289297f9a1389edcf5307da39f5be43b9bd41901ec8",
+      "change_id": "nlouvllvmroxwywyyuzzpnzzptxwuxuy"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/formula-plugin-smoke-181041/implementation-plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/formula-plugin-smoke-181041/implementation-plan.md",
+      "hash": "sha256:1bc680ebb582f1886dfb66b1d12bda5258dc95d293f71825ac03ceefbd9d69f1",
+      "change_id": "tmtwnlmxmkqtlsyprnwmkytnzvotnpmx"
+    }
+  ],
+  "updated_at": "2026-07-04T13:55:46Z"
+}

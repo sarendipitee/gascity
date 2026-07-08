@@ -558,60 +558,6 @@ func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 	}
 }
 
-func TestSessionBackendEnvDisablesContributorRouting(t *testing.T) {
-	t.Setenv("GC_BEADS", "bd")
-	t.Setenv("BD_ROUTING_MODE", "auto")
-	t.Setenv("BEADS_ROUTING_MODE", "auto")
-
-	env := mustSessionBackendEnv(t, t.TempDir(), "", nil)
-	if got := env["BD_ROUTING_MODE"]; got != "off" {
-		t.Fatalf("BD_ROUTING_MODE = %q, want off", got)
-	}
-	if got := env["BEADS_ROUTING_MODE"]; got != "off" {
-		t.Fatalf("BEADS_ROUTING_MODE = %q, want off", got)
-	}
-}
-
-func TestRecoverManagedBDCommandDisablesContributorRouting(t *testing.T) {
-	t.Setenv("GC_BEADS", "bd")
-	t.Setenv("BD_ROUTING_MODE", "auto")
-	t.Setenv("BEADS_ROUTING_MODE", "auto")
-
-	cityPath := t.TempDir()
-	envFile := filepath.Join(cityPath, "recover-env.txt")
-	scriptPath := gcBeadsBdScriptPath(cityPath)
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	script := "#!/bin/sh\n" +
-		"printf 'BD_ROUTING_MODE=%s\\n' \"$BD_ROUTING_MODE\" > \"" + envFile + "\"\n" +
-		"printf 'BEADS_ROUTING_MODE=%s\\n' \"$BEADS_ROUTING_MODE\" >> \"" + envFile + "\"\n"
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := recoverManagedBDCommand(cityPath); err != nil {
-		t.Fatalf("recoverManagedBDCommand() error = %v", err)
-	}
-	data, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if ok {
-			values[key] = value
-		}
-	}
-	if got := values["BD_ROUTING_MODE"]; got != "off" {
-		t.Fatalf("BD_ROUTING_MODE = %q, want off", got)
-	}
-	if got := values["BEADS_ROUTING_MODE"]; got != "off" {
-		t.Fatalf("BEADS_ROUTING_MODE = %q, want off", got)
-	}
-}
-
 func TestBdRuntimeEnvExternalHostSkipsLocalState(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("GC_DOLT_HOST", "remote.example.com")
@@ -2374,6 +2320,28 @@ dolt.port: 4407
 	}
 	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
 		t.Fatalf("BEADS_DIR = %q, want rig scoped beads dir", got)
+	}
+	if got := env["GC_BEADS_PREFIX"]; got != "myrig" {
+		t.Fatalf("GC_BEADS_PREFIX = %q, want rig scoped prefix", got)
+	}
+}
+
+func TestNativeDoltOpenEnvForScopeStampsCityPrefix(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{Workspace: config.Workspace{Name: "demo", Prefix: "dg"}}
+
+	env, err := nativeDoltOpenEnvForScope(cityDir, cfg, cityDir)
+	if err != nil {
+		t.Fatalf("nativeDoltOpenEnvForScope: %v", err)
+	}
+	if got := env["BEADS_DIR"]; got != filepath.Join(cityDir, ".beads") {
+		t.Fatalf("BEADS_DIR = %q, want city scoped beads dir", got)
+	}
+	if got := env["GC_BEADS_PREFIX"]; got != "dg" {
+		t.Fatalf("GC_BEADS_PREFIX = %q, want city prefix", got)
 	}
 }
 
@@ -5164,11 +5132,6 @@ func TestProjectedKeysCoverage(t *testing.T) {
 			t.Errorf("bdAutoBackupOptOutEnvKeys[%q] is not in mergeRuntimeEnv strip list - symmetry broken", key)
 		}
 	}
-	for _, key := range bdContributorRoutingOptOutEnvKeys {
-		if !projectedKeyStripped(key) {
-			t.Errorf("bdContributorRoutingOptOutEnvKeys[%q] is not in mergeRuntimeEnv strip list - symmetry broken", key)
-		}
-	}
 }
 
 func TestMergeRuntimeEnvStripsInheritedBeadsBackend(t *testing.T) {
@@ -5231,6 +5194,132 @@ dolt.auto-start: false
 	var parseErr *contract.MetadataParseError
 	if !errors.As(err, &parseErr) {
 		t.Errorf("errors.As(*MetadataParseError) = false, want true; err=%v", err)
+	}
+}
+
+func TestApplyCanonicalScopeBackendEnv_DoltliteCityConfigOverridesStaleDoltMetadata(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n\n[beads]\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"), []byte(`issue_prefix: dg
+gc.endpoint_origin: managed_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(`{"backend":"dolt","database":"dolt","dolt_database":"hq","dolt_mode":"server"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]string{
+		"GC_DOLT_HOST": "127.0.0.1",
+		"GC_DOLT_PORT": "3306",
+	}
+	used, err := applyCanonicalScopeBackendEnv(env, cityPath, cityPath)
+	if err != nil {
+		t.Fatalf("applyCanonicalScopeBackendEnv: %v", err)
+	}
+	if !used {
+		t.Fatal("used = false, want true")
+	}
+	if got := env["GC_BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("GC_BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["GC_DOLT_HOST"]; got != "" {
+		t.Fatalf("GC_DOLT_HOST = %q, want cleared Dolt projection", got)
+	}
+}
+
+func TestBdRuntimeEnvWithError_DoltliteCityConfigOverridesStaleDoltMetadata(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n\n[beads]\nbackend = \"doltlite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"), []byte(`issue_prefix: dg
+gc.endpoint_origin: managed_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(`{"backend":"dolt","database":"dolt","dolt_database":"hq","dolt_mode":"server"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := bdRuntimeEnvWithError(cityPath)
+	if err != nil {
+		t.Fatalf("bdRuntimeEnvWithError: %v", err)
+	}
+	if got := env["GC_BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("GC_BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["BEADS_DIR"]; got != filepath.Join(cityPath, ".beads") {
+		t.Fatalf("BEADS_DIR = %q, want city .beads", got)
+	}
+}
+
+func TestBdRuntimeEnvForRig_DoltliteCityConfigOverridesInheritedStaleDoltMetadata(t *testing.T) {
+	cityPath := t.TempDir()
+	rigPath := filepath.Join(cityPath, "gascity")
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rigPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"demo\"\n\n[beads]\nbackend = \"doltlite\"\n\n[[rigs]]\nname = \"gascity\"\npath = \"gascity\"\nprefix = \"gc\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"), []byte(`issue_prefix: dg
+gc.endpoint_origin: managed_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(`{"backend":"dolt","database":"dolt","dolt_database":"hq","dolt_mode":"server"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "config.yaml"), []byte(`issue_prefix: gc
+gc.endpoint_origin: inherited_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "metadata.json"), []byte(`{"backend":"dolt","database":"dolt","dolt_database":"gc","dolt_mode":"server"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Rigs: []config.Rig{{Name: "gascity", Path: rigPath, Prefix: "gc"}},
+	}
+	env := mustBdRuntimeEnvForRig(t, cityPath, cfg, rigPath)
+	if got := env["GC_BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("GC_BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["BEADS_BACKEND"]; got != "doltlite" {
+		t.Fatalf("BEADS_BACKEND = %q, want doltlite; env=%v", got, env)
+	}
+	if got := env["BEADS_DIR"]; got != filepath.Join(rigPath, ".beads") {
+		t.Fatalf("BEADS_DIR = %q, want rig .beads", got)
+	}
+	if scopeOverridesCityBackend(cityPath, rigPath) {
+		t.Fatal("scopeOverridesCityBackend = true, want false for inherited-city stale metadata")
 	}
 }
 

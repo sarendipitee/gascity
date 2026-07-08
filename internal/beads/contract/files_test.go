@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1451,7 +1452,7 @@ func TestLoadMetadataStateReturnsZeroWhenFileMissing(t *testing.T) {
 	if ok {
 		t.Fatal("LoadMetadataState() ok = true, want false for missing file")
 	}
-	if state != (MetadataState{}) {
+	if !reflect.DeepEqual(state, MetadataState{}) {
 		t.Fatalf("LoadMetadataState() state = %+v, want zero value", state)
 	}
 }
@@ -1470,7 +1471,7 @@ func TestLoadMetadataStateAcceptsEmptyObject(t *testing.T) {
 	if !ok {
 		t.Fatal("LoadMetadataState({}) ok = false, want true")
 	}
-	if state != (MetadataState{}) {
+	if !reflect.DeepEqual(state, MetadataState{}) {
 		t.Fatalf("LoadMetadataState({}) state = %+v, want zero value", state)
 	}
 }
@@ -1534,7 +1535,7 @@ func TestLoadMetadataStateValidFixtures(t *testing.T) {
 			if !ok {
 				t.Fatalf("LoadMetadataState(%s) ok = false, want true", tc.fixture)
 			}
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("LoadMetadataState(%s) = %+v, want %+v", tc.fixture, got, tc.want)
 			}
 		})
@@ -1620,7 +1621,7 @@ func TestLoadMetadataStateRejectFixtures(t *testing.T) {
 			if ok {
 				t.Fatalf("LoadMetadataState(%s) ok = true, want false on rejection", tc.fixture)
 			}
-			if state != (MetadataState{}) {
+			if !reflect.DeepEqual(state, MetadataState{}) {
 				t.Fatalf("LoadMetadataState(%s) state = %+v, want zero value on rejection", tc.fixture, state)
 			}
 
@@ -1658,7 +1659,7 @@ func TestLoadMetadataStateSurfacesIOErrors(t *testing.T) {
 	if ok {
 		t.Fatalf("LoadMetadataState() ok = true on IO error")
 	}
-	if state != (MetadataState{}) {
+	if !reflect.DeepEqual(state, MetadataState{}) {
 		t.Fatalf("LoadMetadataState() state = %+v on IO error, want zero", state)
 	}
 	var parseErr *MetadataParseError
@@ -1740,6 +1741,88 @@ func TestEnsureCanonicalMetadataIsByteIdempotentOnValidFixtures(t *testing.T) {
 				t.Fatalf("EnsureCanonicalMetadata() rewrote bytes for canonical fixture %s\nbefore: %s\nafter:  %s", tc.fixture, original, got)
 			}
 		})
+	}
+}
+
+func TestEnsureMetadataAttachedDatabasesWritesDoltliteAttachments(t *testing.T) {
+	fs := fsys.OSFS{}
+	path := filepath.Join(t.TempDir(), "metadata.json")
+	if err := fs.WriteFile(path, []byte(`{"backend":"doltlite","database":"doltlite","dolt_database":"hq"}`), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	changed, err := EnsureMetadataAttachedDatabases(fs, path, []AttachedDatabaseState{{
+		Alias: "ops",
+		Path:  "/city/.gc/ops.sqlite",
+	}})
+	if err != nil {
+		t.Fatalf("EnsureMetadataAttachedDatabases() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("EnsureMetadataAttachedDatabases() changed = false, want true")
+	}
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	for _, want := range []string{`"attached_databases"`, `"alias": "ops"`, `"path": "/city/.gc/ops.sqlite"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("metadata missing %q:\n%s", want, data)
+		}
+	}
+
+	changed, err = EnsureMetadataAttachedDatabases(fs, path, []AttachedDatabaseState{{
+		Alias: "ops",
+		Path:  "/city/.gc/ops.sqlite",
+	}})
+	if err != nil {
+		t.Fatalf("EnsureMetadataAttachedDatabases() second call error = %v", err)
+	}
+	if changed {
+		t.Fatal("EnsureMetadataAttachedDatabases() second call changed = true, want false")
+	}
+}
+
+func TestEnsureCanonicalMetadataPreservesDoltlitePluginFields(t *testing.T) {
+	fs := fsys.OSFS{}
+	path := filepath.Join(t.TempDir(), "metadata.json")
+	input := `{
+  "backend": "doltlite",
+  "database": "doltlite",
+  "dolt_database": "hq",
+  "backend_plugin_command": "/packs/dolt/bin/bd-backend-doltlite",
+  "backend_plugin_args": ["--trace", "/city/.gc/backend-plugin-trace.jsonl", "serve"],
+  "gascity_backend_command": "/packs/dolt/bin/gc-doltlite-fastpath",
+  "gascity_backend_args": ["--trace", "/city/.gc/gascity-backend-plugin-trace.jsonl", "serve"]
+}`
+	if err := fs.WriteFile(path, []byte(input), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	changed, err := EnsureCanonicalMetadata(fs, path, MetadataState{
+		Database:              "doltlite",
+		Backend:               "doltlite",
+		DoltDatabase:          "hq",
+		BackendPluginCommand:  "/packs/dolt/bin/bd-backend-doltlite",
+		BackendPluginArgs:     []string{"--trace", "/city/.gc/backend-plugin-trace.jsonl", "serve"},
+		GasCityBackendCommand: "/packs/dolt/bin/gc-doltlite-fastpath",
+		GasCityBackendArgs:    []string{"--trace", "/city/.gc/gascity-backend-plugin-trace.jsonl", "serve"},
+	})
+	if err != nil {
+		t.Fatalf("EnsureCanonicalMetadata() error = %v", err)
+	}
+	if changed {
+		t.Fatal("EnsureCanonicalMetadata() changed = true, want false")
+	}
+
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	for _, want := range []string{`"backend_plugin_command"`, `"backend_plugin_args"`, `"gascity_backend_command"`, `"gascity_backend_args"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("metadata missing %q:\n%s", want, data)
+		}
 	}
 }
 

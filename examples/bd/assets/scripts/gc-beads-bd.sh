@@ -2572,10 +2572,10 @@ doltlite_bd_schema_ready() {
 run_bd_doltlite_init() {
     local dir="$1" prefix="$2" database="$3" reinit="${4:-false}"
     if [ "$reinit" = true ]; then
-        run_bd_doltlite "$dir" init --reinit-local --quiet -p "$prefix" --database "$database" --skip-hooks --skip-agents || die "bd doltlite init failed for $dir"
+        run_bd_doltlite "$dir" init --backend doltlite --reinit-local --quiet -p "$prefix" --database "$database" --skip-hooks --skip-agents || die "bd doltlite init failed for $dir"
         return 0
     fi
-    run_bd_doltlite "$dir" init --quiet -p "$prefix" --database "$database" --skip-hooks --skip-agents || die "bd doltlite init failed for $dir"
+    run_bd_doltlite "$dir" init --backend doltlite --quiet -p "$prefix" --database "$database" --skip-hooks --skip-agents || die "bd doltlite init failed for $dir"
 }
 
 ensure_doltlite_bd_schema() {
@@ -2601,6 +2601,20 @@ doltlite_maintenance_due() {
     [ $((now - last)) -ge "$interval" ]
 }
 
+# run_doltlite_reindex rebuilds the DoltLite store's secondary indexes.
+# `bd flatten`/`bd gc` rewrite the store (like a clone/pull) and leave the
+# secondary indexes stale, so index-path reads (count/status/list) silently
+# return wrong results until a REINDEX (ga-7hei). It runs through the same
+# libdoltlite-linked bd used for flatten/gc above, so bd resolves the store's
+# .db from .beads/metadata.json and REINDEX targets exactly the database the
+# read path opens (no glob that could pick the wrong file). Best-effort and
+# non-fatal: stdout ("OK, 0 rows affected") is suppressed, but any SQL error
+# reaches the maintenance log via stderr and the caller warns on non-zero exit.
+run_doltlite_reindex() {
+    local dir="$1"
+    run_bd_doltlite "$dir" sql 'REINDEX' >/dev/null
+}
+
 run_doltlite_existing_db_maintenance() {
     local dir="$1"
     local stamp="$dir/.beads/doltlite/.gc-maintenance.stamp"
@@ -2610,6 +2624,9 @@ run_doltlite_existing_db_maintenance() {
     echo "gc-beads-bd: running doltlite maintenance for $dir" >&2
     run_bd_doltlite "$dir" flatten --force --json >/dev/null 2>&1 || echo "warning: bd flatten failed for $dir" >&2
     run_bd_doltlite "$dir" gc --skip-decay --force --json >/dev/null 2>&1 || echo "warning: bd gc failed for $dir" >&2
+    # flatten/gc leave the SQLite secondary indexes stale; rebuild them so
+    # index-path reads don't silently return wrong data (ga-7hei).
+    run_doltlite_reindex "$dir" || echo "warning: doltlite reindex failed for $dir" >&2
     mkdir -p "$dir/.beads/doltlite" 2>/dev/null || true
     date +%s > "$stamp" 2>/dev/null || true
 }
@@ -2746,6 +2763,7 @@ op_init() {
         fi
         validate_bd_runtime_config_value "types.custom" "$custom_types"
         ensure_beads_dir_permissions "$dir"
+        mkdir -p "$dir/.beads/doltlite"
         already_ready=false
         if doltlite_bd_schema_ready "$dir" "$prefix"; then
             already_ready=true
@@ -3220,6 +3238,14 @@ fi
 
 # Resolve DOLT_PORT now that STATE_FILE is set.
 DOLT_PORT=$(allocate_port)
+
+if is_doltlite_backend; then
+    case "$op" in
+        start|ensure-ready|health|recover|stop|shutdown)
+            exit 0
+            ;;
+    esac
+fi
 
 case "$op" in
     start)        op_start ;;

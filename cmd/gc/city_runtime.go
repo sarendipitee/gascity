@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -18,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/config"
@@ -58,6 +60,7 @@ type CityRuntime struct {
 	cityName     string
 	configName   string
 	tomlPath     string
+	startedAt    time.Time // when this runtime started; used as grace period for liveness checks
 	watchTargets []config.WatchTarget
 	configRev    string
 	configDirty  *atomic.Bool
@@ -101,8 +104,9 @@ type CityRuntime struct {
 	standaloneRigStores map[string]beads.Store
 
 	// Bead-driven reconciler state (Phase 2f).
-	sessionDrains      *drainTracker       // in-memory drain tracker; nil when bead reconciler disabled
-	providerHealthGate *providerHealthGate // ADR-0013 A1 M3a; nil until bead reconciler initialized
+	sessionDrains      *drainTracker          // in-memory drain tracker; nil when bead reconciler disabled
+	providerHealthGate *providerHealthGate    // ADR-0013 A1 M3a; nil until bead reconciler initialized
+	livenessTracker    sessionLivenessTracker // nil when no session_liveness_checks configured
 	asyncStartLimiter  *asyncStartLimiter
 	asyncStarts        asyncStartTracker
 	asyncStops         asyncStartTracker
@@ -149,9 +153,10 @@ const runtimeDemandSnapshotMaxAge = 30 * time.Second
 const scaleCheckDemandMinInterval = 1 * time.Second
 
 type runtimeDemandSnapshot struct {
-	createdAt          time.Time
-	sessionFingerprint string
-	result             DesiredStateResult
+	createdAt              time.Time
+	sessionFingerprint     string
+	readyDemandFingerprint string
+	result                 DesiredStateResult
 }
 
 // CityRuntimeParams holds the caller-provided parameters for creating a
@@ -335,6 +340,7 @@ func newCityRuntime(p CityRuntimeParams) *CityRuntime {
 		managedDoltHealth: managedDoltHealth,
 		managedDoltOwned:  managedDoltOwned,
 		managedDoltPort:   managedDoltPort,
+		startedAt:         time.Now(),
 		logPrefix:         logPrefix,
 		stdout:            p.Stdout,
 		stderr:            p.Stderr,
@@ -408,6 +414,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 		cr.sessionDrains = newDrainTracker()
 		cr.providerHealthGate = newProviderHealthGate()
 	}
+	cr.livenessTracker = newSessionLivenessTracker(len(cr.cfg.Daemon.SessionLivenessChecks) > 0)
 	if ctx.Err() != nil {
 		return
 	}
@@ -1312,6 +1319,7 @@ func (cr *CityRuntime) dispatchOrders(ctx context.Context, cityRoot string) {
 	cr.runOrderTrackingSweepWatchdog(now)
 	cr.runOrderTrackingRetentionWatchdog(now)
 	cr.runNudgeMailSweepWatchdog(now)
+	cr.runSessionLivenessChecks(now)
 	if cr.od != nil {
 		cr.od.dispatch(ctx, cityRoot, now)
 	}
@@ -1555,6 +1563,67 @@ func (cr *CityRuntime) runNudgeMailSweepWatchdog(now time.Time) {
 	total := result.NudgeClosed + result.MailClosed
 	if total > 0 && cr.stderr != nil {
 		fmt.Fprintf(cr.stderr, "%s: nudge-mail-sweep watchdog closed %d nudge bead(s), %d mail bead(s)\n", cr.logPrefix, result.NudgeClosed, result.MailClosed) //nolint:errcheck // best-effort stderr
+	}
+}
+
+// runSessionLivenessChecks evaluates every entry in
+// [daemon.session_liveness_checks] on each patrol tick. For any session whose
+// last activity exceeds its freshness_window, a session.liveness_stale event
+// is emitted exactly once per stale episode. If escalate_to is set, the named
+// session is also nudged. Escalation clears when the session becomes active
+// again (next patrol tick where activity is within the window).
+//
+// This provides the controller-supervised, bounded-cadence patrol that replaces
+// reliance on pack formula self-scheduling (e.g., a deacon ScheduleWakeup that
+// can fail silently and produce multi-hour gaps).
+func (cr *CityRuntime) runSessionLivenessChecks(now time.Time) {
+	if cr.livenessTracker == nil {
+		return
+	}
+	for i := range cr.cfg.Daemon.SessionLivenessChecks {
+		check := &cr.cfg.Daemon.SessionLivenessChecks[i]
+		window := check.FreshnessWindowDuration()
+		if window <= 0 {
+			continue
+		}
+		for _, sessionName := range check.Sessions {
+			sn := sessionName // capture for closure
+			chk := check      // capture for closure
+			cr.livenessTracker.checkFreshness(
+				sn,
+				window,
+				cr.sp,
+				now,
+				cr.startedAt,
+				func(episodeID string, staleSince time.Time, lastActivity time.Time) {
+					if cr.rec != nil {
+						p := events.SessionLivenessStalePayload{
+							Session:         sn,
+							EpisodeID:       episodeID,
+							StaleSince:      staleSince,
+							FreshnessWindow: chk.FreshnessWindow,
+							LastActivity:    lastActivity,
+							EscalateTo:      chk.EscalateTo,
+						}
+						payload, _ := json.Marshal(p)
+						cr.rec.Record(events.Event{
+							Type:    events.SessionLivenessStale,
+							Ts:      staleSince.UTC(),
+							Actor:   "gc",
+							Subject: sn,
+							Message: fmt.Sprintf("session %s stale for %s (last activity: %s)",
+								sn, chk.FreshnessWindow, lastActivity.UTC().Format(time.RFC3339)),
+							Payload: payload,
+						})
+					}
+					if chk.EscalateTo != "" {
+						if err := cr.sp.Nudge(chk.EscalateTo, runtime.TextContent("session.liveness_stale: "+sn+" is stale")); err != nil && cr.stderr != nil {
+							fmt.Fprintf(cr.stderr, "%s: session liveness check: nudge %s: %v\n", cr.logPrefix, chk.EscalateTo, err) //nolint:errcheck // best-effort stderr
+						}
+					}
+				},
+			)
+		}
 	}
 }
 
@@ -2028,6 +2097,8 @@ func (cr *CityRuntime) reloadConfigTraced(
 		cr.sessionDrains = newDrainTracker()
 		cr.providerHealthGate = newProviderHealthGate()
 	}
+	// Rebuild liveness tracker when session_liveness_checks changes.
+	cr.livenessTracker = newSessionLivenessTracker(len(nextCfg.Daemon.SessionLivenessChecks) > 0)
 	cr.configRev = result.Revision
 	cr.watchTargets = config.WatchTargets(result.Prov, nextCfg, cityRoot)
 	cr.restartConfigWatcher()
@@ -2170,6 +2241,16 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 			fmt.Fprintf(cr.stderr, "released orphaned pool work: %s\n", r.ID) //nolint:errcheck
 		}
 		assignedWorkBeads, assignedWorkStoreRefs = filterReleasedAssignedWorkSnapshot(assignedWorkBeads, assignedWorkStoreRefs, released)
+	}
+	// Warn on stranded named-session routing: open, unassigned beads whose
+	// gc.routed_to targets a known named session satisfy the demand probe
+	// (waking the session) but are invisible to the session's assignee-based
+	// work-discovery query. The session wakes and idles repeatedly while the
+	// polecat pool sees zero demand — silently idling the town (gcy-esq).
+	// The witness should detect this via gc bd list --status open --no-assignee
+	// --metadata-field gc.routed_to=<named-session> and re-route the bead.
+	if len(result.StrandedNamedSessionRoutingBeads) > 0 {
+		fmt.Fprintf(cr.stderr, "%s: WARNING: stranded named-session routing detected for beads %s — open+unassigned beads with gc.routed_to targeting a named session will cause silent idle; re-route to pool target or clear gc.routed_to\n", cr.logPrefix, strings.Join(result.StrandedNamedSessionRoutingBeads, ",")) //nolint:errcheck
 	}
 	// Squatter guard (gastownhall/gascity#2930): a foreign Dolt that has bound
 	// this city's managed port returns zero demand, indistinguishable from a
@@ -3175,7 +3256,18 @@ func (cr *CityRuntime) loadDemandSnapshot(
 	configChanged bool,
 ) runtimeDemandSnapshot {
 	sessionFingerprint := sessionBeadSnapshotFingerprint(sessionBeads)
-	if cr.shouldRefreshDemandSnapshot(trigger, configChanged, sessionFingerprint) {
+	readyDemandFingerprint := ""
+	refresh := cr.shouldRefreshDemandSnapshot(trigger, configChanged, sessionFingerprint)
+	if !refresh && trigger == "patrol" && cr.demandSnapshotsEnabled() {
+		readyDemandFingerprint = cr.readyDemandSnapshotFingerprint()
+		refresh = cr.demandSnapshot.readyDemandFingerprint != readyDemandFingerprint
+	}
+	if refresh {
+		if trigger == "patrol" && cr.demandSnapshotsEnabled() && readyDemandFingerprint == "" {
+			readyDemandFingerprint = cr.readyDemandSnapshotFingerprint()
+		} else if cr.demandSnapshot != nil {
+			readyDemandFingerprint = cr.demandSnapshot.readyDemandFingerprint
+		}
 		result := cr.buildDesiredState(sessionBeads, trace)
 		var openSessionInfos []sessionpkg.Info
 		if sessionBeads != nil {
@@ -3195,9 +3287,10 @@ func (cr *CityRuntime) loadDemandSnapshot(
 		mergeNamedSessionDemand(result.PoolDesiredCounts, result.NamedSessionDemand, cr.cfg)
 		result.WorkSet = make(map[string]bool)
 		cr.demandSnapshot = &runtimeDemandSnapshot{
-			createdAt:          time.Now(),
-			sessionFingerprint: sessionFingerprint,
-			result:             result,
+			createdAt:              time.Now(),
+			sessionFingerprint:     sessionFingerprint,
+			readyDemandFingerprint: readyDemandFingerprint,
+			result:                 result,
 		}
 	}
 	if cr.demandSnapshot == nil {
@@ -3255,6 +3348,75 @@ func (cr *CityRuntime) demandSnapshotPatrolMaxAge() time.Duration {
 	// bites sub-second patrol_intervals, where it stops the probe subprocess
 	// from running on every tick.
 	return scaleCheckDemandMinInterval
+}
+
+func (cr *CityRuntime) readyDemandSnapshotFingerprint() string {
+	stores := []struct {
+		ref   string
+		store beads.Store
+	}{{ref: cr.cityName, store: cr.cityBeadStore()}}
+	rigStores := cr.rigBeadStores()
+	refs := make([]string, 0, len(rigStores))
+	for ref := range rigStores {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	for _, ref := range refs {
+		stores = append(stores, struct {
+			ref   string
+			store beads.Store
+		}{ref: ref, store: rigStores[ref]})
+	}
+
+	h := fnv.New64a()
+	for _, entry := range stores {
+		_, _ = io.WriteString(h, entry.ref)
+		_, _ = io.WriteString(h, "\x00")
+		if entry.store == nil {
+			_, _ = io.WriteString(h, "<nil>")
+			_, _ = io.WriteString(h, "\x00")
+			continue
+		}
+		ready, err := beads.ReadyLive(entry.store, beads.ReadyQuery{TierMode: beads.TierBoth})
+		if err != nil {
+			log.Printf("readyDemandSnapshotFingerprint: store %s: %v", entry.ref, err)
+			_, _ = io.WriteString(h, "error:")
+			_, _ = io.WriteString(h, err.Error())
+			_, _ = io.WriteString(h, "\x00")
+			continue
+		}
+		sort.Slice(ready, func(i, j int) bool {
+			return ready[i].ID < ready[j].ID
+		})
+		for _, bead := range ready {
+			writeReadyDemandFingerprintBead(h, bead)
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func writeReadyDemandFingerprintBead(w io.Writer, bead beads.Bead) {
+	_, _ = io.WriteString(w, bead.ID)
+	_, _ = io.WriteString(w, "\x00")
+	_, _ = io.WriteString(w, bead.Status)
+	_, _ = io.WriteString(w, "\x00")
+	_, _ = io.WriteString(w, bead.Type)
+	_, _ = io.WriteString(w, "\x00")
+	_, _ = io.WriteString(w, bead.Assignee)
+	_, _ = io.WriteString(w, "\x00")
+	_, _ = io.WriteString(w, bead.UpdatedAt.Format(time.RFC3339Nano))
+	_, _ = io.WriteString(w, "\x00")
+	for _, key := range []string{
+		beadmeta.RoutedToMetadataKey,
+		beadmeta.RunTargetMetadataKey,
+		beadmeta.KindMetadataKey,
+		beadmeta.FormulaContractMetadataKey,
+	} {
+		_, _ = io.WriteString(w, key)
+		_, _ = io.WriteString(w, "\x00")
+		_, _ = io.WriteString(w, bead.Metadata[key])
+		_, _ = io.WriteString(w, "\x00")
+	}
 }
 
 func (cr *CityRuntime) demandSnapshotsEnabled() bool {

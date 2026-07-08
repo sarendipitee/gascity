@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
 )
 
 // ErrNotFound is returned when a bead ID does not exist in the store.
@@ -20,6 +23,10 @@ var ErrNotFound = errors.New("bead not found")
 // mutation guards that need to distinguish a genuine collision from a plain
 // absent bead should check errors.Is(err, ErrIDCollision).
 var ErrIDCollision = fmt.Errorf("bd resolved a different bead ID (substring collision): %w", ErrNotFound)
+
+// ErrMetadataParse is returned when a bead exists but its stored metadata
+// cannot be decoded into the Store object model.
+var ErrMetadataParse = errors.New("bead metadata parse")
 
 // ErrCacheUnavailable is returned by cache-only read handles when the cache
 // cannot answer without consulting the backing store.
@@ -36,6 +43,13 @@ var ErrParentProjectionSuperseded = errors.New("parent projection superseded by 
 // ErrConditionalReleaseUnsupported reports that a store cannot atomically
 // release an assignment based on the current status and assignee.
 var ErrConditionalReleaseUnsupported = errors.New("conditional assignment release unsupported")
+
+// ErrStatusConflict reports that a status transition raced with another write.
+var ErrStatusConflict = errors.New("bead status conflict")
+
+func statusConflictError(id, expected, current string) error {
+	return fmt.Errorf("updating bead %q: %w (expected status %q, got %q)", id, ErrStatusConflict, expected, current)
+}
 
 // ErrBDSilentFallback reports that a bd-backed store operation saw bd exit
 // successfully after falling back to on-disk JSONL auto-import mode. BdStore
@@ -73,6 +87,10 @@ type Bead struct {
 	// marshaled wire form is unchanged (still string-valued).
 	Metadata     StringMap `json:"metadata,omitempty"`
 	Dependencies []Dep     `json:"dependencies,omitempty"`
+	// DependencyCount carries bd's count of active blocking dependencies when
+	// available from list-style output. It is advisory; readiness decisions
+	// should prefer IsBlocked because bd owns the denormalized ready projection.
+	DependencyCount int `json:"dependency_count,omitempty"`
 	// Ephemeral routes the bead to the wisps tier on Create. Wisps live in
 	// a separate Dolt table, are not git-synced, and are eligible for TTL
 	// garbage collection. Reads must opt in via ListQuery.TierMode (or the
@@ -94,16 +112,21 @@ type Bead struct {
 
 // UpdateOpts specifies which fields to change. Nil pointers are skipped.
 type UpdateOpts struct {
-	Title        *string // set title (nil = no change)
-	Status       *string // set status (nil = no change)
-	Type         *string // set issue type (nil = no change)
-	Priority     *int    // set priority (nil = no change)
-	Description  *string
-	ParentID     *string
-	Assignee     *string  // set assignee (nil = no change)
-	Labels       []string // append these labels (nil = no change)
-	RemoveLabels []string // remove these labels (nil = no change)
-	Metadata     map[string]string
+	Title          *string // set title (nil = no change)
+	Status         *string // set status (nil = no change)
+	ExpectedStatus *string
+	Type           *string // set issue type (nil = no change)
+	Priority       *int    // set priority (nil = no change)
+	Description    *string
+	ParentID       *string
+	Assignee       *string  // set assignee (nil = no change)
+	Labels         []string // append these labels (nil = no change)
+	RemoveLabels   []string // remove these labels (nil = no change)
+	Metadata       map[string]string
+	// ClearDefer clears defer_until and resets status to open. Used to
+	// recover pool-routed work beads that were deferred by an agent while
+	// they should remain in the ready pool for pickup.
+	ClearDefer bool
 }
 
 // ConditionalAssignmentReleaser is implemented by stores that can release an
@@ -226,6 +249,17 @@ var readyBlockingDependencyTypes = map[string]bool{
 // bead from Ready() until the dependency target closes.
 func IsReadyBlockingDependencyType(t string) bool {
 	return readyBlockingDependencyTypes[t]
+}
+
+// IsReadyDependencySatisfied reports whether a blocking dependency target
+// releases downstream Ready work. Failed closed workflow steps intentionally
+// keep dependents blocked so cancelled/failing graph branches do not spawn
+// workers for work that claim paths will never return.
+func IsReadyDependencySatisfied(status string, metadata map[string]string) bool {
+	if strings.TrimSpace(status) != "closed" {
+		return false
+	}
+	return strings.TrimSpace(metadata[beadmeta.OutcomeMetadataKey]) != "fail"
 }
 
 // IsReadyExcludedType reports whether the bead type is excluded from

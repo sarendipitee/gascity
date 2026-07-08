@@ -1,0 +1,4 @@
+items:
+  - name: PR 3617 review fix request
+    path: review-input.md
+    description: Reviewer-requested changes for GitHub PR 3617, including generic pack environment variables and gc.pack_root handling.

@@ -1,0 +1,10 @@
+items:
+  - name: doltlite-gap-fix-handoff
+    path: doltlite-gap-fix-build/fix-handoff.md
+    description: Formula handoff describing the requested DoltLite gap-fix build and constraints.
+  - name: gascity-doltlite-vcs-gap-report
+    path: doltlite-vcs-mirroring-audit/gap-analysis-report.md
+    description: Completed Gas City DoltLite VCS mirroring gap-analysis report from workflow gc-qwr0.
+  - name: beads-doltlite-backend-gap-summary
+    path: doltlite-gap-fix-build/beads-doltlite-gap-summary.md
+    description: Summary of completed beads-doltlite backend gap-analysis report from workflow gc-fc8y.

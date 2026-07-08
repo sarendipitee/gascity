@@ -582,18 +582,24 @@ func scopedBeadsProviderOverride(cityPath, scopeRoot string) (string, bool) {
 	return "", false
 }
 
-// normalizeRawBeadsProvider maps the city-managed gc-beads-bd wrapper back to
+// normalizeRawBeadsProvider maps city-managed bd lifecycle wrappers back to
 // the logical "bd" provider for command-time store selection. Managed sessions
-// set GC_BEADS=exec:<cityPath>/.gc/scripts/gc-beads-bd.sh (the stable shim)
-// so lifecycle operations stay pinned to the city's Dolt server, but general
-// gc commands still need a CRUD-capable store.
+// set GC_BEADS=exec:<cityPath>/.gc/scripts/<shim> so lifecycle operations stay
+// pinned to the city's backend, but general gc commands still need a
+// CRUD-capable store.
 func normalizeRawBeadsProvider(cityPath, provider string) string {
 	provider = strings.TrimSpace(provider)
-	if provider == "" || !strings.HasPrefix(provider, "exec:") || execProviderBase(provider) != "gc-beads-bd" || cityPath == "" {
+	if provider == "" || !strings.HasPrefix(provider, "exec:") || cityPath == "" {
+		return provider
+	}
+	base := execProviderBase(provider)
+	if base != "gc-beads-bd" && base != "gc-beads-doltlite-bd" {
 		return provider
 	}
 	script := strings.TrimSpace(strings.TrimPrefix(provider, "exec:"))
-	if samePath(script, gcBeadsBdScriptPath(cityPath)) || samePath(script, legacySystemPacksGcBeadsBdScriptPath(cityPath)) {
+	if samePath(script, gcBeadsBdScriptPath(cityPath)) ||
+		samePath(script, gcBeadsDoltliteBdScriptPath(cityPath)) ||
+		samePath(script, legacySystemPacksGcBeadsBdScriptPath(cityPath)) {
 		return "bd"
 	}
 	return provider
@@ -617,25 +623,6 @@ func rawBeadsProviderFromConfig(cityPath string) string {
 	return "bd"
 }
 
-func configuredBeadsBackendValue(cityPath string) string {
-	if v := strings.TrimSpace(os.Getenv("GC_BEADS_BACKEND")); v != "" {
-		return v
-	}
-	return strings.TrimSpace(peekBeadsBackend(filepath.Join(cityPath, "city.toml")))
-}
-
-func beadsBackend(cityPath string) string {
-	backend := strings.ToLower(configuredBeadsBackendValue(cityPath))
-	if backend == "" {
-		return "dolt"
-	}
-	return backend
-}
-
-func cityUsesDoltliteBeadsBackend(cityPath string) bool {
-	return beadsBackend(cityPath) == "doltlite"
-}
-
 func providerUsesBdStoreContract(provider string) bool {
 	return contract.ProviderUsesBDContract(provider)
 }
@@ -645,7 +632,7 @@ func cityUsesBdStoreContract(cityPath string) bool {
 }
 
 func cityUsesManagedDoltBeadsLifecycle(cityPath string) bool {
-	return cityUsesBdStoreContract(cityPath) && !cityUsesDoltliteBeadsBackend(cityPath)
+	return cityUsesBdStoreContract(cityPath) && resolveBeadsBackend(cityPath).NeedsManagedServer()
 }
 
 func rawBeadsProviderForScope(scopeRoot, cityPath string) string {
@@ -730,7 +717,8 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 				"positively mark this scope as bd-backed, add "+
 				"%s/.beads/metadata.json (with backend=dolt and the dolt_database "+
 				"name).",
-			scopeRoot, scopeRoot)
+			scopeRoot, scopeRoot,
+		)
 	}
 	if strings.TrimSpace(os.Getenv("GC_BEADS")) != "" {
 		return "GC_BEADS env var overrides the provider. Unset it, or set GC_BEADS=bd for this scope."
@@ -749,9 +737,18 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 func beadsProvider(cityPath string) string {
 	raw := rawBeadsProvider(cityPath)
 	if raw == "bd" {
+		if resolveBeadsBackend(cityPath).Name() == "doltlite" {
+			return "exec:" + gcBeadsDoltliteBdScriptPath(cityPath)
+		}
 		return "exec:" + gcBeadsBdScriptPath(cityPath)
 	}
 	return raw
+}
+
+// gcBeadsDoltliteBdScriptPath returns the stable per-city DoltLite bd
+// provider entrypoint.
+func gcBeadsDoltliteBdScriptPath(cityPath string) string {
+	return filepath.Join(cityPath, ".gc", "scripts", "gc-beads-doltlite-bd.sh")
 }
 
 // gcBeadsBdScriptPath returns the stable per-city gc-beads-bd entrypoint:

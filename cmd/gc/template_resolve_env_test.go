@@ -101,6 +101,83 @@ func TestResolveTemplatePrependsGCBinDirToConfiguredAgentPATH(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateDoesNotProjectBdScopeForDoltlitePluginRig(t *testing.T) {
+	cityPath := t.TempDir()
+	rigRoot := filepath.Join(cityPath, "gascity")
+	if err := os.MkdirAll(rigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cityConfig := "[workspace]\nname = \"city\"\n\n[beads]\nprovider = \"file\"\nbackend = \"doltlite\"\n"
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(cityConfig), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+
+	params := &agentBuildParams{
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Provider: "test"},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		rigs:       []config.Rig{{Name: "gascity", Path: rigRoot}},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+
+	agent := &config.Agent{Name: config.ControlDispatcherAgentName, Dir: "gascity"}
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if got := tp.Env["GC_BEADS"]; got != "file" {
+		t.Fatalf("GC_BEADS = %q, want file", got)
+	}
+	if got := tp.Env["GC_BEADS_SCOPE_ROOT"]; got != cityPath {
+		t.Fatalf("GC_BEADS_SCOPE_ROOT = %q, want city scope %q for plugin-backed rig", got, cityPath)
+	}
+	if got := tp.Env["BEADS_DIR"]; got != filepath.Join(rigRoot, ".beads") {
+		t.Fatalf("BEADS_DIR = %q, want rig .beads", got)
+	}
+}
+
+func TestResolveTemplateProjectsBdScopeForBdRig(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "bd")
+	rigRoot := filepath.Join(cityPath, "legacy")
+	if err := os.MkdirAll(rigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	params := &agentBuildParams{
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Provider: "test"},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		rigs:       []config.Rig{{Name: "legacy", Path: rigRoot}},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+
+	agent := &config.Agent{Name: "worker", Dir: "legacy"}
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if got := tp.Env["GC_BEADS"]; got != "bd" {
+		t.Fatalf("GC_BEADS = %q, want bd", got)
+	}
+	if got := tp.Env["GC_BEADS_SCOPE_ROOT"]; got != rigRoot {
+		t.Fatalf("GC_BEADS_SCOPE_ROOT = %q, want rig scope %q", got, rigRoot)
+	}
+	if got := tp.Env["BEADS_DIR"]; got != filepath.Join(rigRoot, ".beads") {
+		t.Fatalf("BEADS_DIR = %q, want rig .beads", got)
+	}
+}
+
 func TestResolveTemplateUsesTrustedRuntimeRootForControlTraceDefault(t *testing.T) {
 	cityPath := t.TempDir()
 	writeTemplateResolveCityConfig(t, cityPath, "file")

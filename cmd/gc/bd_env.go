@@ -87,6 +87,35 @@ func bdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...str
 	)
 }
 
+func bdStoreForScope(scopeRoot, cityPath string, cfg *config.City, knownPrefix ...string) *beads.BdStore {
+	scopeRoot = resolveStoreScopeRoot(cityPath, scopeRoot)
+	if samePath(scopeRoot, cityPath) {
+		return bdStoreForCity(scopeRoot, cityPath)
+	}
+	return bdStoreForRig(scopeRoot, cityPath, cfg, knownPrefix...)
+}
+
+func openBdStoreForScope(scopeRoot, cityPath string, cfg *config.City, knownPrefix ...string) beads.Store {
+	store := bdStoreForScope(scopeRoot, cityPath, cfg, knownPrefix...)
+	if optimized, ok := openOptimizedBackendStore(scopeRoot, cityPath, store); ok {
+		return optimized
+	}
+	return store
+}
+
+func openOptimizedBackendStoreForScope(scopeRoot, cityPath string, cfg *config.City, knownPrefix ...string) (beads.Store, bool) {
+	return openOptimizedBackendStore(scopeRoot, cityPath, bdStoreForScope(scopeRoot, cityPath, cfg, knownPrefix...))
+}
+
+func openOptimizedBackendStore(scopeRoot, cityPath string, store *beads.BdStore) (beads.Store, bool) {
+	scopeRoot = resolveStoreScopeRoot(cityPath, scopeRoot)
+	backend := resolveScopeBeadsBackend(cityPath, scopeRoot)
+	if !backend.Capabilities().OptimizedLocalStore {
+		return nil, false
+	}
+	return backend.OpenOptimizedStore(scopeRoot, cityPath, store)
+}
+
 func bdStoreOptionsForConfig(cfg *config.City) []beads.BdStoreOption {
 	if cfg != nil && cfg.Beads.UsesBD105CLISemantics() {
 		return []beads.BdStoreOption{beads.WithBdStoreListSkipLabels(true)}
@@ -350,6 +379,7 @@ func applyCanonicalDoltAuthEnv(env map[string]string, cityPath, scopeRoot string
 // (true, err) on a known backend that failed to project; caller MUST
 // surface this error rather than retrying.
 func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot string) (bool, error) {
+	backend := resolveBeadsBackend(cityPath)
 	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
 	if err != nil {
 		return false, err
@@ -361,6 +391,48 @@ func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot st
 	if metaErr != nil {
 		return true, metaErr
 	}
+	metaBackend := strings.TrimSpace(meta.Backend)
+	if backend.Name() == "doltlite" &&
+		(samePath(cityPath, scopeRoot) || resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity) {
+		switch metaBackend {
+		case "", "dolt", "doltlite":
+			clearProjectedDoltEnv(env)
+			clearProjectedPostgresEnv(env)
+			env["GC_BEADS_BACKEND"] = "doltlite"
+			env["BEADS_BACKEND"] = "doltlite"
+			mirrorBeadsDoltEnv(env)
+			return true, nil
+		}
+	}
+	if metaBackend != "" {
+		switch meta.Backend {
+		case "dolt":
+			clearProjectedBeadsBackendEnv(env)
+			clearProjectedPostgresEnv(env)
+			target, err := contract.ResolveDoltConnectionTarget(fsys.OSFS{}, cityPath, scopeRoot)
+			if err != nil {
+				return true, err
+			}
+			applyCanonicalDoltTargetEnv(env, target)
+			applyCanonicalDoltAuthEnv(env, cityPath, scopeRoot, target)
+			mirrorBeadsDoltEnv(env)
+			return true, nil
+		case "doltlite":
+			clearProjectedDoltEnv(env)
+			clearProjectedPostgresEnv(env)
+			env["GC_BEADS_BACKEND"] = "doltlite"
+			env["BEADS_BACKEND"] = "doltlite"
+			mirrorBeadsDoltEnv(env)
+			return true, nil
+		case "postgres":
+			if err := applyResolvedScopePostgresEnv(env, cityPath, scopeRoot, meta); err != nil {
+				return true, err
+			}
+			return true, nil
+		default:
+			return true, fmt.Errorf("unsupported backend %q for scope %s", meta.Backend, scopeRoot)
+		}
+	}
 	if resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity && meta.Backend == "" {
 		if usedPostgres, err := applyCityPostgresBackendEnv(env, cityPath); err != nil {
 			return true, err
@@ -370,7 +442,7 @@ func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot st
 	}
 	if resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity &&
 		(meta.Backend == "" || meta.Backend == "doltlite") &&
-		cityUsesDoltliteBeadsBackend(cityPath) {
+		backend.Name() == "doltlite" {
 		clearProjectedDoltEnv(env)
 		clearProjectedPostgresEnv(env)
 		env["GC_BEADS_BACKEND"] = "doltlite"
@@ -379,7 +451,7 @@ func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot st
 		return true, nil
 	}
 	switch meta.Backend {
-	case "", "dolt":
+	case "":
 		clearProjectedBeadsBackendEnv(env)
 		clearProjectedPostgresEnv(env)
 		target, err := contract.ResolveDoltConnectionTarget(fsys.OSFS{}, cityPath, scopeRoot)
@@ -389,18 +461,6 @@ func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot st
 		applyCanonicalDoltTargetEnv(env, target)
 		applyCanonicalDoltAuthEnv(env, cityPath, scopeRoot, target)
 		mirrorBeadsDoltEnv(env)
-		return true, nil
-	case "doltlite":
-		clearProjectedDoltEnv(env)
-		clearProjectedPostgresEnv(env)
-		env["GC_BEADS_BACKEND"] = "doltlite"
-		env["BEADS_BACKEND"] = "doltlite"
-		mirrorBeadsDoltEnv(env)
-		return true, nil
-	case "postgres":
-		if err := applyResolvedScopePostgresEnv(env, cityPath, scopeRoot, meta); err != nil {
-			return true, err
-		}
 		return true, nil
 	default:
 		return true, fmt.Errorf("unsupported backend %q for scope %s", meta.Backend, scopeRoot)
@@ -433,34 +493,61 @@ func applyCityPostgresBackendEnv(env map[string]string, cityPath string) (bool, 
 }
 
 func scopeBackendIsDoltlite(cityPath, scopeRoot string) bool {
-	meta, ok, err := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(scopeRoot))
-	if err == nil && ok && meta.Backend != "" {
-		return meta.Backend == "doltlite"
-	}
+	backend := resolveBeadsBackend(cityPath)
 	if samePath(cityPath, scopeRoot) {
-		return cityUsesDoltliteBeadsBackend(cityPath)
+		return backend.Name() == "doltlite"
 	}
-	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
-	if err != nil || resolved.Kind != contract.ScopeConfigAuthoritative {
+	meta, ok, err := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(scopeRoot))
+	metaBackend := ""
+	if err == nil && ok {
+		metaBackend = strings.TrimSpace(meta.Backend)
+	}
+	resolved, resolvedErr := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
+	if resolvedErr == nil &&
+		resolved.Kind == contract.ScopeConfigAuthoritative &&
+		resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity &&
+		backend.Name() == "doltlite" {
+		return metaBackend == "" || metaBackend == "dolt" || metaBackend == "doltlite"
+	}
+	if metaBackend != "" {
+		return metaBackend == "doltlite"
+	}
+	if resolvedErr != nil || resolved.Kind != contract.ScopeConfigAuthoritative {
 		return false
 	}
 	return resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity &&
-		cityUsesDoltliteBeadsBackend(cityPath)
+		backend.Name() == "doltlite"
 }
 
 func scopeOverridesCityBackend(cityPath, scopeRoot string) bool {
 	if samePath(cityPath, scopeRoot) {
 		return false
 	}
+	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
+	if err == nil && resolved.Kind == contract.ScopeConfigAuthoritative {
+		if resolved.State.EndpointOrigin == contract.EndpointOriginInheritedCity {
+			meta, ok, metaErr := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(scopeRoot))
+			if metaErr != nil || !ok {
+				return false
+			}
+			switch strings.TrimSpace(meta.Backend) {
+			case "postgres":
+				return true
+			default:
+				return false
+			}
+		}
+		meta, ok, metaErr := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(scopeRoot))
+		if metaErr == nil && ok && strings.TrimSpace(meta.Backend) != "" {
+			return true
+		}
+		return true
+	}
 	meta, ok, err := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(scopeRoot))
 	if err == nil && ok && strings.TrimSpace(meta.Backend) != "" {
 		return true
 	}
-	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
-	if err != nil || resolved.Kind != contract.ScopeConfigAuthoritative {
-		return false
-	}
-	return resolved.State.EndpointOrigin != contract.EndpointOriginInheritedCity
+	return false
 }
 
 // scopeMetadataJSONPath returns the absolute path to a scope's
@@ -1298,9 +1385,6 @@ func bdRuntimeEnvForRigWithErrorRecovery(cityPath string, cfg *config.City, rigP
 
 func nativeDoltOpenEnvForScope(cityPath string, cfg *config.City, scopeRoot string) (map[string]string, error) {
 	scopeRoot = resolveStoreScopeRoot(cityPath, scopeRoot)
-	if samePath(scopeRoot, cityPath) {
-		return bdRuntimeEnvWithError(cityPath)
-	}
 	if cfg == nil {
 		loaded, err := loadCityConfig(cityPath, io.Discard)
 		if err != nil {
@@ -1308,7 +1392,24 @@ func nativeDoltOpenEnvForScope(cityPath string, cfg *config.City, scopeRoot stri
 		}
 		cfg = loaded
 	}
-	return bdRuntimeEnvForRigWithError(cityPath, cfg, scopeRoot)
+	withPrefix := func(env map[string]string) map[string]string {
+		if prefix := issuePrefixForScope(scopeRoot, cityPath, cfg); prefix != "" {
+			env["GC_BEADS_PREFIX"] = prefix
+		}
+		return env
+	}
+	if samePath(scopeRoot, cityPath) {
+		env, err := bdRuntimeEnvWithError(cityPath)
+		if err != nil {
+			return nil, err
+		}
+		return withPrefix(env), nil
+	}
+	env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, scopeRoot)
+	if err != nil {
+		return nil, err
+	}
+	return withPrefix(env), nil
 }
 
 func bdRuntimeEnvWithError(cityPath string) (map[string]string, error) {

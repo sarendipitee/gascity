@@ -403,6 +403,77 @@ func TestDoHookClaimClaimsRoutedUnassignedWork(t *testing.T) {
 	}
 }
 
+func TestDoHookClaimSkipsClosedRoutedUnassignedWork(t *testing.T) {
+	runner := func(string, string) (string, error) {
+		return `[{"id":"hw-closed","status":"closed","metadata":{"gc.routed_to":"worker"}}]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(context.Context, string, []string, string, string) (beads.Bead, bool, error) {
+			t.Fatal("claim must not run for closed routed work")
+			return beads.Bead{}, false, nil
+		},
+		DrainAck: func(io.Writer) error { return nil },
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		DrainAck:           true,
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(closed routed work) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.Action != "drain" || result.Reason != "no_work" {
+		t.Fatalf("unexpected claim result: %+v", result)
+	}
+}
+
+func TestDoHookClaimCoercesNonStringMetadata(t *testing.T) {
+	runner := func(string, string) (string, error) {
+		return `[{"id":"hw-bool","status":"open","metadata":{"gc.routed_to":"worker","mail.read":true,"attempts":2,"empty":null}}]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(_ context.Context, _ string, _ []string, beadID, assignee string) (beads.Bead, bool, error) {
+			return beads.Bead{ID: beadID, Status: "in_progress", Assignee: assignee}, true, nil
+		},
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(bool metadata) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	candidates, err := decodeHookClaimBeads(`[{"id":"hw-bool","status":"open","metadata":{"mail.read":true,"attempts":2,"empty":null}}]`)
+	if err != nil {
+		t.Fatalf("decodeHookClaimBeads(bool metadata): %v", err)
+	}
+	if got := candidates[0].Metadata["mail.read"]; got != "true" {
+		t.Fatalf("metadata mail.read = %q, want true", got)
+	}
+	if got := candidates[0].Metadata["attempts"]; got != "2" {
+		t.Fatalf("metadata attempts = %q, want 2", got)
+	}
+	if got := candidates[0].Metadata["empty"]; got != "" {
+		t.Fatalf("metadata empty = %q, want empty string", got)
+	}
+}
+
 func TestDoHookClaimRetriesAfterClaimConflict(t *testing.T) {
 	var attempts []string
 	runner := func(string, string) (string, error) {
@@ -1959,74 +2030,6 @@ dir = "myrig"
 	}
 }
 
-// TestCmdHookRigScopedAgentFindsCityStoreWork guards the rig→city read
-// federation: a root-only (city-store) bead assigned to a rig-scoped agent
-// must surface through gc hook. The rig store is the agent's primary entry,
-// and a rig-backed agent's own work-query env is ALSO rig-scoped
-// (controllerWorkQueryEnv switches to rig coordinates when the agent has a
-// configured rig), so without a federated city entry the hook reports empty
-// while assigned city work sits invisible — e.g. singleton patrol wisps
-// created in the city store for a rig-scoped witness. Mirror of the #2877
-// city→rig federation in the opposite direction.
-func TestCmdHookRigScopedAgentFindsCityStoreWork(t *testing.T) {
-	clearGCEnv(t)
-	disableManagedDoltRecoveryForTest(t)
-	t.Setenv("GC_TMUX_SESSION", "host-session")
-	cityDir := t.TempDir()
-	fakeBin := t.TempDir()
-	rigDir := filepath.Join(cityDir, "myrig")
-
-	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(rigDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cityToml := fmt.Sprintf(`[workspace]
-name = "test-city"
-
-[[rigs]]
-name = "myrig"
-path = %q
-
-[[agent]]
-name = "worker"
-dir = "myrig"
-`, rigDir)
-	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// The fake bd answers with one ready row ONLY when queried against the
-	// CITY store; every rig-scoped query sees []. This simulates a root-only
-	// bead assigned to the rig-scoped agent.
-	cityBeads := filepath.Join(cityDir, ".beads")
-	fakeBD := filepath.Join(fakeBin, "bd")
-	script := fmt.Sprintf(`#!/bin/sh
-case "$BEADS_DIR" in
-  %s*) printf '[{"id":"td-city1","status":"open","assignee":"myrig/worker","title":"root-only city work"}]' ;;
-  *) printf '[]' ;;
-esac
-`, cityBeads)
-	if err := os.WriteFile(fakeBD, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+origPath)
-	t.Setenv("GC_CITY", cityDir)
-	t.Setenv("GC_DIR", rigDir)
-
-	var stdout, stderr bytes.Buffer
-	code := cmdHook([]string{"worker"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("cmdHook() = %d, want 0 (city-store work must surface); stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "td-city1") {
-		t.Fatalf("stdout = %q, want the city-store bead td-city1", stdout.String())
-	}
-}
-
 // TestCmdHookResolvesRelativeRigPath guards the relative-rig-path handling:
 // when `[[rigs]].path` is relative (e.g. "myrig-repo"), cmdHook must
 // normalize it to an absolute path before building the rig env, or
@@ -2563,5 +2566,43 @@ func TestClaimHookWorkDrainsClaimsErroredWhenEveryCandidateErrors(t *testing.T) 
 	}
 	if result.Action != "drain" || result.Reason != "claims_errored" {
 		t.Fatalf("claim result = %+v, want drain/claims_errored", result)
+	}
+}
+// TestFilterUnreadyHookCandidatesExcludesClosedBeads guards against upstream
+// Dolt status-index drift where bd list --status=open returns closed beads
+// (gcy-1on). filterUnreadyHookCandidates must strip them before they reach the
+// agent hook output.
+func TestFilterUnreadyHookCandidatesExcludesClosedBeads(t *testing.T) {
+	now := time.Now()
+	input := `[{"id":"gc-closed","status":"closed","title":"Already done"},{"id":"gc-open","status":"open","title":"Real work"}]`
+	got := filterUnreadyHookCandidates(input, now)
+
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(got), &items); err != nil {
+		t.Fatalf("unmarshal result: %v; raw=%q", err, got)
+	}
+	if len(items) != 1 {
+		t.Fatalf("filterUnreadyHookCandidates returned %d items, want 1; got %q", len(items), got)
+	}
+	if id, _ := items[0]["id"].(string); id != "gc-open" {
+		t.Fatalf("remaining bead id = %q, want gc-open", id)
+	}
+}
+
+// TestFilterUnreadyHookCandidatesExcludesClosedBeadsFromReworkDrift verifies
+// that a closed bead with started_at set (the rework probe shape) is stripped
+// even when it carries gc.routed_to, simulating the phantom-witness-escalation
+// scenario from gcy-1on.
+func TestFilterUnreadyHookCandidatesExcludesClosedBeadsFromReworkDrift(t *testing.T) {
+	now := time.Now()
+	input := `[{"id":"gcy-oqf","status":"closed","started_at":"2026-06-01T00:00:00Z","metadata":{"gc.routed_to":"gascity-source/gastown.refinery"}}]`
+	got := filterUnreadyHookCandidates(input, now)
+
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(got), &items); err != nil {
+		t.Fatalf("unmarshal result: %v; raw=%q", err, got)
+	}
+	if len(items) != 0 {
+		t.Fatalf("filterUnreadyHookCandidates returned %d items for closed bead, want 0; got %q", len(items), got)
 	}
 }

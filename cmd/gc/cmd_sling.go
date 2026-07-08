@@ -405,7 +405,11 @@ func cmdSlingWithJSON(args []string, isFormula, doNudge, force bool, title strin
 		Store:    store,
 		StoreRef: storeRef,
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
-			stores, skips, err := openSourceWorkflowStores(cfg, cityPath, "")
+			sourceWorkflowBeadID := ""
+			if !isFormula {
+				sourceWorkflowBeadID = beadOrFormula
+			}
+			stores, skips, err := openSourceWorkflowStores(cfg, cityPath, sourceWorkflowBeadID)
 			if err != nil {
 				return nil, err
 			}

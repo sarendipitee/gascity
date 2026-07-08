@@ -38,11 +38,41 @@ export CGO_LDFLAGS
 endif
 endif
 
+# Nix/Flox: when the installed gc binary links ICU from the Nix store, system
+# ICU headers in /usr/include may exist but link to the wrong libicuuc version,
+# causing a __vdso_gettimeofday dlopen error at test/run time. Detect the ICU
+# version the installed gc binary actually links (following symlinks to the real
+# Nix store path), find the matching dev package, point CGO at it, disable the
+# /usr/include fallback, and embed an rpath so the rebuilt binary finds its libs
+# without LD_LIBRARY_PATH (important for the systemd supervisor service unit).
+#
+# Gate: _NIX_ICU_RT must resolve (after readlink -f) to a /nix/store path.
+# This keeps the block inert in hermetic test environments where gc is not
+# installed pointing at Nix ICU (CC being a temp-dir fake binary is not a
+# reliable signal on Flox hosts where CC is system gcc but libs are Nix-managed).
+ifeq ($(shell uname),Linux)
+_GC_BIN         := $(shell command -v gc 2>/dev/null)
+_NIX_ICU_RT_RAW := $(shell ldd $(_GC_BIN) 2>/dev/null | grep -m1 'libicuuc' | awk '{print $$3}')
+_NIX_ICU_RT     := $(shell readlink -f '$(_NIX_ICU_RT_RAW)' 2>/dev/null)
+ifneq ($(filter /nix/store/%,$(_NIX_ICU_RT)),)
+_NIX_ICU_HASH   := $(shell printf '%s' "$(_NIX_ICU_RT)" | sed 's|/nix/store/\([^-]*\)-.*|\1|')
+_NIX_ICU_LIBDIR := $(dir $(_NIX_ICU_RT))
+_NIX_ICU_DEV    := $(shell for d in /nix/store/*-icu4c-*-dev; do grep -q "$(_NIX_ICU_HASH)" "$$d/nix-support/propagated-build-inputs" 2>/dev/null && printf '%s' "$$d" && break; done)
+ifneq ($(_NIX_ICU_DEV),)
+CGO_CPPFLAGS += -I$(_NIX_ICU_DEV)/include
+CGO_LDFLAGS  += -L$(_NIX_ICU_LIBDIR) -Wl,-rpath,$(_NIX_ICU_LIBDIR)
+export CGO_CPPFLAGS
+export CGO_LDFLAGS
+SYS_USR_CGO_FALLBACK := 0
+$(info Nix/Flox ICU detected: -I$(_NIX_ICU_DEV)/include -L$(_NIX_ICU_LIBDIR) -rpath $(_NIX_ICU_LIBDIR); SYS_USR_CGO_FALLBACK disabled)
+endif
+endif
+endif
 # Linux: some non-system compilers (Nix, Flox, etc.) don't search /usr/include
 # or /usr/lib by default. If system ICU headers exist but the compiler doesn't
 # see them, intentionally let system paths participate in the whole CGO build.
 # Set SYS_USR_CGO_FALLBACK=0 to disable this fallback for hermetic or cross-CGO
-# builds.
+# builds. (Nix block above sets SYS_USR_CGO_FALLBACK=0 when Nix ICU is found.)
 ifeq ($(shell uname),Linux)
 SYS_USR_CGO_FALLBACK ?= 1
 ifneq ($(SYS_USR_CGO_FALLBACK),0)
@@ -64,7 +94,7 @@ endif
 endif
 endif
 
-.PHONY: build check check-all check-bd check-docker check-docs check-dolt check-eventexport-isolation check-gomod-replace check-core-boundary check-native-dependency-surface check-routed-test-rows check-version-tag lint lint-full lint-new lint-changed fmt-check fmt vet test test-mac test-fast-parallel test-fsys-darwin-compile test-pack-registry-live test-native-doltlite-beads test-cmd-gc-process test-cmd-gc-process-shard test-cmd-gc-process-parallel test-worker-core test-worker-core-phase2 test-worker-core-phase2-real-transport setup-worker-inference test-worker-inference test-worker-inference-phase3 test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-parallel test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-local-full-parallel test-mail-wisp-insert test-mcp-mail test-openclaw-bridge test-docker test-k8s test-cover test-cover-mac test-cover-noncmdgc test-cover-cmdgc-shard cover install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev diagrams-excalidraw dashboard-smoke
+.PHONY: build check check-all check-bd check-docker check-docs check-dolt check-eventexport-isolation check-gomod-replace check-core-boundary check-native-dependency-surface check-routed-test-rows check-version-tag lint lint-full lint-new lint-changed fmt-check fmt vet test test-mac test-fast-parallel test-fsys-darwin-compile test-pack-registry-live test-native-doltlite-beads test-cmd-gc-process test-cmd-gc-process-shard test-cmd-gc-process-parallel test-worker-core test-worker-core-phase2 test-worker-core-phase2-real-transport setup-worker-inference test-worker-inference test-worker-inference-phase3 test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-parallel test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-local-full-parallel test-mail-wisp-insert test-mcp-mail test-openclaw-bridge test-docker test-k8s test-cover test-cover-mac test-cover-noncmdgc test-cover-cmdgc-shard cover check-self-contained install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev diagrams-excalidraw dashboard-smoke
 
 ## build: compile gc binary with version metadata
 build:
@@ -73,8 +103,36 @@ ifeq ($(shell uname),Darwin)
 	@scripts/sign-darwin-local.sh $(BUILD_DIR)/$(BINARY)
 endif
 
+## check-self-contained: assert the built gc binary is self-contained (Linux/Nix ICU rpath).
+## A binary without an ICU RUNPATH loads interactively (your shell has the Flox
+## env) but silently boot-fails EVERY supervisor-spawned agent, which has no
+## LD_LIBRARY_PATH -> town-wide stall. This gate makes that impossible to ship.
+## See AGENTS.md "Rebuilding the deployable gc binary".
+check-self-contained: build
+ifeq ($(shell uname),Linux)
+	@set -e; \
+		bin="$(BUILD_DIR)/$(BINARY)"; \
+		if command -v readelf >/dev/null 2>&1; then \
+			if ! readelf -d "$$bin" 2>/dev/null | grep -qiE 'RUNPATH|RPATH'; then \
+				echo "FATAL: $$bin has no RUNPATH/RPATH — NOT self-contained."; \
+				echo "       Use 'make build' (bakes ICU -Wl,-rpath), not raw 'go build'."; \
+				echo "       See AGENTS.md: Rebuilding the deployable gc binary."; \
+				exit 1; \
+			fi; \
+		else \
+			echo "WARN: readelf not found; skipping RUNPATH check (install discouraged)"; \
+		fi; \
+		if ! env -i HOME="$(HOME)" PATH=/usr/bin:/bin "$$bin" version >/dev/null 2>&1; then \
+			echo "FATAL: $$bin failed clean-env boot (no LD_LIBRARY_PATH)."; \
+			echo "       Supervisor-spawned agents will silently boot-fail on ICU."; \
+			echo "       Build with 'make build'; see AGENTS.md."; \
+			exit 1; \
+		fi; \
+		echo "OK: $$bin self-contained (RUNPATH present + clean-env boot passes)"
+endif
+
 ## install: build and install gc to GOPATH/bin (same location as go install)
-install: build
+install: check-self-contained
 	@mkdir -p $(INSTALL_DIR)
 	@set -e; \
 		tmp="$(INSTALL_DIR)/.$(BINARY).tmp.$$$$"; \
@@ -306,6 +364,22 @@ TEST_ENV = env -i \
 	CGO_LDFLAGS="$${CGO_LDFLAGS-}" \
 	$(EXTRA_TEST_ENV)
 
+DOLTLITE_TEST_LIB_CANDIDATES := $(strip \
+	$(DOLTLITE_LIB) \
+	$(GC_DOLTLITE_LIB) \
+	$(CURDIR)/../doltlite-work/build \
+	$(CURDIR)/../doltlite/build \
+	$(CURDIR)/../doltlite \
+	$(CURDIR)/doltlite-work/build \
+	$(CURDIR)/doltlite/build \
+	$(CURDIR)/doltlite \
+	/usr/local/lib \
+	/opt/homebrew/lib \
+	/usr/lib \
+	/usr/lib/$(shell dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null) \
+)
+DOLTLITE_TEST_LIB_DIR := $(firstword $(foreach dir,$(DOLTLITE_TEST_LIB_CANDIDATES),$(if $(wildcard $(dir)/libdoltlite.so $(dir)/libdoltlite.so.0 $(dir)/libdoltlite.dylib $(dir)/libdoltlite.a),$(dir))))
+
 ## test: run fast unit tests (skip integration-tagged and GC_FAST_UNIT-gated process tests)
 ## The skipped cmd/gc process-backed scenarios remain covered by
 ## `make test-cmd-gc-process` locally and the CI `cmd/gc process suite` job.
@@ -354,9 +428,21 @@ test-pack-registry-live:
 update-bundled-gastown-pack:
 	scripts/update-bundled-gastown-pack
 
-## test-native-doltlite-beads: compile and run the native DoltLite read-store suite
+## test-native-doltlite-beads: compile and run the native libdoltlite test suite
 test-native-doltlite-beads:
-	$(TEST_ENV) CGO_ENABLED=0 go test -tags gascity_native_beads ./internal/beads -count=1
+	@lib_dir="$(DOLTLITE_TEST_LIB_DIR)"; \
+	if [ -z "$$lib_dir" ]; then \
+		echo "libdoltlite not found. Set DOLTLITE_LIB/GC_DOLTLITE_LIB to a directory containing libdoltlite, install DoltLite, or build ../doltlite-work/build."; \
+		exit 2; \
+	fi; \
+	echo "Using libdoltlite from $$lib_dir"; \
+	$(TEST_ENV) CGO_ENABLED=1 \
+		DOLTLITE_LIB="$$lib_dir" \
+		GC_DOLTLITE_LIB="$$lib_dir" \
+		LD_LIBRARY_PATH="$$lib_dir:$${LD_LIBRARY_PATH-}" \
+		DYLD_LIBRARY_PATH="$$lib_dir:$${DYLD_LIBRARY_PATH-}" \
+		CGO_LDFLAGS="-L$$lib_dir $${CGO_LDFLAGS-}" \
+		scripts/test-native-doltlite
 
 ## sync-bd-corpus: vendor the bd contract corpus from a beads release (BD_CORPUS_TAG=vX.Y.Z)
 sync-bd-corpus:

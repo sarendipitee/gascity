@@ -587,7 +587,7 @@ func doRigAddWithResult(fs fsys.FS, cityPath, rigPath string, includes []string,
 	}
 	w("  Generated routes.jsonl for cross-rig routing")
 
-	if adopt {
+	if adopt && resolveBeadsBackend(cityPath).NeedsManagedServer() {
 		if err := installBeadHooks(rigPath, cityPath); err != nil {
 			fmt.Fprintf(stderr, "gc rig add: installing bead hooks: %v\n", err) //nolint:errcheck // best-effort stderr
 		}

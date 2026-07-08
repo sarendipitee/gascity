@@ -1,0 +1,13 @@
+Working copy changes:
+M .beads/config.yaml
+A workflow-artifacts/upstream-merge-audit/revisions.txt
+A workflow-artifacts/upstream-merge-audit/status.txt
+Working copy  (@) : vkwmrxql eda70734 (conflict) Merge upstream main into DoltLite integration line
+Parent commit (@-): ksxuolmk 2a2a076a Preserve workflow plan artifacts
+Parent commit (@-): qqoynwux dd30f7fc main | fix(overlay): stage family overlay for custom providers lacking a concrete overlay dir (gc-6bw8o) (#3737)
+Warning: There are unresolved conflicts at these paths:
+.beads/config.yaml                  2-sided conflict
+cmd/gc/build_desired_state.go       2-sided conflict
+cmd/gc/build_desired_state_test.go  2-sided conflict
+cmd/gc/pool_desired_state.go        2-sided conflict
+cmd/gc/session_lifecycle_parallel.go 2-sided conflict

@@ -189,6 +189,36 @@ func TestGcExecLifecycleInitProcessEnvDoesNotProjectCanonicalFilesOwnedFlagForGc
 	}
 }
 
+func TestGcExecLifecycleInitProcessEnvProjectsDoltliteBackendForGcBeadsDoltliteBd(t *testing.T) {
+	cityDir := t.TempDir()
+	writeExecStoreCityConfig(t, cityDir, "metro-city", "ct", nil)
+	f, err := os.OpenFile(filepath.Join(cityDir, "city.toml"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n[beads]\nbackend = \"doltlite\"\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := execStoreTarget{ScopeRoot: cityDir, ScopeKind: "city", Prefix: "ct"}
+	env, err := gcExecLifecycleInitProcessEnv(cityDir, target, "exec:/tmp/gc-beads-doltlite-bd")
+	if err != nil {
+		t.Fatalf("gcExecLifecycleInitProcessEnv(gc-beads-doltlite-bd): %v", err)
+	}
+	if got := envSliceValue(env, "GC_BEADS_BACKEND"); got != "doltlite" {
+		t.Fatalf("GC_BEADS_BACKEND = %q, want doltlite", got)
+	}
+	if got := envSliceValue(env, "BEADS_BACKEND"); got != "doltlite" {
+		t.Fatalf("BEADS_BACKEND = %q, want doltlite", got)
+	}
+	if got := envSliceValue(env, "GC_STORE_ROOT"); got != cityDir {
+		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, cityDir)
+	}
+}
+
 func TestGcExecLifecycleInitProcessEnvDoesNotLeakAmbientBEADS_DIRForGcBeadsK8s(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := filepath.Join(cityDir, "rigs", "frontend")

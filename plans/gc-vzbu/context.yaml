@@ -1,0 +1,52 @@
+schema_version: "1"
+plan_slug: "gc-vzbu"
+created_at: "2026-06-23T04:29:00Z"
+rig: "gascity"
+rig_root: "/data/projects/doltlite-gascity/gascity"
+city_root: "/data/projects/doltlite-gascity"
+work_item: "gc-vzbu"
+title: "Set up clean DoltLite Gas City build workspace"
+
+problem:
+  summary: >
+    The beads-doltlite pack builds gc from the live Gas City source checkout
+    at jj @. The current /data/projects/doltlite-gascity/gascity @ is a PR/docs
+    line, not the DoltLite integration build line, so running
+    gc beads-doltlite build all --install from the default discovered source
+    can install a binary missing local DoltLite integration work.
+  evidence:
+    - "beads-doltlite commands/build/run.sh resolves gc source from $CITY_ROOT/gascity unless --gc-source or GASCITY_SRC is supplied."
+    - "The build script records the Gas City source revision with jj log -r @ and runs go build from that source directory."
+    - "Current gascity @ ancestry is main -> pr/runtime-ready-demand-snapshot -> docs: record DoltLite demand snapshot design review."
+    - "The DoltLite integration line is represented by bookmark gc-0a4-doltlite-lock-pool-fix and related descendants."
+    - "The clean upstream PR branch pr/runtime-ready-demand-snapshot is for upstream review only and must not be treated as the local install/build source."
+
+goals:
+  - "Create or standardize a dedicated jj workspace, expected name/path: gascity-build at /data/projects/doltlite-gascity/gascity-build."
+  - "Keep the build workspace on the intended DoltLite integration build revision, separate from PR and document-workflow workspaces."
+  - "Document the exact beads-doltlite build invocation that uses the build workspace, for example --gc-source /data/projects/doltlite-gascity/gascity-build."
+  - "Add preflight checks so the build path fails before install when the source workspace is not on the intended integration line or has unrelated changes."
+  - "Keep installed build tags meaningful: tag only revisions that actually produced installed binaries."
+
+constraints:
+  - "Use standard Gas City/jj pack workflows wherever possible."
+  - "Do not run an install from /data/projects/doltlite-gascity/gascity while it is on PR or docs work."
+  - "Do not delete or rewrite the upstream PR branch pr/runtime-ready-demand-snapshot."
+  - "Do not lose current source history; use jj workspaces/bookmarks/tags instead of destructive checkout/reset operations."
+  - "DoltLite-linked builds should continue to use gc beads-doltlite build all --install once the source path is correct."
+  - "Do not push or open a PR unless explicitly approved later."
+
+known_revisions:
+  current_pr_bookmark: "pr/runtime-ready-demand-snapshot"
+  current_pr_change: "nwyvrryoxzzmpmwozmkmuuxmvsxuvpqn"
+  current_docs_child: "sywworntkvlu"
+  doltlite_integration_bookmark: "gc-0a4-doltlite-lock-pool-fix"
+  doltlite_integration_change: "vorpomlsorrwykqxnuxvtzutrvrzpqxu"
+  installed_build_tag: "build/gc-installed-20260623T013004Z-dirty-base"
+
+acceptance_criteria:
+  - "A dedicated build workspace exists or the implementation documents why an existing workspace should be reused."
+  - "The build workspace jj @ is on the intended DoltLite integration line, not the upstream PR/docs line."
+  - "The beads-doltlite build command is documented with explicit --gc-source and --bd-source behavior where relevant."
+  - "A preflight or runbook prevents accidental install from the default gascity checkout when it is on a PR/docs line."
+  - "Validation includes jj status/log evidence for the source workspace and a no-install dry build or bounded build check if appropriate."

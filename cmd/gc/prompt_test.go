@@ -533,6 +533,36 @@ func TestRenderPromptSplitWorkQueries(t *testing.T) {
 	}
 }
 
+func TestRenderPromptAllBeadsCommandFields(t *testing.T) {
+	f := fsys.NewFake()
+	f.Files["/city/prompts/test.md.tmpl"] = []byte(strings.Join([]string{
+		"Work: {{ .WorkQuery }}",
+		"InProgress: {{ .AssignedInProgressQuery }}",
+		"Ready: {{ .AssignedReadyQuery }}",
+		"Routed: {{ .RoutedPoolQuery }}",
+		"Sling: {{ .SlingQuery }}",
+	}, "\n"))
+	ctx := PromptContext{
+		WorkQuery:               "bd ready --json --limit=1",
+		AssignedInProgressQuery: "bd list --status=in_progress --assignee=worker",
+		AssignedReadyQuery:      "bd ready --assignee=worker",
+		RoutedPoolQuery:         "bd ready --metadata-field gc.routed_to=worker --unassigned",
+		SlingQuery:              "bd update {} --set-metadata gc.routed_to=worker",
+	}
+
+	got := renderPrompt(f, "/city", "", "prompts/test.md.tmpl", ctx, "", io.Discard, nil, nil, nil)
+	want := strings.Join([]string{
+		"Work: bd ready --json --limit=1",
+		"InProgress: bd list --status=in_progress --assignee=worker",
+		"Ready: bd ready --assignee=worker",
+		"Routed: bd ready --metadata-field gc.routed_to=worker --unassigned",
+		"Sling: bd update {} --set-metadata gc.routed_to=worker",
+	}, "\n")
+	if got != want {
+		t.Errorf("renderPrompt(all beads command fields) = %q, want %q", got, want)
+	}
+}
+
 func TestBuildTemplateData(t *testing.T) {
 	ctx := PromptContext{
 		CityRoot:                "/city",

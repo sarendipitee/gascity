@@ -11,7 +11,7 @@ import (
 
 // newNoScaleCheckNamedBackingCity builds a city with a single rig pool agent
 // that has min=0 and NO custom scale_check, backed by one on_demand named
-// session. This shape mirrors Voxist's coordinator/planner pools: the session
+// session. This shape mirrors Voxist's coordinator/planner sessions: the session
 // identity is the rig-scoped name (e.g. "rig-A/planner") and routed demand
 // lives in the city store.
 func newNoScaleCheckNamedBackingCity(t *testing.T) (cfg *config.City, cityStore beads.Store, rigStores map[string]beads.Store, identity string) {
@@ -48,12 +48,11 @@ func newNoScaleCheckNamedBackingCity(t *testing.T) (cfg *config.City, cityStore 
 
 // TestBuildDesiredState_ScaleFromZero_NoScaleCheck_CrossStore_NamedPath is the
 // regression guard for vp-cl4 — the named-session-backed path symmetry gap.
-// A cold rig pool that backs a named session and has no custom scale_check must
+// A cold rig agent that backs a named session and has no custom scale_check must
 // cold-wake from routed demand in the CITY store (the vp-kvp cross-store
 // delivery model) just as a generic no-scale_check pool does after vp-s37.
-// The routed work still wakes the backing pool, not the named-session alias.
 // Before the fix the named-path branch did not add the city-store probe, so a
-// sleeping named-backing rig pool never woke on cross-store demand.
+// sleeping named-backing rig session never woke on cross-store demand.
 func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_CrossStore_NamedPath(t *testing.T) {
 	cfg, cityStore, rigStores, identity := newNoScaleCheckNamedBackingCity(t)
 
@@ -71,14 +70,14 @@ func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_CrossStore_NamedPath(t *te
 		cityStore, rigStores, &sessionBeadSnapshot{}, nil, os.Stderr,
 	)
 
-	if result.NamedSessionDemand[identity] {
-		t.Errorf("cross-store cold-wake: NamedSessionDemand[%q] = true, want false for pool-routed work", identity)
+	if !result.NamedSessionDemand[identity] {
+		t.Errorf("cross-store cold-wake: NamedSessionDemand[%q] = false, want true for identity-routed work", identity)
 	}
-	if got := result.ScaleCheckCounts[identity]; got != 1 {
-		t.Errorf("cross-store cold-wake demand = %d, want 1 (city-store routed bead must wake cold named-backing pool)", got)
+	if got := result.ScaleCheckCounts[identity]; got != 0 {
+		t.Errorf("cross-store cold-wake pool demand = %d, want 0 (identity-routed bead must wake named session)", got)
 	}
 	if len(result.State) < 1 {
-		t.Errorf("desired sessions = %d, want >= 1 (backing pool must be materialized)", len(result.State))
+		t.Errorf("desired sessions = %d, want >= 1 (named session must be materialized)", len(result.State))
 	}
 }
 
@@ -102,11 +101,71 @@ func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_NamedPath_OwnRigStillWakes
 		cityStore, rigStores, &sessionBeadSnapshot{}, nil, os.Stderr,
 	)
 
-	if result.NamedSessionDemand[identity] {
-		t.Errorf("own-rig cold-wake: NamedSessionDemand[%q] = true, want false for pool-routed work", identity)
+	if !result.NamedSessionDemand[identity] {
+		t.Errorf("own-rig cold-wake: NamedSessionDemand[%q] = false, want true for identity-routed work", identity)
 	}
-	if got := result.ScaleCheckCounts[identity]; got != 1 {
-		t.Errorf("own-rig cold-wake demand = %d, want 1", got)
+	if got := result.ScaleCheckCounts[identity]; got != 0 {
+		t.Errorf("own-rig cold-wake pool demand = %d, want 0", got)
+	}
+}
+
+func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_NamedPath_DistinctTemplateRouteUsesClampedPoolFallback(t *testing.T) {
+	cfg, cityStore, rigStores, _ := newNoScaleCheckNamedBackingCity(t)
+	cfg.NamedSessions[0].Name = "primary"
+	template := cfg.Agents[0].QualifiedName()
+	identity := cfg.NamedSessions[0].QualifiedName()
+
+	for _, id := range []string{"bead-city-1", "bead-city-2"} {
+		if _, err := cityStore.Create(beads.Bead{
+			ID:       id,
+			Status:   "open",
+			Type:     "task",
+			Metadata: map[string]string{"gc.routed_to": template},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := buildDesiredStateWithSessionBeads(
+		"test-city", t.TempDir(), time.Now(), cfg, &localMockProvider{},
+		cityStore, rigStores, &sessionBeadSnapshot{}, nil, os.Stderr,
+	)
+
+	if result.NamedSessionDemand[identity] {
+		t.Errorf("template-routed work: NamedSessionDemand[%q] = true, want false for distinct named identity", identity)
+	}
+	if got := result.ScaleCheckCounts[template]; got != 1 {
+		t.Errorf("template-routed pool fallback demand = %d, want clamped 1", got)
+	}
+}
+
+func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_NamedPath_AlwaysSkipsPoolFallback(t *testing.T) {
+	cfg, cityStore, rigStores, _ := newNoScaleCheckNamedBackingCity(t)
+	cfg.NamedSessions[0].Name = "primary"
+	cfg.NamedSessions[0].Mode = "always"
+	template := cfg.Agents[0].QualifiedName()
+
+	for _, id := range []string{"bead-city-1", "bead-city-2"} {
+		if _, err := cityStore.Create(beads.Bead{
+			ID:       id,
+			Status:   "open",
+			Type:     "task",
+			Metadata: map[string]string{"gc.routed_to": template},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := buildDesiredStateWithSessionBeads(
+		"test-city", t.TempDir(), time.Now(), cfg, &localMockProvider{},
+		cityStore, rigStores, &sessionBeadSnapshot{}, nil, os.Stderr,
+	)
+
+	if got := result.ScaleCheckCounts[template]; got != 0 {
+		t.Errorf("always named-session pool fallback demand = %d, want 0", got)
+	}
+	if len(result.State) == 0 {
+		t.Errorf("desired sessions = 0, want always named session materialized")
 	}
 }
 
@@ -180,10 +239,10 @@ func TestBuildDesiredState_ScaleFromZero_NoScaleCheck_NamedPath_AliasedRigStoreN
 
 	// With an aliased store, demand should still be detected (it's a real bead)
 	// but must not be double-counted.
-	if result.NamedSessionDemand[identity] {
-		t.Errorf("aliased-store: NamedSessionDemand[%q] = true, want false for pool-routed work", identity)
+	if !result.NamedSessionDemand[identity] {
+		t.Errorf("aliased-store: NamedSessionDemand[%q] = false, want true for identity-routed work", identity)
 	}
-	if got := result.ScaleCheckCounts[identity]; got != 1 {
-		t.Errorf("aliased-store demand = %d, want 1 (aliased store bead must still be detected once)", got)
+	if got := result.ScaleCheckCounts[identity]; got != 0 {
+		t.Errorf("aliased-store pool demand = %d, want 0 (aliased store bead should wake named session, not pool)", got)
 	}
 }

@@ -236,7 +236,7 @@ func renderGastownPromptForPack(t *testing.T, rel, agentName, templateName, rigN
 
 	ctx := map[string]string{
 		"AgentName":               agentName,
-		"AssignedInProgressQuery": `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"; bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_NAME"; bd list --include-ephemeral --status in_progress --assignee="$GC_ALIAS"`,
+		"AssignedInProgressQuery": `bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1; bd ready --include-ephemeral --assignee="$GC_SESSION_NAME" --json --limit=1; bd ready --include-ephemeral --assignee="$GC_ALIAS" --json --limit=1`,
 		"AssignedReadyQuery":      "bd ready --include-ephemeral --assignee=<session>",
 		"BindingName":             bindingName,
 		"BindingPrefix":           bindingPrefix,
@@ -2048,9 +2048,9 @@ func TestDogStartupPromptUsesSplitClaimFirstQueries(t *testing.T) {
 	// fragment: split queries expand, claim precedes inspection, and the
 	// source-aware verification guidance survives rendering.
 	assertContainsInOrder(t, renderedDogPrompt,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_NAME"`,
-		`bd list --include-ephemeral --status in_progress --assignee="$GC_ALIAS"`,
+		`bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1`,
+		`bd ready --include-ephemeral --assignee="$GC_SESSION_NAME" --json --limit=1`,
+		`bd ready --include-ephemeral --assignee="$GC_ALIAS" --json --limit=1`,
 		"bd ready --include-ephemeral --assignee=<session>",
 		"bd ready --metadata-field gc.routed_to=<canonical> --unassigned",
 		"gc bd update <id> --claim",
@@ -2073,7 +2073,7 @@ func TestDogStartupPromptUsesSplitClaimFirstQueries(t *testing.T) {
 func TestNonDogStartupPromptsUseCompatibilityAwareWorkLookup(t *testing.T) {
 	const (
 		assignedInProgressTemplate = "{{ .AssignedInProgressQuery }}"
-		assignedInProgressRendered = `bd list --include-ephemeral --status in_progress --assignee="$GC_SESSION_ID"`
+		assignedInProgressRendered = `bd ready --include-ephemeral --assignee="$GC_SESSION_ID" --json --limit=1`
 		hookClaimJSON              = "gc hook --claim --json"
 	)
 	checks := []struct {
@@ -2850,8 +2850,8 @@ func TestGastownPatrolPromptFallbackPreservesLifecycle(t *testing.T) {
 				`run ` + "`gc hook`" + ` immediately`,
 				`CURRENT_WISP=${GC_BEAD_ID:-}`,
 				`if [ -z "$CURRENT_WISP" ]; then`,
-				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
-				`ASSIGNED_WISP=$(gc bd list --assignee="$GC_AGENT" --status=open --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
+				`ASSIGNED_WISP=$(gc bd list --assignee="$GC_AGENT" --status=open --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
 				`if [ -n "$CURRENT_WISP" ] && [ -z "$ASSIGNED_WISP" ]; then`,
 				`NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix=gastown. --json | jq -r '.new_epic_id // empty')`,
 				`if [ -z "$NEXT" ]; then`,
@@ -2941,7 +2941,7 @@ func TestRefineryPatrolRestartGuidanceAssignsSuccessor(t *testing.T) {
 			wantOrder: []string{
 				`CURRENT_WISP=${GC_BEAD_ID:-}`,
 				`if [ -z "$CURRENT_WISP" ]; then`,
-				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
 				`fi`,
 				`NEXT=$(gc bd mol wisp mol-refinery-patrol --root-only --var target_branch={{ .DefaultBranch }} --var rig_name={{ .RigName }} --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')`,
 				`if [ -z "$NEXT" ]; then`,
@@ -2967,7 +2967,7 @@ func TestRefineryPatrolRestartGuidanceAssignsSuccessor(t *testing.T) {
 			wantOrder: []string{
 				`CURRENT_WISP=${GC_BEAD_ID:-}`,
 				`if [ -z "$CURRENT_WISP" ]; then`,
-				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+				`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
 				`fi`,
 				`NEXT=$(gc bd mol wisp mol-refinery-patrol --root-only --var target_branch={{target_branch}} --var rig_name={{rig_name}} --var binding_prefix={{binding_prefix}} --json | jq -r '.new_epic_id // empty')`,
 				`if [ -z "$NEXT" ]; then`,
@@ -3007,7 +3007,7 @@ func TestRefineryPatrolRestartGuidanceAssignsSuccessor(t *testing.T) {
 	assertContainsInOrder(t, patrolLifecycle,
 		`CURRENT_WISP=${GC_BEAD_ID:-}`,
 		`if [ -z "$CURRENT_WISP" ]; then`,
-		`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+		`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
 		`fi`,
 		`NEXT=$(gc bd mol wisp mol-refinery-patrol --root-only --var target_branch={{ .DefaultBranch }} --var rig_name={{ .RigName }} --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')`,
 		`if [ -z "$NEXT" ]; then`,
@@ -3801,14 +3801,22 @@ func TestPackPromptFilesExist(t *testing.T) {
 
 func TestCityAgentsFilter(t *testing.T) {
 	// Verify config.LoadWithIncludes with both packs produces
-	// only city-scoped agents when no rigs are registered:
+	// only city-scoped explicit agents when no rigs are registered:
 	// mayor/deacon/boot + the gastown dog pool + the dolt maintenance dog
-	// contributed by the composed builtin bd pack + the core control dispatcher
-	// = 6. The two dogs keep distinct binding-qualified identities
+	// contributed by the composed builtin bd pack = 5. The builtin core
+	// control-dispatcher may also be present, but it is implicit and should not
+	// affect the explicit-agent count. The two dogs keep distinct
+	// binding-qualified identities
 	// (gastown.dog vs bd.dog).
 	cfg := loadExpanded(t)
 
-	cityAgents := map[string]bool{"mayor": true, "deacon": true, "boot": true, "dog": true, "control-dispatcher": true}
+	cityAgents := map[string]bool{
+		"mayor":              true,
+		"deacon":             true,
+		"boot":               true,
+		"control-dispatcher": true,
+		"dog":                true,
+	}
 	var explicit int
 	for _, a := range cfg.Agents {
 		if a.Implicit {
@@ -3822,8 +3830,8 @@ func TestCityAgentsFilter(t *testing.T) {
 			t.Errorf("city agent %q: dir = %q, want empty", a.Name, a.Dir)
 		}
 	}
-	if explicit != 6 {
-		t.Errorf("got %d explicit agents, want 6 city-scoped agents (incl. both dogs and control-dispatcher)", explicit)
+	if explicit != 5 {
+		t.Errorf("got %d explicit agents, want 5 explicit city-scoped agents (implicit control-dispatcher excluded)", explicit)
 	}
 }
 
@@ -3933,7 +3941,7 @@ func TestDeaconPatrolNextIterationBurnsCurrentBeforeIdleExit(t *testing.T) {
 	assertContainsInOrder(t, section,
 		`CURRENT_WISP=${GC_BEAD_ID:-}`,
 		`if [ -z "$CURRENT_WISP" ]; then`,
-		`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=wisp --limit=1 --json | jq -r '.[0].id // empty')`,
+		`CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')`,
 		`NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id // empty')`,
 		`if [ -z "$NEXT" ]; then`,
 		`if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then`,
@@ -3949,6 +3957,74 @@ func TestDeaconPatrolNextIterationBurnsCurrentBeforeIdleExit(t *testing.T) {
 	}
 	if strings.Contains(section, "gc hook") {
 		t.Fatal("next-iteration still calls gc hook — should use clean idle exit")
+	}
+}
+
+// TestWitnessPatrolNextIterationBurnIsIdempotentSafe verifies that the
+// witness formula's next-iteration step never lets a failed burn stall the
+// patrol loop. Every gc bd mol burn "$CURRENT_WISP" --force call must either
+// be wrapped in an if-else (non-fatal) or use || true so that a missing/
+// already-burned wisp does not block the next iteration from starting.
+// This is the gascity-source contract that pairs with the bd mol burn
+// idempotency fix (gcy-3n7): both layers must be safe independently.
+func TestWitnessPatrolNextIterationBurnIsIdempotentSafe(t *testing.T) {
+	path := filepath.Join(packRoot(), "packs", "gastown", "formulas", "mol-witness-patrol.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("mol-witness-patrol.toml not present in pinned gascity-packs: %v", err)
+		}
+		t.Fatalf("reading witness formula: %v", err)
+	}
+	body := string(data)
+	// Guard: skip if the pinned gascity-packs version predates the idempotent-burn
+	// next-iteration pattern. The contract is enforced once the pack is updated.
+	if !strings.Contains(body, "CURRENT_WISP=${GC_BEAD_ID:-}") {
+		t.Skipf("pinned gascity-packs does not yet include the idempotent-burn next-iteration pattern")
+	}
+	section := sectionBetween(t, body, `id = "next-iteration"`, "")
+
+	// Successor must be poured and assigned before the primary burn.
+	assertContainsInOrder(t, section,
+		`CURRENT_WISP=${GC_BEAD_ID:-}`,
+		`if [ -z "$CURRENT_WISP" ]; then`,
+		`NEXT=$(gc bd mol wisp mol-witness-patrol --root-only`,
+		`jq -r '.new_epic_id // empty'`,
+		`if [ -z "$NEXT" ]; then`,
+		`if ! gc bd update "$NEXT" --assignee=`,
+		`if [ -n "$CURRENT_WISP" ]; then`,
+		`gc bd mol burn "$CURRENT_WISP" --force`,
+	)
+
+	// Every burn of $CURRENT_WISP must be non-fatal: either inside an `if`
+	// condition (if gc bd mol burn ...; then) or followed by || true.
+	// A bare `gc bd mol burn "$CURRENT_WISP" --force` on its own line would
+	// exit non-zero for already-burned wisps and stall the patrol loop.
+	lines := strings.Split(section, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, `gc bd mol burn "$CURRENT_WISP" --force`) {
+			continue
+		}
+		isBare := true
+		// Non-fatal forms: `if gc bd mol burn ...` or `... || true`
+		if strings.HasPrefix(trimmed, "if ") {
+			isBare = false
+		}
+		if strings.HasSuffix(trimmed, "|| true") {
+			isBare = false
+		}
+		if isBare {
+			t.Errorf("witness next-iteration has bare (fatal) burn at line %d: %q\n"+
+				"wrap in `if gc bd mol burn ... 2>/dev/null; then` or append `|| true`\n"+
+				"to prevent patrol stall when wisp is already burned (#gcy-3n7)", i+1, trimmed)
+		}
+	}
+
+	// The step must exit cleanly (idle or drain-ack) after burning.
+	if !strings.Contains(section, "IDLE: no work, exiting turn.") &&
+		!strings.Contains(section, "gc runtime drain-ack") {
+		t.Error("witness next-iteration has no clean exit after burn")
 	}
 }
 
@@ -4054,19 +4130,30 @@ func TestAttachedRigScopeShellToken(t *testing.T) {
 				t.Skipf("%s not installed", shell)
 			}
 
+			// Use a throwaway ZDOTDIR so shell startup files (e.g. ~/.zshrc with
+			// Flox activation) do not print upgrade notices or other noise that
+			// would contaminate the output check below.
+			cleanEnv := append(os.Environ(), "ZDOTDIR="+t.TempDir())
+
 			cmd := exec.Command(path, "-c", `GC_RIG=gascity; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			out, err := cmd.CombinedOutput()
+			var stderrBuf bytes.Buffer
+			cmd.Env = cleanEnv
+			cmd.Stderr = &stderrBuf
+			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("%s expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got, want := strings.TrimSpace(string(out)), "<--rig=gascity>"; got != want {
 				t.Fatalf("%s non-empty expansion = %q, want %q", shell, got, want)
 			}
 
 			cmd = exec.Command(path, "-c", `unset GC_RIG; for arg in ${GC_RIG:+--rig="$GC_RIG"}; do printf '<%s>\n' "$arg"; done`)
-			out, err = cmd.CombinedOutput()
+			stderrBuf.Reset()
+			cmd.Env = cleanEnv
+			cmd.Stderr = &stderrBuf
+			out, err = cmd.Output()
 			if err != nil {
-				t.Fatalf("%s empty expansion failed: %v\n%s", shell, err, out)
+				t.Fatalf("%s empty expansion failed: %v\nstderr: %s", shell, err, stderrBuf.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != "" {
 				t.Fatalf("%s empty expansion = %q, want empty", shell, got)

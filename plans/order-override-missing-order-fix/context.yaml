@@ -1,0 +1,4 @@
+items:
+  - name: Missing jjw-workspace-report order override warning
+    path: investigation-input.md
+    description: Log evidence, current city.toml excerpt, scope, and acceptance criteria for fixing disabled missing-order override diagnostics.

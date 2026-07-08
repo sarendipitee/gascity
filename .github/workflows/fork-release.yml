@@ -1,0 +1,118 @@
+name: Fork Release
+
+on:
+  push:
+    branches:
+      - "pr/doltlite-init-external-pack-release"
+      - "fork/release/**"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Fork release tag to create or publish, e.g. v1.3.2-doltlite.1"
+        required: true
+        type: string
+      target_ref:
+        description: "Commit SHA, branch, or tag to build"
+        required: true
+        default: "main"
+        type: string
+
+concurrency:
+  group: fork-release-${{ inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  fork-release:
+    name: Fork release
+    if: ${{ github.repository == 'duncan4123/gascity' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve fork release tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag_name || '' }}
+          TARGET_REF: ${{ inputs.target_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$REQUESTED_TAG" ]; then
+            TAG_NAME="$REQUESTED_TAG"
+          else
+            TAG_NAME="v0.0.0-doltlite.workflow.${GITHUB_RUN_NUMBER}"
+          fi
+
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "ERROR: tag must look like vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-suffix, got: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          commit="$(git rev-parse HEAD)"
+          git fetch --force --tags origin
+
+          if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$TAG_NAME")"
+            if [ "$tagged_commit" != "$commit" ]; then
+              echo "ERROR: tag $TAG_NAME points at $tagged_commit, not checked-out commit $commit from $TARGET_REF" >&2
+              exit 1
+            fi
+            echo "Using existing tag $TAG_NAME at $commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME" "$commit"
+            git push origin "refs/tags/$TAG_NAME"
+            echo "Created tag $TAG_NAME at $commit"
+          fi
+
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Reject replace directives in go.mod
+        run: |
+          if grep -qE '^replace\s' go.mod; then
+            echo "ERROR: go.mod contains replace directives; aborting fork release." >&2
+            grep -n '^replace' go.mod
+            exit 1
+          fi
+
+      - name: Prepare DoltLite release library
+        run: .github/scripts/prepare-doltlite-release-lib.sh
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7
+        with:
+          version: "~> v2"
+          args: release --clean --skip=announce
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ steps.release.outputs.tag }}
+
+      - name: Summarize fork release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+          TARGET_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          url="$(gh release view "$TAG_NAME" --json url --jq .url)"
+          {
+            echo "### Fork release"
+            echo
+            echo "- Tag: \`$TAG_NAME\`"
+            echo "- Commit: \`$TARGET_COMMIT\`"
+            echo "- Release: $url"
+          } >> "$GITHUB_STEP_SUMMARY"

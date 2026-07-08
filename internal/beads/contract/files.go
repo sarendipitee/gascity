@@ -72,14 +72,25 @@ func (c DoltConfig) DisableEventFlushEnabled() bool {
 // always has every Postgres field non-empty and PostgresPort already verified
 // as a TCP-port-shaped string.
 type MetadataState struct {
-	Database         string `json:"database"`
-	Backend          string `json:"backend"`
-	DoltMode         string `json:"dolt_mode,omitempty"`
-	DoltDatabase     string `json:"dolt_database,omitempty"`
-	PostgresHost     string `json:"postgres_host,omitempty"`
-	PostgresPort     string `json:"postgres_port,omitempty"`
-	PostgresUser     string `json:"postgres_user,omitempty"`
-	PostgresDatabase string `json:"postgres_database,omitempty"`
+	Database              string   `json:"database"`
+	Backend               string   `json:"backend"`
+	DoltMode              string   `json:"dolt_mode,omitempty"`
+	DoltDatabase          string   `json:"dolt_database,omitempty"`
+	PostgresHost          string   `json:"postgres_host,omitempty"`
+	PostgresPort          string   `json:"postgres_port,omitempty"`
+	PostgresUser          string   `json:"postgres_user,omitempty"`
+	PostgresDatabase      string   `json:"postgres_database,omitempty"`
+	BackendPluginCommand  string   `json:"backend_plugin_command,omitempty"`
+	BackendPluginArgs     []string `json:"backend_plugin_args,omitempty"`
+	GasCityBackendCommand string   `json:"gascity_backend_command,omitempty"`
+	GasCityBackendArgs    []string `json:"gascity_backend_args,omitempty"`
+}
+
+// AttachedDatabaseState declares a SQLite database that DoltLite should ATTACH
+// alongside the versioned main store for unversioned operational tables.
+type AttachedDatabaseState struct {
+	Alias string `json:"alias"`
+	Path  string `json:"path"`
 }
 
 // MetadataParseError reports a failure to parse or validate metadata.json.
@@ -553,20 +564,35 @@ func EnsureCanonicalMetadata(fs fsys.FS, path string, state MetadataState) (bool
 
 	changed := false
 	defaults := map[string]string{
-		"database":          strings.TrimSpace(state.Database),
-		"backend":           strings.TrimSpace(state.Backend),
-		"dolt_mode":         strings.TrimSpace(state.DoltMode),
-		"dolt_database":     strings.TrimSpace(state.DoltDatabase),
-		"postgres_host":     strings.TrimSpace(state.PostgresHost),
-		"postgres_port":     strings.TrimSpace(state.PostgresPort),
-		"postgres_user":     strings.TrimSpace(state.PostgresUser),
-		"postgres_database": strings.TrimSpace(state.PostgresDatabase),
+		"database":                strings.TrimSpace(state.Database),
+		"backend":                 strings.TrimSpace(state.Backend),
+		"dolt_mode":               strings.TrimSpace(state.DoltMode),
+		"dolt_database":           strings.TrimSpace(state.DoltDatabase),
+		"postgres_host":           strings.TrimSpace(state.PostgresHost),
+		"postgres_port":           strings.TrimSpace(state.PostgresPort),
+		"postgres_user":           strings.TrimSpace(state.PostgresUser),
+		"postgres_database":       strings.TrimSpace(state.PostgresDatabase),
+		"backend_plugin_command":  strings.TrimSpace(state.BackendPluginCommand),
+		"gascity_backend_command": strings.TrimSpace(state.GasCityBackendCommand),
 	}
 	for key, want := range defaults {
 		if want == "" {
 			continue
 		}
 		if trimmedString(meta[key]) != want {
+			meta[key] = want
+			changed = true
+		}
+	}
+	listDefaults := map[string][]string{
+		"backend_plugin_args":  state.BackendPluginArgs,
+		"gascity_backend_args": state.GasCityBackendArgs,
+	}
+	for key, want := range listDefaults {
+		if len(want) == 0 {
+			continue
+		}
+		if !metadataValueEqual(meta[key], want) {
 			meta[key] = want
 			changed = true
 		}
@@ -601,6 +627,47 @@ func EnsureCanonicalMetadata(fs fsys.FS, path string, state MetadataState) (bool
 	}
 	encoded = append(encoded, '\n')
 	return true, fs.WriteFile(path, encoded, 0o644)
+}
+
+// EnsureMetadataAttachedDatabases writes DoltLite ATTACH declarations while
+// leaving the canonical backend metadata contract unchanged.
+func EnsureMetadataAttachedDatabases(fs fsys.FS, path string, attachments []AttachedDatabaseState) (bool, error) {
+	meta := map[string]any{}
+	data, err := fs.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return false, err
+		}
+	case os.IsNotExist(err):
+	case err != nil:
+		return false, err
+	}
+	normalized := make([]map[string]string, 0, len(attachments))
+	for _, attached := range attachments {
+		alias := strings.TrimSpace(attached.Alias)
+		path := strings.TrimSpace(attached.Path)
+		if alias == "" || path == "" {
+			continue
+		}
+		normalized = append(normalized, map[string]string{"alias": alias, "path": path})
+	}
+	if len(normalized) == 0 || metadataValueEqual(meta["attached_databases"], normalized) {
+		return false, nil
+	}
+	meta["attached_databases"] = normalized
+	encoded, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	encoded = append(encoded, '\n')
+	return true, fs.WriteFile(path, encoded, 0o644)
+}
+
+func metadataValueEqual(got, want any) bool {
+	gotJSON, gotErr := json.Marshal(got)
+	wantJSON, wantErr := json.Marshal(want)
+	return gotErr == nil && wantErr == nil && string(gotJSON) == string(wantJSON)
 }
 
 func ensureCanonicalConfigFallback(fs fsys.FS, path string, state ConfigState) (bool, error) {

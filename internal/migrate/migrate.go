@@ -59,6 +59,7 @@ type agentFile struct {
 	Description            string            `toml:"description,omitempty"`
 	Dir                    string            `toml:"dir,omitempty"`
 	WorkDir                string            `toml:"work_dir,omitempty"`
+	Pack                   *string           `toml:"pack,omitempty"`
 	TmuxAlias              string            `toml:"tmux_alias,omitempty"`
 	Scope                  string            `toml:"scope,omitempty"`
 	Suspended              bool              `toml:"suspended,omitempty"`
@@ -914,6 +915,7 @@ func agentConfigFromAgent(agent config.Agent) agentFile {
 		Description:            agent.Description,
 		Dir:                    agent.Dir,
 		WorkDir:                agent.WorkDir,
+		Pack:                   optionalStringPtr(agent.Pack),
 		TmuxAlias:              agent.TmuxAlias,
 		Scope:                  agent.Scope,
 		Suspended:              agent.Suspended,
@@ -962,10 +964,19 @@ func agentConfigFromAgent(agent config.Agent) agentFile {
 	}
 }
 
+func optionalStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func isZeroAgentConfig(cfg agentFile) bool {
 	return cfg.Description == "" &&
 		cfg.Dir == "" &&
 		cfg.WorkDir == "" &&
+		cfg.Pack == nil &&
 		cfg.TmuxAlias == "" &&
 		cfg.Scope == "" &&
 		!cfg.Suspended &&

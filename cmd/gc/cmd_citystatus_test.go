@@ -698,6 +698,16 @@ func TestControllerStatusLine(t *testing.T) {
 			want: "standalone-managed (PID 1234)",
 		},
 		{
+			name: "standalone running with binary",
+			ctrl: ControllerJSON{Mode: "standalone", PID: 1234, Running: true, Binary: "/opt/gc/bin/gc"},
+			want: "standalone-managed (PID 1234, binary /opt/gc/bin/gc)",
+		},
+		{
+			name: "standalone running with binary build match",
+			ctrl: ControllerJSON{Mode: "standalone", PID: 1234, Running: true, Binary: "/opt/gc/bin/gc", Build: &BinaryBuildJSON{Status: "matched"}},
+			want: "standalone-managed (PID 1234, binary /opt/gc/bin/gc, build matches beads-doltlite stamp)",
+		},
+		{
 			name: "supervisor not running",
 			ctrl: ControllerJSON{Mode: "supervisor"},
 			want: "supervisor-managed (supervisor not running)",
@@ -713,6 +723,11 @@ func TestControllerStatusLine(t *testing.T) {
 			want: "supervisor-managed (PID 4321, starting bead store)",
 		},
 		{
+			name: "supervisor city starting bead store with binary",
+			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Status: "starting_bead_store", Binary: "/usr/local/bin/gc"},
+			want: "supervisor-managed (PID 4321, starting bead store, binary /usr/local/bin/gc)",
+		},
+		{
 			name: "supervisor city init failed",
 			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Status: "init_failed"},
 			want: "supervisor-managed (PID 4321, init failed)",
@@ -721,6 +736,26 @@ func TestControllerStatusLine(t *testing.T) {
 			name: "supervisor running",
 			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Running: true},
 			want: "supervisor-managed (PID 4321)",
+		},
+		{
+			name: "supervisor running with binary",
+			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Running: true, Binary: "/home/ubuntu/.local/bin/gc"},
+			want: "supervisor-managed (PID 4321, binary /home/ubuntu/.local/bin/gc)",
+		},
+		{
+			name: "supervisor running with binary build mismatch",
+			ctrl: ControllerJSON{
+				Mode:    "supervisor",
+				PID:     4321,
+				Running: true,
+				Binary:  "/home/ubuntu/.local/bin/gc",
+				Build: &BinaryBuildJSON{
+					Status:         "mismatch",
+					ExpectedSHA256: "0123456789abcdef",
+					ActualSHA256:   "fedcba9876543210",
+				},
+			},
+			want: "supervisor-managed (PID 4321, binary /home/ubuntu/.local/bin/gc, build mismatch beads-doltlite stamp expected 0123456789ab running fedcba987654)",
 		},
 	}
 
@@ -1211,6 +1246,22 @@ func TestControllerStatusGuidance(t *testing.T) {
 			},
 		},
 		{
+			name: "standalone running with binary",
+			ctrl: ControllerJSON{Mode: "standalone", PID: 1234, Running: true, Binary: "/opt/gc/bin/gc"},
+			want: []string{
+				"Authority: standalone controller PID 1234 (binary /opt/gc/bin/gc)",
+				"Next: gc stop /tmp/city && gc start /tmp/city to hand ownership to the supervisor",
+			},
+		},
+		{
+			name: "standalone running with binary build match",
+			ctrl: ControllerJSON{Mode: "standalone", PID: 1234, Running: true, Binary: "/opt/gc/bin/gc", Build: &BinaryBuildJSON{Status: "matched"}},
+			want: []string{
+				"Authority: standalone controller PID 1234 (binary /opt/gc/bin/gc, build matches beads-doltlite stamp)",
+				"Next: gc stop /tmp/city && gc start /tmp/city to hand ownership to the supervisor",
+			},
+		},
+		{
 			name: "supervisor registered but down",
 			ctrl: ControllerJSON{Mode: "supervisor"},
 			want: []string{
@@ -1239,6 +1290,14 @@ func TestControllerStatusGuidance(t *testing.T) {
 			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Status: "starting_bead_store"},
 			want: []string{
 				"Authority: supervisor process PID 4321",
+				"Next: gc supervisor logs to inspect startup progress",
+			},
+		},
+		{
+			name: "supervisor starting with binary",
+			ctrl: ControllerJSON{Mode: "supervisor", PID: 4321, Status: "starting_bead_store", Binary: "/usr/local/bin/gc"},
+			want: []string{
+				"Authority: supervisor process PID 4321 (binary /usr/local/bin/gc)",
 				"Next: gc supervisor logs to inspect startup progress",
 			},
 		},

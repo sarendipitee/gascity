@@ -229,6 +229,7 @@
               "reference/trust-boundaries",
               "reference/api",
               "reference/events",
+              "gascity-pack-source-map",
               "reference/schema/index",
               "reference/system-packs",
               "reference/exec-session-provider",

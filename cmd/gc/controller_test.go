@@ -2217,7 +2217,7 @@ func TestTryReloadConfig_IncludesBuiltinPackOrders(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pack.toml"), []byte("[pack]\nname = \"test\"\nschema = 2\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(pack.toml): %v", err)
 	}
-	writeBuiltinImportsFixture(t, dir, "core", "bd")
+	writeBuiltinImportsFixture(t, dir, "core", "bd", "dolt")
 
 	result, err := tryReloadConfig(tomlPath, "test", dir)
 	if err != nil {
@@ -2241,7 +2241,7 @@ func TestTryReloadConfig_IncludesBuiltinPackOrders(t *testing.T) {
 			t.Errorf("missing core order %q; got %v", want, names)
 		}
 	}
-	// Dolt pack orders (included transitively via bd pack).
+	// Dolt pack orders (included by the default bd+dolt backend imports).
 	for _, want := range []string{"dolt-health", "dolt-remotes-patrol", "mol-dog-compactor"} {
 		if !names[want] {
 			t.Errorf("missing dolt order %q; got %v", want, names)

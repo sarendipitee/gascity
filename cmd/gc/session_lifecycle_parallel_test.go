@@ -6285,12 +6285,13 @@ func TestPrepareStartCandidate_PreservesRuntimeConfigAndProviderEnv(t *testing.T
 		InstanceName:     "mayor",
 	}
 
+	cityCfg := &config.City{Beads: config.BeadsConfig{Backend: "doltlite"}}
 	prepared, err := prepareStartCandidate(
 		startCandidate{
 			session: &bead,
 			tp:      tp,
 		},
-		&config.City{},
+		cityCfg,
 		store,
 		clock.Real{},
 	)
@@ -6323,6 +6324,7 @@ func TestPrepareStartCandidate_PreservesRuntimeConfigAndProviderEnv(t *testing.T
 		stored.Metadata["instance_token"],
 	))
 	expected.Env = mergeEnv(expected.Env, map[string]string{"GC_PROVIDER": "gemini"})
+	expected.Env = mergeEnv(expected.Env, doltliteLoaderEnvScrub())
 	expected = runtime.SyncWorkDirEnv(expected)
 
 	if !reflect.DeepEqual(prepared.cfg, expected) {
@@ -6330,6 +6332,13 @@ func TestPrepareStartCandidate_PreservesRuntimeConfigAndProviderEnv(t *testing.T
 	}
 	if got := prepared.cfg.Env["GC_HOME"]; got != "/tmp/gc-home" {
 		t.Fatalf("GC_HOME = %q, want %q", got, "/tmp/gc-home")
+	}
+	for _, key := range []string{"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"} {
+		if got, ok := prepared.cfg.Env[key]; !ok {
+			t.Fatalf("%s should be present with empty value so tmux emits env -u; got absent", key)
+		} else if got != "" {
+			t.Fatalf("%s = %q, want empty tmux scrub", key, got)
+		}
 	}
 }
 

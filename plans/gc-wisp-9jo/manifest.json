@@ -1,0 +1,27 @@
+{
+  "schema": "gascity.workflow-docs.manifest.v1",
+  "workflow_root_bead_id": "gc-wisp-9jo",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/gc-wisp-9jo",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/gc-wisp-9jo/manifest.json",
+  "docs_change_id": "vkxtonumotyposqpmuqkqmpnnknyqpzn",
+  "source_workspace": null,
+  "source_workspace_path": null,
+  "source_change_id": null,
+  "documents": {
+    "root-task-stage-report": {
+      "path": "plans/gc-wisp-9jo/root-task-stage-report.md",
+      "schema": "gc.reports.root-task-stage.v1",
+      "hash": "44aa6a79f52c0aa0c0806683f66144b60286cdfc9aa1fe7d934451f61eda21d8",
+      "change_id": "vkxtonumotyposqpmuqkqmpnnknyqpzn"
+    }
+  },
+  "workflow": "root-task-stage-report",
+  "docs": {
+    "workspace": "default",
+    "workspace_path": "/data/projects/doltlite-gascity/gascity",
+    "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/gc-wisp-9jo"
+  }
+}

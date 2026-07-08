@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -213,6 +214,10 @@ func (t nudgeTarget) sessionTransport() string {
 	return t.agent.Session
 }
 
+func (t nudgeTarget) providerFamily() string {
+	return session.ProviderFamilyFromMetadata(nil, t.providerName())
+}
+
 func (t nudgeTarget) providerName() string {
 	if t.resolved != nil && strings.TrimSpace(t.resolved.Name) != "" {
 		return strings.TrimSpace(t.resolved.Name)
@@ -399,14 +404,57 @@ func nonNilQueuedNudges(items []queuedNudge) []queuedNudge {
 	return items
 }
 
+var nudgeDrainInjectTimeout = 2 * time.Second
+
 func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdout, stderr io.Writer) int {
-	// On every prompt, emit a live clock (operator-local + UTC + epoch) as
-	// UserPromptSubmit hook context. When a nudge also fires we fold the clock
-	// into that nudge's single provider-formatted payload (see the combined
-	// write below); otherwise this deferred fallback emits the clock on its
-	// own. Either way exactly one provider hook context is written per
-	// invocation, so JSON formats (codex/gemini) stay one valid document rather
-	// than two concatenated objects. See clock_inject.go.
+	if inject {
+		return cmdNudgeDrainInjectBounded(args, hookFormat, readHookStdin(), stdout, stderr)
+	}
+	return cmdNudgeDrainWithFormatCore(args, false, hookFormat, nil, stdout, stderr)
+}
+
+func cmdNudgeDrainInjectBounded(args []string, hookFormat string, hookInput []byte, stdout, stderr io.Writer) int {
+	type result struct {
+		code   int
+		stdout string
+		stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out bytes.Buffer
+		var errOut bytes.Buffer
+		code := cmdNudgeDrainWithFormatCore(args, true, hookFormat, hookInput, &out, &errOut)
+		done <- result{code: code, stdout: out.String(), stderr: errOut.String()}
+	}()
+
+	timer := time.NewTimer(nudgeDrainInjectTimeout)
+	defer timer.Stop()
+	select {
+	case res := <-done:
+		_, _ = io.WriteString(stdout, res.stdout)
+		_, _ = io.WriteString(stderr, res.stderr)
+		return res.code
+	case <-timer.C:
+		prefix := clockInjectLine() + contextInjectLine(hookInput)
+		if cityPath, err := resolveCity(); err == nil {
+			prefix += wispStepInjectionContent(cityPath)
+		}
+		prefix += "<system-reminder>\ngc nudge drain degraded: queued reminders were not checked before the prompt-hook timeout budget expired. Continue this turn; deferred reminders remain queued for a later drain or poller pass.\n</system-reminder>\n"
+		_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", prefix)
+		return 0
+	}
+}
+
+func cmdNudgeDrainWithFormatCore(args []string, inject bool, hookFormat string, hookInput []byte, stdout, stderr io.Writer) int {
+	// On every prompt, emit a live clock (operator-local + UTC + epoch) and
+	// the agent's active formula step (if any) as UserPromptSubmit hook context.
+	// When a nudge also fires we fold everything into that nudge's single
+	// provider-formatted payload (see the combined write below); otherwise this
+	// deferred fallback emits clock+step on their own. Either way exactly one
+	// provider hook context is written per invocation, so JSON formats
+	// (codex/gemini) stay one valid document rather than two concatenated objects.
+	// See clock_inject.go and wisp_step_inject.go.
+	var wispExtra string // set after target resolution; captured by defer closure
 	emittedHookContext := false
 	var injectPrefix string
 	if inject {
@@ -414,10 +462,13 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		// pipe-only — see readHookStdin) and build the shared inject prefix:
 		// the clock line plus, when context pressure crosses its threshold,
 		// the context-usage guidance (see context_inject.go).
-		injectPrefix = clockInjectLine() + contextInjectLine(readHookStdin())
+		injectPrefix = clockInjectLine() + contextInjectLine(hookInput)
 		defer func() {
-			if !emittedHookContext && injectPrefix != "" {
-				_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", injectPrefix)
+			if !emittedHookContext {
+				line := injectPrefix + wispExtra
+				if line != "" {
+					_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", line)
+				}
 			}
 		}()
 	}
@@ -443,6 +494,9 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		}
 		fmt.Fprintf(stderr, "gc nudge drain: %v\n", err) //nolint:errcheck
 		return 1
+	}
+	if inject {
+		wispExtra = wispStepInjectionContent(target.cityPath)
 	}
 
 	now := time.Now()
@@ -510,10 +564,11 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 	}
 	var writeErr error
 	if inject {
-		// Fold the clock into the nudge so a single provider-formatted payload
-		// carries both; this is the one place the combined context is written.
+		// Fold the clock and active formula step into the nudge so a single
+		// provider-formatted payload carries all; this is the one place the
+		// combined context is written.
 		emittedHookContext = true
-		writeErr = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", injectPrefix+out)
+		writeErr = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", injectPrefix+out+wispExtra)
 	} else {
 		_, writeErr = io.WriteString(stdout, out)
 	}
@@ -600,6 +655,12 @@ func configureNudgePollRuntime(stderr io.Writer) func() {
 	}
 }
 
+var nudgePollSleep = time.Sleep
+
+var deliverQueuedNudgesByPoller = func(target nudgeTarget, store beads.Store, sp runtime.Provider, quiescence time.Duration, obs worker.LiveObservation) (bool, error) {
+	return tryDeliverQueuedNudgesByPoller(target, store, cliSessionStore(store, target.cfg, target.cityPath), sp, quiescence, obs)
+}
+
 func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.Duration, _ io.Writer, stderr io.Writer) int {
 	targetID := os.Getenv("GC_ALIAS")
 	if targetID == "" {
@@ -673,7 +734,7 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 1
@@ -684,20 +745,22 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 0
 		}
 		missingSince = time.Time{}
-		delivered, pollErr := tryDeliverQueuedNudgesByPoller(target, store.Store, cliSessionStore(store.Store, target.cfg, target.cityPath), sp, quiescence, obs)
+		_, pollErr := deliverQueuedNudgesByPoller(target, store.Store, sp, quiescence, obs)
 		if pollErr != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", pollErr) //nolint:errcheck
 		}
-		if delivered {
-			continue
-		}
-		time.Sleep(interval)
+		// Always back off at least `interval` between iterations, including on
+		// the delivered path. Without this, a delivery that keeps reporting
+		// success (e.g. the ack/clear failed and the same nudge stays PENDING
+		// and re-delivers) tight-spins, opening a fresh Dolt connection every
+		// iteration and saturating the handshake path (gcy-5b1).
+		nudgePollSleep(interval)
 	}
 }
 
@@ -1075,7 +1138,10 @@ func sendMailNotifyWithWorker(target nudgeTarget, store beads.Store, sp runtime.
 	if err != nil {
 		return err
 	}
-	if obs.Running {
+	// Codex sessions use a poller to deliver queued nudges when ready; skip
+	// the synchronous WaitIdle delivery so the poller is always started for
+	// running codex sessions. Other providers still try direct delivery first.
+	if obs.Running && target.providerFamily() != "codex" {
 		handle, err := workerHandleForNudgeTarget(target, sessStore, sp)
 		if err == nil {
 			result, nudgeErr := handle.Nudge(context.Background(), worker.NudgeRequest{

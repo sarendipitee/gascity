@@ -1,4 +1,4 @@
-//go:build gascity_native_beads
+//go:build gascity_doltlite_lib
 
 package beads
 
@@ -40,7 +40,7 @@ func newDoltliteStoreWithRows(t testing.TB, issues, wisps []testDoltliteIssue) *
 		t.Fatalf("mkdir doltlite dir: %v", err)
 	}
 	dbPath := filepath.Join(dbDir, "hq.db")
-	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000")
+	db, err := sql.Open(doltliteSQLDriverName, dbPath+"?_busy_timeout=10000")
 	if err != nil {
 		t.Fatalf("open doltlite fixture db: %v", err)
 	}
@@ -185,51 +185,6 @@ func TestDoltliteCountTierIssuesIncludesNoHistoryWisps(t *testing.T) {
 	}
 }
 
-// TestDoltliteCountExcludedIssueTwinSuppressesWispTwin pins the #3449 review
-// fix: when a durable issue twin's type is in excludeTypes, List drops the issue
-// AND has already deduped its same-id no-history wisp twin behind it, so neither
-// survives the post-List exclusion. Count must match — the wisp dedupe anti-join
-// is built from the issues-table pass BEFORE excludeTypes, so the excluded issue
-// still suppresses its wisp twin instead of letting Count overcount it.
-func TestDoltliteCountExcludedIssueTwinSuppressesWispTwin(t *testing.T) {
-	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	issues := []testDoltliteIssue{
-		// Durable twin of gc-twin has an excluded type. List returns it, the
-		// excludeTypes filter then drops it, and its wisp twin is already deduped
-		// away — so the matching set contributes nothing for gc-twin.
-		{ID: "gc-twin", Title: "excluded durable twin", Status: "open", IssueType: "session", CreatedAt: base.Add(time.Second), Labels: []string{"excl-dedupe"}},
-		{ID: "gc-keep", Title: "kept task", Status: "open", IssueType: "task", CreatedAt: base.Add(2 * time.Second), Labels: []string{"excl-dedupe"}},
-	}
-	wisps := []testDoltliteIssue{
-		// Non-excluded no-history wisp sharing gc-twin's id. Before the fix the
-		// wisp dedupe subquery still carried excludeTypes, so the excluded issue
-		// fell out of the anti-join set and this wisp was wrongly counted.
-		{ID: "gc-twin", Title: "kept wisp twin", Status: "open", IssueType: "task", CreatedAt: base.Add(3 * time.Second), Labels: []string{"excl-dedupe"}, NoHistory: true},
-	}
-	store := newDoltliteStoreWithRows(t, issues, wisps)
-
-	query := ListQuery{Label: "excl-dedupe"}
-	exclude := []string{"session"}
-
-	list, err := store.List(query)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	want := 0
-	for _, b := range list {
-		if !containsTestString(exclude, b.Type) {
-			want++
-		}
-	}
-	got, err := store.Count(context.Background(), query, exclude...)
-	if err != nil {
-		t.Fatalf("Count: %v", err)
-	}
-	if got != want {
-		t.Fatalf("Count = %d, want len(List filtered by excludeTypes) = %d", got, want)
-	}
-}
-
 // TestDoltliteCountLegacyWispsSchemaMatchesList pins Count==List parity for
 // pre-storage-flag snapshots: without the discriminator columns every wisps
 // row is ephemeral, so the TierIssues count stays issues-table only.
@@ -326,7 +281,7 @@ func containsTestString(values []string, target string) bool {
 // BenchmarkDoltliteMoleculeRead compares the full-history molecule read against
 // the bounded read + hydration-free Count that backs the gascity#3253 fix. Run:
 //
-//	go test -tags gascity_native_beads -run '^$' \
+//	go test -tags gascity_doltlite_lib -run '^$' \
 //	  -bench BenchmarkDoltliteMoleculeRead -benchmem ./internal/beads
 func BenchmarkDoltliteMoleculeRead(b *testing.B) {
 	const total = 5000

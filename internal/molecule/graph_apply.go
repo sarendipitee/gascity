@@ -79,6 +79,12 @@ func instantiateViaGraphApply(ctx context.Context, applier beads.GraphApplyStore
 	}, nil
 }
 
+// IsTransientGraphApplyError reports whether err is a graph-apply transport or
+// storage-contention failure that can be retried or reconciled by the caller.
+func IsTransientGraphApplyError(err error) bool {
+	return isTransientGraphApplyError(err)
+}
+
 func isTransientGraphApplyError(err error) bool {
 	if err == nil {
 		return false
@@ -93,7 +99,11 @@ func isTransientGraphApplyError(err error) bool {
 		strings.Contains(text, "invalid connection") ||
 		strings.Contains(text, "bad connection") ||
 		strings.Contains(text, "connection reset") ||
-		strings.Contains(text, "broken pipe")
+		strings.Contains(text, "broken pipe") ||
+		strings.Contains(text, "database is locked") ||
+		strings.Contains(text, "database is busy") ||
+		strings.Contains(text, "database table is locked") ||
+		strings.Contains(text, "sqlite_busy")
 }
 
 func isGraphApplyErrorText(text string) bool {

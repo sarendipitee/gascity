@@ -301,7 +301,8 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 			qualifiedName,
 		)
 	}
-	agentEnv["GC_BEADS"] = rawBeadsProviderForScope(rigRoot, p.cityPath)
+	agentBeadsProvider := rawBeadsProviderForScope(rigRoot, p.cityPath)
+	agentEnv["GC_BEADS"] = agentBeadsProvider
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		agentEnv["GC_BIN"] = exe
 	}
@@ -316,7 +317,9 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		agentEnv["GC_RIG"] = rigName
 		agentEnv["GC_RIG_ROOT"] = rigRoot
 		agentEnv["BEADS_DIR"] = filepath.Join(rigRoot, ".beads")
-		agentEnv["GC_BEADS_SCOPE_ROOT"] = rigRoot
+		if providerUsesBdStoreContract(agentBeadsProvider) {
+			agentEnv["GC_BEADS_SCOPE_ROOT"] = rigRoot
+		}
 	}
 
 	// Step 9: Render prompt with beacon.

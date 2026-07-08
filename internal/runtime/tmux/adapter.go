@@ -95,39 +95,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 }
 
 func stageStartFiles(cfg runtime.Config, warnings io.Writer) error {
-	// Copy overlays and CopyFiles before creating the tmux session.
-	// Local provider: files are on the same filesystem.
-	// V2 per-provider overlay support: StageProviderOverlayDir copies universal
-	// files then flattened per-provider/<provider>/ slots for ProviderOverlayName
-	// with ProviderName fallback, plus any InstallAgentHooks entries.
-	overlayProviders := runtime.EffectiveOverlayProviderNames(cfg)
-	if cfg.WorkDir != "" {
-		for _, od := range cfg.PackOverlayDirs {
-			if err := runtime.StageProviderOverlayDir(od, cfg.WorkDir, overlayProviders, warnings); err != nil {
-				return fmt.Errorf("copying pack overlay %s: %w", od, err)
-			}
-		}
-	}
-	// Agent-level overlay (highest priority; merges known settings files, overwrites others).
-	if cfg.OverlayDir != "" && cfg.WorkDir != "" {
-		if err := runtime.StageProviderOverlayDir(cfg.OverlayDir, cfg.WorkDir, overlayProviders, warnings); err != nil {
-			return fmt.Errorf("copying overlay %s: %w", cfg.OverlayDir, err)
-		}
-	}
-	for _, cf := range cfg.CopyFiles {
-		dst := cfg.WorkDir
-		if cf.RelDst != "" {
-			dst = filepath.Join(cfg.WorkDir, cf.RelDst)
-		}
-		// Skip if src and dst are the same path.
-		if absSrc, err := filepath.Abs(cf.Src); err == nil {
-			if absDst, err := filepath.Abs(dst); err == nil && absSrc == absDst {
-				continue
-			}
-		}
-		_ = overlay.CopyFileOrDir(cf.Src, dst, io.Discard)
-	}
-	return nil
+	return runtime.StageSessionWorkDirWithWarnings(cfg, warnings)
 }
 
 func ensureInstanceToken(env map[string]string) (map[string]string, error) {

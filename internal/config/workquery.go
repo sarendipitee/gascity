@@ -52,6 +52,10 @@ func bdReadyPoolDemandShell(limitFlag string, includeEphemeralReady bool) string
 // requires jq in the default worker/reconciler environment; remove it with the
 // Go-side legacy candidates after the backfill completion tracked by ga-dhf44.
 func bdReadyPoolDemandMigrationShell(limitFlag string, includeEphemeralReady bool) string {
+	return `bd ready` + bdReadyIncludeEphemeralArg(includeEphemeralReady) + ` --metadata-field "` + beadmeta.RunTargetMetadataKey + `=$target" --metadata-field "` + beadmeta.KindMetadataKey + `=` + beadmeta.KindWorkflow + `" --unassigned --exclude-type=epic --json --sort priority ` + limitFlag
+}
+
+func bdReadyPoolDemandMigrationOldestShell(limitFlag string, includeEphemeralReady bool) string {
 	return `bd ready` + bdReadyIncludeEphemeralArg(includeEphemeralReady) + ` --metadata-field "` + beadmeta.RunTargetMetadataKey + `=$target" --metadata-field "` + beadmeta.KindMetadataKey + `=` + beadmeta.KindWorkflow + `" --unassigned --exclude-type=epic --json --sort oldest ` + limitFlag
 }
 
@@ -104,6 +108,24 @@ func legacyEphemeralPoolDemandShell(limit int, includeEphemeralReady, quiet bool
 	return `{ ` + query + ` | jq --arg target "$target" ` + shellquote.Quote(filter) + jqStderr + `; } || printf "[]"`
 }
 
+// bdListReworkPoolDemandShell queries open, unassigned, routed beads that have
+// started_at set: rejected rework beads that bd ready excludes because it
+// treats non-empty started_at as already in flight.
+func bdListReworkPoolDemandShell(includeEphemeralReady bool) string {
+	if includeEphemeralReady {
+		return `printf "[]"`
+	}
+	return `bd list --status=open --no-assignee --metadata-field "gc.routed_to=$target" --json --limit 0 2>/dev/null`
+}
+
+func reworkPoolDemandFilterJQ(limit int) string {
+	filter := `[.[] | select((.started_at // "") != "") | select(((.issue_type // .type // "") != "epic")) | select((.status // "") != "closed")]`
+	if limit > 0 {
+		filter += ` | sort_by(.priority // 4) | .[:` + strconv.Itoa(limit) + `]`
+	}
+	return filter
+}
+
 // poolDemandFirstRowFunctionScript emits the work_query Tier 3 function: it
 // reads the first ready, unassigned, routed bead for the supplied target,
 // prints it, and exits 0. The caller appends a terminal fallthrough
@@ -117,8 +139,13 @@ func poolDemandFirstRowFunctionScript(includeEphemeralReady bool) string {
 		`legacy_candidates=$(` + bdReadyPoolDemandMigrationShell("--limit=20", includeEphemeralReady) + ` 2>/dev/null); ` +
 		`r=$(printf "%s" "$legacy_candidates" | ` + poolDemandMigrationFilterJQ(1) + ` 2>/dev/null); ` +
 		`[ -n "$r" ] && [ "$r" != "[]" ] && printf "%s" "$r" && exit 0; ` +
+		`legacy_candidates=$(` + bdReadyPoolDemandMigrationOldestShell("--limit=20", includeEphemeralReady) + ` 2>/dev/null); ` +
+		`r=$(printf "%s" "$legacy_candidates" | ` + poolDemandMigrationFilterJQ(1) + ` 2>/dev/null); ` +
+		`[ -n "$r" ] && [ "$r" != "[]" ] && printf "%s" "$r" && exit 0; ` +
 		`legacy_ephemeral_candidates=$(` + legacyEphemeralPoolDemandShell(20, includeEphemeralReady, true) + `); ` +
 		`r=$(printf "%s" "$legacy_ephemeral_candidates" | jq '.[0:1]' 2>/dev/null); ` +
+		`[ -n "$r" ] && [ "$r" != "[]" ] && printf "%s" "$r" && exit 0; ` +
+		`r=$(` + bdListReworkPoolDemandShell(includeEphemeralReady) + ` | jq ` + shellquote.Quote(reworkPoolDemandFilterJQ(1)) + ` 2>/dev/null); ` +
 		`[ -n "$r" ] && [ "$r" != "[]" ] && printf "%s" "$r" && exit 0; ` +
 		`return 1; ` +
 		`}; `
@@ -151,7 +178,8 @@ func poolDemandCountShell(target string, includeEphemeralReady bool) string {
 		`legacy_candidates=$(` + bdReadyPoolDemandMigrationShell("--limit 0", includeEphemeralReady) + `) || exit $?; ` +
 		`legacy_json=$(printf "%s" "$legacy_candidates" | ` + poolDemandMigrationFilterJQ(0) + `) || exit $?; ` +
 		`legacy_ephemeral_json=$(` + legacyEphemeralPoolDemandShell(0, includeEphemeralReady, false) + `); ` +
-		`printf "%s\n%s\n%s\n" "$ready_json" "$legacy_json" "$legacy_ephemeral_json" | jq -s "(add // []) | unique_by(.id) | length"`
+		`rework_json=$(` + bdListReworkPoolDemandShell(includeEphemeralReady) + ` | jq ` + shellquote.Quote(reworkPoolDemandFilterJQ(0)) + ` 2>/dev/null || printf "[]"); ` +
+		`printf "%s\n%s\n%s\n%s\n" "$ready_json" "$legacy_json" "$legacy_ephemeral_json" "$rework_json" | jq -s "(add // []) | unique_by(.id) | length"`
 	return shellquote.Join([]string{"sh", "-c", script, "--", target})
 }
 
@@ -225,9 +253,7 @@ func ephemeralAssignedInProgressProbeScript(shellVar string, includeEphemeralRea
 }
 
 func ephemeralAssignedReadyProbeScript(shellVar string, includeEphemeralReady bool) string {
-	if includeEphemeralReady {
-		return ""
-	}
+	_ = includeEphemeralReady
 	filter := legacyEphemeralReadyFilterJQ(`select((.assignee // "") == $id)`, 1)
 	return `r=$(` + bdQueryEphemeralStatusQuietShell("open") + ` | ` +
 		`jq --arg id "$` + shellVar + `" ` + shellquote.Quote(filter) + ` 2>/dev/null); ` +
@@ -307,16 +333,20 @@ func (a *Agent) effectiveWorkQuery(includeEphemeralReady bool) string {
 	}
 	target := a.poolDemandTarget()
 	legacyTarget := legacyWorkflowControlQualifiedName(target)
+	originGate := poolDemandOriginGateScript()
+	if a.SupportsMultipleSessions() {
+		originGate = ""
+	}
 	if legacyTarget == "" {
 		script := standardAssignedWorkQueryScript(includeEphemeralReady) +
-			poolDemandOriginGateScript() +
+			originGate +
 			poolDemandFirstRowFunctionScript(includeEphemeralReady) +
 			`probe_pool_demand "$1"; ` +
 			`printf "[]"`
 		return shellquote.Join([]string{"sh", "-c", script, "--", target})
 	}
 	script := legacyControlAssignedWorkQueryScript(includeEphemeralReady) +
-		poolDemandOriginGateScript() +
+		originGate +
 		poolDemandFirstRowFunctionScript(includeEphemeralReady) +
 		`probe_pool_demand "$1"; ` +
 		`probe_pool_demand "$2"; ` +

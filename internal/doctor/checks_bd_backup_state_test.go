@@ -36,6 +36,23 @@ func TestBdBackupStateCheck_CleanScopeIsOK(t *testing.T) {
 	}
 }
 
+func TestBdBackupStateCheck_ManagedScopeIgnoresLegacyBackupState(t *testing.T) {
+	city := t.TempDir()
+	writeBackupStateFixture(t, city, map[string]string{
+		".beads/config.yaml":              "issue-prefix: gc\nbackup.enabled: false\ngc.endpoint_origin: managed_city\n",
+		".beads/backup/backup_state.json": `{"last_success_at":"2026-06-28T14:46:00Z"}`,
+	}, ".beads/dolt")
+
+	check := NewBdBackupStateCheckForScopeRoots(city, []string{city})
+	r := check.Run(nil)
+	if r.Status != StatusOK {
+		t.Fatalf("Status = %v (%s), want OK for stale managed legacy backup_state", r.Status, r.Message)
+	}
+	if strings.Contains(r.Message, "backup.enabled") || strings.Contains(r.FixHint, "BD_BACKUP_ENABLED") {
+		t.Fatalf("managed scope should not recommend legacy bd backup path, message=%q hint=%q", r.Message, r.FixHint)
+	}
+}
+
 func TestBdBackupStateCheck_FlagsCorruptQuarantine(t *testing.T) {
 	// A corruption event quarantines the store as .beads/<name>.corrupt-<ts>
 	// and nothing ever reclaims it: a 1.8GB quarantine sat unnoticed from

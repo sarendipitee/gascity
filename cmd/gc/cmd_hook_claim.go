@@ -61,6 +61,13 @@ type (
 	hookRecordSessionPointersFunc func(ctx context.Context, dir string, env []string, assignee, sessionBeadID, runID, stepID string) error
 )
 
+type hookClaimDecodedBead struct {
+	ID       string                     `json:"id"`
+	Status   string                     `json:"status"`
+	Assignee string                     `json:"assignee"`
+	Metadata map[string]json.RawMessage `json:"metadata"`
+}
+
 type hookClaimJSONResult struct {
 	SchemaVersion        string   `json:"schema_version"`
 	OK                   bool     `json:"ok"`
@@ -256,6 +263,7 @@ func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOpti
 // session's route targets.
 func hookCandidateClaimable(candidate beads.Bead, routeTargets []string) bool {
 	return strings.TrimSpace(candidate.ID) != "" &&
+		strings.EqualFold(strings.TrimSpace(candidate.Status), "open") &&
 		strings.TrimSpace(candidate.Assignee) == "" &&
 		hookClaimMatchesRoute(candidate, routeTargets)
 }
@@ -608,11 +616,47 @@ func decodeHookClaimBeads(output string) ([]beads.Bead, error) {
 		output = extracted
 	}
 	output = normalizeWorkQueryOutput(output)
-	var candidates []beads.Bead
+	var candidates []hookClaimDecodedBead
 	if err := json.Unmarshal([]byte(output), &candidates); err != nil {
 		return nil, err
 	}
-	return candidates, nil
+	out := make([]beads.Bead, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.toBead())
+	}
+	return out, nil
+}
+
+func normalizeHookClaimCandidateMetadata(output []byte) ([]byte, error) {
+	var candidates []map[string]json.RawMessage
+	if err := json.Unmarshal(output, &candidates); err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		rawMetadata, ok := candidate["metadata"]
+		if !ok || len(rawMetadata) == 0 || string(rawMetadata) == "null" {
+			continue
+		}
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(rawMetadata, &values); err != nil {
+			return nil, err
+		}
+		metadata := make(map[string]string, len(values))
+		for key, value := range values {
+			var s string
+			if json.Unmarshal(value, &s) == nil {
+				metadata[key] = s
+				continue
+			}
+			metadata[key] = strings.TrimSpace(string(value))
+		}
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+		candidate["metadata"] = encoded
+	}
+	return json.Marshal(candidates)
 }
 
 func firstHookJSONValue(output string) (string, bool) {
@@ -703,4 +747,29 @@ func hookLegacyWorkflowControlName(value string) string {
 		return ""
 	}
 	return strings.TrimSuffix(value, suffix) + "workflow-control"
+}
+
+func (b hookClaimDecodedBead) toBead() beads.Bead {
+	metadata := make(map[string]string, len(b.Metadata))
+	for key, raw := range b.Metadata {
+		metadata[key] = hookClaimMetadataValue(raw)
+	}
+	return beads.Bead{
+		ID:       b.ID,
+		Status:   b.Status,
+		Assignee: b.Assignee,
+		Metadata: metadata,
+	}
+}
+
+func hookClaimMetadataValue(raw json.RawMessage) string {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+	return value
 }

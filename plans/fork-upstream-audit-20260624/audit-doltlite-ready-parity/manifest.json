@@ -1,0 +1,81 @@
+{
+  "schema": "gascity.workflow-docs.v1",
+  "workflow_root": "gc-09rm",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity",
+  "artifact_root_relative": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/manifest.json",
+  "manifest_path_relative": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/manifest.json",
+  "docs_change_id": "krxposolyznkmuunkznoltqxtymmlmxy",
+  "source_workspace": "gascity",
+  "source_workspace_path": "/data/projects/doltlite-gascity/gascity/.gc/workspaces/gascity/packs/gascity",
+  "source_change_id": "snrynqzxtknnntlruwytvklunnsxqtly",
+  "documents": [
+    {
+      "name": "requirements",
+      "schema": "gc.build.requirements.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/requirements.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/requirements.md",
+      "hash": "sha256:4150a0e77c0916cdde69931b80339c77da88c11076a2ccdda05ecf6ca78c5e97",
+      "change_id": "mlxzsxpvvmuxozumtnnrunvqvnvyurnv"
+    },
+    {
+      "name": "plan",
+      "schema": "gc.build.plan.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-plan.md",
+      "hash": "sha256:2803afa47f0c4d4f92d123fd70f58940691badd759fbb59237767babdefedc84",
+      "change_id": "kzwpnwxukwopnsrnzlmyuwvlvzyzkswx"
+    },
+    {
+      "name": "decomposition",
+      "schema": "gc.build.decomposition.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/decomposition.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/decomposition.md",
+      "hash": "sha256:fe1d48a2eedd8c05d4c48a7a4f1924f262487025b691ad7016e552f10b8d91d2",
+      "change_id": "kypwosprvvuqyurwlnrmlysyzrptnmvk"
+    },
+    {
+      "name": "workspace-prep-summary",
+      "schema": "gc.build.workspace-prep-summary.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-items/workspace-prep-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-items/workspace-prep-summary.md",
+      "hash": "sha256:b3e094972fe21ae0ddc8f0e71877c03634022adcf86af8a6dc9280ece87e9115",
+      "change_id": "qlnsvzmqvlunlzvylklsuuryxqsvvlxn"
+    },
+    {
+      "name": "evidence-inventory-summary",
+      "schema": "gc.build.implementation-summary.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-items/evidence-inventory-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/implementation-items/evidence-inventory-summary.md",
+      "hash": "sha256:c1d6ce8f6273a9086d8bc5f757d96d5f14423471a5d134bf2d3221dc7af70504",
+      "change_id": "oqvnlwpvkkmnzzskzykmuoxqyknszsnx"
+    },
+    {
+      "name": "implementation-summary",
+      "schema": "gc.build.implementation-summary.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/build/implementation-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/build/implementation-summary.md",
+      "hash": "sha256:b23869d6e71b0a7d3a4cb3a8b2cc84727414392efedbd3a074507522e0b312a2",
+      "change_id": "qxuuosnkwmvvymlwspryywxyluuospvv"
+    },
+    {
+      "name": "review",
+      "schema": "gc.build.review.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/plan-review.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/plan-review.md",
+      "hash": "sha256:ecd353097b519cb12c3c6823f7611fad35b434f823956a2a26e658c704ff2efd",
+      "change_id": "nltppqmmtqrurtuptmmqqoosuvyrtltm"
+    },
+    {
+      "name": "final-report",
+      "schema": "gc.build.final-report.v1",
+      "path": "plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/final-report.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/fork-upstream-audit-20260624/audit-doltlite-ready-parity/final-report.md",
+      "hash": "sha256:bdf12ee97f298234f6bd477d5ce1f25c851dd3ab294ab27670461d823e787fb3",
+      "change_id": "krxposolyznkmuunkznoltqxtymmlmxy"
+    }
+  ]
+}

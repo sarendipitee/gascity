@@ -1104,11 +1104,13 @@ func TestAgentConfigFromAgentCoversPersistedFields(t *testing.T) {
 	trueVal := true
 	intVal := 42
 	formula := "mol-work"
+	pack := "gastown"
 	src := config.Agent{
 		Name:                   "worker",
 		Description:            "test agent description",
 		Dir:                    "demo",
 		WorkDir:                ".gc/agents/worker",
+		Pack:                   pack,
 		TmuxAlias:              "worker--{{.CityName}}",
 		Scope:                  "city",
 		Suspended:              true,

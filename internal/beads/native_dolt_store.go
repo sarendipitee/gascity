@@ -58,6 +58,62 @@ func repairIDDefault(db *sql.DB, table string) error {
 	return nil
 }
 
+// repairWispEventsIDDefault ensures the wisp_events.id column has DEFAULT
+// (uuid()). The same Dolt schema-migration quirk that strips the expression
+// default from dependencies.id also affects wisp_events.id. Without the default
+// the beadslib ephemeral INSERT (gc mail, session event recording) fails with
+// "Field 'id' doesn't have a default value" because the library never supplies
+// id explicitly, relying on the expression default.
+// This repair is idempotent: it checks INFORMATION_SCHEMA before altering.
+func repairWispEventsIDDefault(db *sql.DB) error {
+	var hasDefault int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'wisp_events'
+		  AND COLUMN_NAME = 'id'
+		  AND COLUMN_DEFAULT IS NOT NULL
+	`).Scan(&hasDefault)
+	if err != nil {
+		return fmt.Errorf("checking wisp_events.id default: %w", err)
+	}
+	if hasDefault > 0 {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE `wisp_events` MODIFY COLUMN `id` char(36) NOT NULL DEFAULT (uuid())")
+	if err != nil {
+		return fmt.Errorf("repairing wisp_events.id default: %w", err)
+	}
+	return nil
+}
+
+// repairEventsIDDefault ensures the regular events.id column has DEFAULT
+// (uuid()). The same migration/default mismatch can affect regular bead event
+// recording, which routes through events instead of wisp_events.
+func repairEventsIDDefault(db *sql.DB) error {
+	var hasDefault int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'events'
+		  AND COLUMN_NAME = 'id'
+		  AND COLUMN_DEFAULT IS NOT NULL
+	`).Scan(&hasDefault)
+	if err != nil {
+		return fmt.Errorf("checking events.id default: %w", err)
+	}
+	if hasDefault > 0 {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE `events` MODIFY COLUMN `id` char(36) NOT NULL DEFAULT (uuid())")
+	if err != nil {
+		return fmt.Errorf("repairing events.id default: %w", err)
+	}
+	return nil
+}
+
 const nativeDoltStoreActor = "gascity"
 
 var nativeDoltOpenReadyStatuses = []beadslib.Status{
@@ -73,6 +129,7 @@ var nativeDoltOpenReadyStatuses = []beadslib.Status{
 var (
 	nativeDoltOpenBestAvailable = beadslib.OpenBestAvailable
 	nativeDoltOpenEnvMu         sync.Mutex
+	errNativeIssueMetadataParse = ErrMetadataParse
 )
 
 var nativeDoltOpenEnvKeys = []string{
@@ -208,6 +265,9 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 		_ = storage.Close()
 		return nil, fmt.Errorf("reading native issue prefix: %w", err)
 	}
+	if strings.TrimSpace(prefix) == "" {
+		prefix = strings.TrimSpace(env["GC_BEADS_PREFIX"])
+	}
 	if accessor, ok := storage.(rawDBGetter); ok {
 		for _, table := range idDefaultRepairTables {
 			if repairErr := repairIDDefault(accessor.DB(), table); repairErr != nil {
@@ -215,6 +275,16 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 				// DepAdd / event-recording write against the affected table.
 				fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
 			}
+		}
+		if repairErr := repairWispEventsIDDefault(accessor.DB()); repairErr != nil {
+			// Log but don't fail: the error will surface on the first
+			// ephemeral event recording (gc mail, gc session attach, etc.).
+			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
+		}
+		if repairErr := repairEventsIDDefault(accessor.DB()); repairErr != nil {
+			// Log but don't fail: the error will surface on the first
+			// regular bead event recording (metadata, labels, status, etc.).
+			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
 		}
 	}
 	return newNativeDoltStoreWithStorageAndPrefix(storage, nativeDoltStoreActor, prefix), nil
@@ -514,6 +584,16 @@ func (s *NativeDoltStore) Update(id string, opts UpdateOpts) error {
 // shared by the standalone Update (one op, one commit) and the multi-write
 // Store.Tx path (many ops, one commit) so both routes have identical semantics.
 func (s *NativeDoltStore) applyUpdateInTx(ctx context.Context, tx beadslib.Transaction, id string, opts UpdateOpts) error {
+	issue, err := tx.GetIssue(ctx, id)
+	if err != nil {
+		return nativeStoreError(id, err)
+	}
+	if issue == nil {
+		return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+	}
+	if opts.ExpectedStatus != nil && string(issue.Status) != *opts.ExpectedStatus {
+		return statusConflictError(id, *opts.ExpectedStatus, string(issue.Status))
+	}
 	if opts.ParentID != nil {
 		if err := s.validateUpdateParent(ctx, tx, *opts.ParentID); err != nil {
 			return err
@@ -754,6 +834,9 @@ func (s *NativeDoltStore) List(query ListQuery) ([]Bead, error) {
 	for _, issue := range issues {
 		bead, err := beadFromNativeIssue(issue)
 		if err != nil {
+			if isNativeIssueMetadataParseError(err) {
+				continue
+			}
 			return nil, err
 		}
 		beads = append(beads, bead)
@@ -926,28 +1009,38 @@ func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) err
 	defer release()
 	ctx, cancel := nativeDoltOperationContext(context.TODO())
 	defer cancel()
-	issue, err := storage.GetIssue(ctx, id)
+
+	err = storage.RunInTransaction(ctx, fmt.Sprintf("gc: update bead %s metadata", id), func(tx beadslib.Transaction) error {
+		issue, err := tx.GetIssue(ctx, id)
+		if err != nil {
+			return nativeStoreError(id, err)
+		}
+		if issue == nil {
+			return fmt.Errorf("bead %q: %w", id, ErrNotFound)
+		}
+		metadata, err := metadataMapFromNative(issue.Metadata)
+		if err != nil {
+			return fmt.Errorf("parsing metadata for bead %q: %w", id, err)
+		}
+		if metadata == nil {
+			metadata = make(map[string]string, len(kvs))
+		}
+		for k, v := range kvs {
+			metadata[k] = v
+		}
+		raw, err := metadataRawFromMap(metadata)
+		if err != nil {
+			return err
+		}
+		if err := tx.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor); err != nil {
+			return nativeStoreError(id, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nativeStoreError(id, err)
 	}
-	if issue == nil {
-		return fmt.Errorf("bead %q: %w", id, ErrNotFound)
-	}
-	metadata, err := metadataMapFromNative(issue.Metadata)
-	if err != nil {
-		return fmt.Errorf("parsing metadata for bead %q: %w", id, err)
-	}
-	if metadata == nil {
-		metadata = make(map[string]string, len(kvs))
-	}
-	for k, v := range kvs {
-		metadata[k] = v
-	}
-	raw, err := metadataRawFromMap(metadata)
-	if err != nil {
-		return err
-	}
-	return nativeStoreError(id, storage.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor))
+	return nil
 }
 
 // Tx executes fn inside a single native Dolt transaction so every write in the
@@ -1148,6 +1241,13 @@ func (s *NativeDoltStore) nativeUpdates(ctx context.Context, storage nativeIssue
 			return nil, err
 		}
 		updates["metadata"] = raw
+	}
+	if opts.ClearDefer {
+		updates["defer_until"] = nil
+		// Only reset to open if no explicit status override was requested.
+		if opts.Status == nil {
+			updates["status"] = string(beadslib.StatusOpen)
+		}
 	}
 	return updates, nil
 }
@@ -1470,12 +1570,12 @@ func beadFromNativeIssue(issue *beadslib.Issue) (Bead, error) {
 	}
 	metadata, err := metadataMapFromNative(issue.Metadata)
 	if err != nil {
-		return Bead{}, fmt.Errorf("parsing metadata for bead %q: %w", issue.ID, err)
+		return Bead{}, fmt.Errorf("parsing metadata for bead %q: %w: %w", issue.ID, errNativeIssueMetadataParse, err)
 	}
 	b := Bead{
 		ID:          issue.ID,
 		Title:       issue.Title,
-		Status:      mapBdStatus(string(issue.Status)),
+		Status:      mapNativeBdStatus(string(issue.Status)),
 		Type:        string(issue.IssueType),
 		Priority:    nativePriorityFromIssue(issue),
 		CreatedAt:   issue.CreatedAt,
@@ -1503,6 +1603,21 @@ func beadFromNativeIssue(issue *beadslib.Issue) (Bead, error) {
 		}
 	}
 	return b, nil
+}
+
+func isNativeIssueMetadataParseError(err error) bool {
+	return errors.Is(err, errNativeIssueMetadataParse)
+}
+
+func mapNativeBdStatus(s string) string {
+	switch s {
+	case "closed":
+		return "closed"
+	case "in_progress":
+		return "in_progress"
+	default:
+		return "open"
+	}
 }
 
 func nativePriorityFromIssue(issue *beadslib.Issue) *int {

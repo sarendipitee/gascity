@@ -28,6 +28,27 @@ const (
 	// rig roles they coordinate always come from one matching release.
 	PublicGascityRolesPackSource = "https://github.com/gastownhall/gascity-packs/tree/main/gascity/roles"
 
+	// PublicBeadsDoltlitePackSource is the durable source for the external
+	// DoltLite operations pack. The gc binary only embeds the minimal
+	// beads-doltlite-init support pack; init imports this public pack when a
+	// city chooses [beads].backend = "doltlite".
+	PublicBeadsDoltlitePackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite"
+
+	// PublicBeadsDoltlitePackVersion follows the fork's main branch instead of
+	// baking a pack-content SHA into the gc binary. The external pack carries
+	// the slow-moving install/build workflow and needs to be updateable without
+	// reinstalling gc.
+	PublicBeadsDoltlitePackVersion = "ref:main"
+
+	// PublicBeadsDoltliteInitPackSource is the durable source for the minimal
+	// DoltLite init support pack when a fresh city chooses the DoltLite beads
+	// backend.
+	PublicBeadsDoltliteInitPackSource = "https://github.com/duncan4123/gascity-packs/tree/main/beads-doltlite-init"
+
+	// PublicBeadsDoltliteInitPackVersion pins fresh DoltLite init output to
+	// the forked pack main commit containing the copied builtin init pack.
+	PublicBeadsDoltliteInitPackVersion = "sha:732f78c96890d95e1a11277ebc38e4766213b181"
+
 	// BundledPackImportVersion pins the [imports.core]/[imports.bd] entries
 	// gc init writes for the gascity.git packs bundled with the binary.
 	// This is the CANONICAL pin: the only commit the binary pre-seeds into
@@ -65,13 +86,13 @@ var SupersededBundledPackImportVersions = []string{
 // When bumping PublicGastownPackVersion, append the old value here
 // (scripts/update-bundled-gastown-pack does this).
 var SupersededPublicGastownPackVersions = []string{
-	"sha:4212acb7046c11f6f633df73307006493185233a",
 	"sha:817f85e155e2b0b0c375835b076103108f8a4724",
 	"sha:d3617d1319a1206ac85f69ba024ec395c49c6f4b",
 	"sha:fa91a3b4f1fe5cc9d1ba9ffbdd2d26274680adf9",
 	"sha:342bcfb0775ad79d2c67df3b235edf70a0a7e372",
 	"sha:2cd3360f36b2ff55f6c306546841963cbca1ed69",
 	"sha:92a9e8558b86854264ccc082fe9f27d48db3c749",
+	"sha:4212acb7046c11f6f633df73307006493185233a",
 }
 
 // SupersededPublicGascityPackVersions is the gascity-pack counterpart of

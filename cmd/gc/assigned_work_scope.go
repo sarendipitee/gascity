@@ -83,6 +83,11 @@ func assignedWorkIndexReachableFromAgent(cityPath string, cfg *config.City, agen
 	return storeRefs[index] == assignedWorkStoreRefForAgent(cityPath, cfg, agentCfg)
 }
 
+func assignedWorkKnownBlocked(wb beads.Bead) bool {
+	return strings.EqualFold(strings.TrimSpace(wb.Status), "blocked") ||
+		(wb.IsBlocked != nil && *wb.IsBlocked)
+}
+
 // filterAssignedWorkBeadsForPoolDemand resolves work through the routed
 // backing template because pool scale decisions are per agent template.
 func filterAssignedWorkBeadsForPoolDemand(
@@ -117,6 +122,9 @@ func filterAssignedWorkBeadsForPoolDemand(
 	}
 	filtered := make([]beads.Bead, 0, len(assignedWorkBeads))
 	for i, wb := range assignedWorkBeads {
+		if assignedWorkKnownBlocked(wb) {
+			continue
+		}
 		template := routedToOrLegacyWorkflowTarget(wb)
 		if template == "" {
 			if sessionBeadID := assigneeToSessionBeadID[strings.TrimSpace(wb.Assignee)]; sessionBeadID != "" {
@@ -217,6 +225,9 @@ func filterAssignedWorkBeadsForSessionWake(
 	filteredRefs := make([]string, 0, len(assignedWorkBeads))
 	for i, wb := range assignedWorkBeads {
 		if i >= len(assignedWorkStoreRefs) {
+			continue
+		}
+		if assignedWorkKnownBlocked(wb) {
 			continue
 		}
 		assignee := strings.TrimSpace(wb.Assignee)

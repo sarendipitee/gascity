@@ -1,0 +1,42 @@
+{
+  "root_bead_id": "gc-514m",
+  "workspace": "default",
+  "workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "base_revset": "default@",
+  "artifact_root": "plans/gc-vzbu",
+  "manifest_path": "plans/gc-vzbu/manifest.json",
+  "change_id": "mwnzyvorvnyo",
+  "source_workspace": "",
+  "source_workspace_path": "",
+  "source_change_id": "",
+  "documents": {
+    "implementation-summary": {
+      "schema": "gc.build.implementation-summary.v1",
+      "path": "plans/gc-vzbu/implementation-summary.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/gc-vzbu/implementation-summary.md",
+      "hash": "sha256:b5901d2cba78ba675ba129962abe5d69d637ac5212163d4ff1aa9c5b20ab9619",
+      "change_id": "twpsuupk"
+    },
+    "plan": {
+      "schema": "gc.build.plan.v1",
+      "path": "plans/gc-vzbu/plan.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/gc-vzbu/plan.md",
+      "hash": "sha256:4a037896a707c7cab202a2e6972fe31fb0db6f6814ccefbddda4d1151ca7f145",
+      "change_id": "urnsxoww"
+    },
+    "plan-review": {
+      "schema": "gc.docs.plan-review.v1",
+      "path": "plans/gc-vzbu/plan-review.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/gc-vzbu/plan-review.md",
+      "hash": "sha256:47185e1fed5ba87fca4d4532d144f4b669e9fcfa78b1cf535398f0b72d3228b7",
+      "change_id": "mwnzyvorvnyo"
+    },
+    "final-report": {
+      "schema": "gc.build.final-report.v1",
+      "path": "plans/gc-vzbu/final-report.md",
+      "absolute_path": "/data/projects/doltlite-gascity/gascity/plans/gc-vzbu/final-report.md",
+      "hash": "sha256:f48042486d22989d78f82d58022046d7f983fa692d9855c2c6bb653e31f01852",
+      "change_id": "vzokylmk"
+    }
+  }
+}

@@ -1491,7 +1491,7 @@ func TestDefaultNamedSessionDemandRecordsPartialWithoutRoutedDemand(t *testing.T
 		}},
 	}
 
-	demand, partialTemplates, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
+	demand, _, partialTemplates, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
 		template: "worker",
 		storeKey: "rig:gascity",
 		store:    store,
@@ -1510,6 +1510,92 @@ func TestDefaultNamedSessionDemandRecordsPartialWithoutRoutedDemand(t *testing.T
 	}
 	if !partialTemplates["worker"] {
 		t.Fatalf("partialTemplates = %v, want worker marked partial", partialTemplates)
+	}
+}
+
+func TestDefaultNamedSessionDemandReportsStrandedBeadForUnassignedNamedSessionRouting(t *testing.T) {
+	// A bead with gc.routed_to pointing at a named session but no assignee
+	// creates phantom demand: the controller wakes the named session, but the
+	// session's find-work step (assignee=$GC_AGENT) cannot find the bead.
+	// This is the root cause of the silent-idle failure described in gcy-esq.
+	store := beads.NewMemStore()
+	strandedID, err := store.Create(beads.Bead{
+		Title:  "stranded refinery bead",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "refinery",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create stranded bead: %v", err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name: "refinery",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Name:     "refinery",
+			Template: "refinery",
+			Mode:     "on_demand",
+		}},
+	}
+
+	demand, stranded, partialTemplates, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
+		template: "refinery",
+		storeKey: "rig:gascity",
+		store:    store,
+	}}, cfg, "test-city")
+	if !demand["refinery"] {
+		t.Fatalf("defaultNamedSessionDemand[refinery] = false, want named session demand detected")
+	}
+	if len(errs) != 0 {
+		t.Fatalf("defaultNamedSessionDemand errs = %v, want no errors", errs)
+	}
+	if partialTemplates["refinery"] {
+		t.Fatalf("partialTemplates = %v, want refinery not partial", partialTemplates)
+	}
+	if len(stranded) != 1 || stranded[0] != strandedID.ID {
+		t.Fatalf("defaultNamedSessionDemand stranded = %v, want [%s]", stranded, strandedID.ID)
+	}
+}
+
+func TestDefaultNamedSessionDemandDoesNotReportStrandedForAssignedBead(t *testing.T) {
+	// Beads with assignee set are NOT stranded — the named session will find
+	// them via assignee lookup.
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "assigned refinery bead",
+		Type:     "task",
+		Status:   "open",
+		Assignee: "refinery",
+		Metadata: map[string]string{},
+	}); err != nil {
+		t.Fatalf("create assigned bead: %v", err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name: "refinery",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Name:     "refinery",
+			Template: "refinery",
+			Mode:     "on_demand",
+		}},
+	}
+
+	_, stranded, _, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
+		template: "refinery",
+		storeKey: "rig:gascity",
+		store:    store,
+	}}, cfg, "test-city")
+	if len(errs) != 0 {
+		t.Fatalf("defaultNamedSessionDemand errs = %v, want no errors", errs)
+	}
+	if len(stranded) != 0 {
+		t.Fatalf("defaultNamedSessionDemand stranded = %v, want empty (assigned bead is not stranded)", stranded)
 	}
 }
 
@@ -1538,7 +1624,7 @@ func TestDefaultNamedSessionDemandIgnoresNamedIdentityRunTargetOnlyWorkflow(t *t
 		}},
 	}
 
-	demand, _, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
+	demand, _, _, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
 		template: "reviewer",
 		storeKey: "rig:gascity",
 		store:    store,
@@ -1548,6 +1634,44 @@ func TestDefaultNamedSessionDemandIgnoresNamedIdentityRunTargetOnlyWorkflow(t *t
 	}
 	if len(demand) != 0 {
 		t.Fatalf("defaultNamedSessionDemand = %v, want no named demand from gc.run_target metadata", demand)
+	}
+}
+
+func TestDefaultNamedSessionDemandCountsRunTargetOnlyWorkflowDuringMigration(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:  "legacy workflow root",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.kind":       "workflow",
+			"gc.run_target": "reviewer",
+		},
+	}); err != nil {
+		t.Fatalf("create routed bead: %v", err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name: "reviewer",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Name:     "primary",
+			Template: "reviewer",
+			Mode:     "on_demand",
+		}},
+	}
+
+	demand, _, _, errs := defaultNamedSessionDemand([]defaultScaleCheckTarget{{
+		template: "reviewer",
+		storeKey: "rig:gascity",
+		store:    store,
+	}}, cfg, "test-city")
+	if len(errs) != 0 {
+		t.Fatalf("defaultNamedSessionDemand errs = %v", errs)
+	}
+	if !demand["primary"] {
+		t.Fatal("defaultNamedSessionDemand[primary] = false, want legacy run_target demand")
 	}
 }
 
@@ -8519,6 +8643,73 @@ func TestBuildDesiredState_PendingCreatePoolSessionCountsTowardScaleDemand(t *te
 	if anonymousNew.PoolSlot != 2 {
 		t.Fatalf("anonymous new PoolSlot = %d, want 2", anonymousNew.PoolSlot)
 	}
+}
+
+func TestBuildDesiredState_ExpiredNeverStartedPendingCreateDoesNotConsumeScaleDemand(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	const template = "worker"
+	now := time.Now().UTC()
+	if _, err := store.Create(beads.Bead{
+		Title:  "queued work",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": template,
+		},
+	}); err != nil {
+		t.Fatalf("create queued work: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:  template,
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel, "agent:worker-1"},
+		Metadata: map[string]string{
+			"template":                  template,
+			"session_name":              "worker-mc-stale",
+			"agent_name":                "worker-1",
+			"session_origin":            "ephemeral",
+			"pool_managed":              boolMetadata(true),
+			"pool_slot":                 "1",
+			"pending_create_claim":      boolMetadata(true),
+			"pending_create_started_at": pendingCreateStartedAtNow(now.Add(-(pendingCreateNeverStartedTimeout + time.Second))),
+			"state":                     string(sessionpkg.StateStartPending),
+		},
+		CreatedAt: now.Add(-24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("create stale session bead: %v", err)
+	}
+	cfg := &config.City{
+		Agents: []config.Agent{{
+			Name:              template,
+			StartCommand:      "true",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(5),
+		}},
+	}
+	sessionSnapshot, err := loadSessionBeadSnapshot(store)
+	if err != nil {
+		t.Fatalf("load session snapshot: %v", err)
+	}
+
+	dsResult := buildDesiredStateWithSessionBeads(
+		"test-city", cityPath, now, cfg, runtime.NewFake(),
+		store, nil, sessionSnapshot, nil, io.Discard,
+	)
+
+	if _, ok := dsResult.State["worker-mc-stale"]; ok {
+		t.Fatalf("expired pending-create session stayed desired: keys=%v", mapKeys(dsResult.State))
+	}
+	for _, tp := range dsResult.State {
+		if tp.TemplateName != template {
+			continue
+		}
+		if tp.SessionName == "worker-mc-stale" {
+			t.Fatalf("expired pending-create session reused stale identity: %+v", tp)
+		}
+		return
+	}
+	t.Fatalf("expected fresh desired session for %s; keys=%v", template, mapKeys(dsResult.State))
 }
 
 func TestBuildDesiredState_LegacyAliaslessEphemeralPoolSessionFallsBackToSessionNameIdentity(t *testing.T) {

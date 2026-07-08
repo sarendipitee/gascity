@@ -824,3 +824,52 @@ func TestJSONSchemaManifestForDiscoveredPackCommand(t *testing.T) {
 		t.Fatalf("manifest = %+v", manifest)
 	}
 }
+
+func TestJSONSchemaManifestForDiscoveredPackCommandWithMissingLocalSchema(t *testing.T) {
+	t.Setenv("GC_JSON_CONTRACT_STRICT", "1")
+
+	root := &cobra.Command{Use: "gc"}
+	configureJSONSchemaFlag(root)
+
+	commandDir := filepath.Join(t.TempDir(), "commands", "review", "health")
+	if err := os.MkdirAll(filepath.Join(commandDir, "schemas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	addDiscoveredCommandsToRoot(root, []config.DiscoveredCommand{{
+		Command:     []string{"health"},
+		Description: "Review status",
+		SourceDir:   commandDir,
+		PackDir:     "test-pack",
+		PackName:    "beads-doltlite",
+		BindingName: "beads-doltlite",
+	}}, "/tmp", "testcity", &stdout, &stderr, true)
+
+	handled, code := handleJSONContractRequest(root, []string{"beads-doltlite", "health", "--json-schema=result"}, &stdout, &stderr)
+	if !handled || code != 0 {
+		t.Fatalf("handled=%v code=%d stderr=%q stdout=%q", handled, code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	var manifest struct {
+		Command       []string                   `json:"command"`
+		JSONSupported bool                       `json:"json_supported"`
+		Schemas       map[string]json.RawMessage `json:"schemas"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatalf("manifest is not JSON: %v\n%s", err, stdout.String())
+	}
+	assertManifestOmitsTransport(t, stdout.Bytes())
+	if got := strings.Join(manifest.Command, " "); got != "beads-doltlite health" {
+		t.Fatalf("command = %q, want beads-doltlite health", got)
+	}
+	if !manifest.JSONSupported {
+		t.Fatalf("manifest json_supported = false, want true")
+	}
+	if !json.Valid(manifest.Schemas["result"]) || !json.Valid(manifest.Schemas["failure"]) {
+		t.Fatalf("manifest schemas = %+v", manifest.Schemas)
+	}
+}

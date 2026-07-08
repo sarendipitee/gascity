@@ -1,0 +1,16 @@
+rig: gascity
+rig_root: /data/projects/doltlite-gascity/gascity
+subject_path: /data/projects/doltlite-gascity/gascity/plans/doltlite-gascity-smoke-build-20260704/subject.md
+review_intent: smoke build-basic formula sling for recent DoltLite-related gascity changes
+vcs: jj
+working_copy_rev: "@"
+expected_no_push: true
+expected_no_pr: true
+changed_files:
+  - cmd/gc/beads_provider_lifecycle.go
+  - cmd/gc/cmd_convoy_dispatch_test.go
+  - cmd/gc/dispatch_runtime.go
+  - cmd/gc/template_resolve.go
+  - cmd/gc/template_resolve_env_test.go
+  - internal/beads/contract/files.go
+  - internal/beads/contract/files_test.go

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-gc-jsonl": {},
+  "type": "object",
+  "required": ["schema_version", "ok"],
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "error": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

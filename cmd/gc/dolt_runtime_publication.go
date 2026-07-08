@@ -67,8 +67,9 @@ func readPublishedDoltRuntimeStateHint(cityPath string) (doltRuntimeState, bool,
 }
 
 func managedDoltLifecycleOwned(cityPath string) (bool, error) {
+	backend := resolveBeadsBackend(cityPath)
 	if cityUsesBdStoreContract(cityPath) {
-		if cityUsesDoltliteBeadsBackend(cityPath) {
+		if backend.Name() == "doltlite" {
 			return false, nil
 		}
 		_, usesPostgres, err := postgresMetadataForScope(cityPath, cityPath)

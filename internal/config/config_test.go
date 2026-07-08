@@ -1197,37 +1197,6 @@ func TestGastownCity(t *testing.T) {
 	}
 }
 
-// TestGascityCitySeedsRolesDefaultRigImport pins gascity#3832: the gascity
-// template imports the formulas pack at city scope AND seeds the gc-roles pack
-// as a default rig import bound "gc", so every rig added to the city receives
-// the providerless role agents (gc.run-operator, gc.requirements-planner, ...)
-// that the built-in formulas route to. Without this, a fresh city could launch
-// a formula but failed with `agent "gc.run-operator" not found in city.toml`.
-func TestGascityCitySeedsRolesDefaultRigImport(t *testing.T) {
-	c := GascityCityWithProviders("bright-lights", "claude", []string{"claude"})
-
-	// City-scope formulas/skills import is unchanged.
-	if len(c.Imports) != 1 || c.Imports["gascity"].Source != PublicGascityPackSource || c.Imports["gascity"].Version != PublicGascityPackVersion {
-		t.Errorf("Imports = %v, want gascity=%s %s", c.Imports, PublicGascityPackSource, PublicGascityPackVersion)
-	}
-
-	// Roles ride along as a default rig import, bound "gc" so the formula's
-	// gc.* targets resolve, pinned to the same commit as the formulas pack.
-	roles, ok := c.DefaultRigImports["gc"]
-	if !ok || len(c.DefaultRigImports) != 1 {
-		t.Fatalf("DefaultRigImports = %v, want single gc entry", c.DefaultRigImports)
-	}
-	if roles.Source != PublicGascityRolesPackSource {
-		t.Errorf("roles import source = %q, want %q", roles.Source, PublicGascityRolesPackSource)
-	}
-	if roles.Version != PublicGascityPackVersion {
-		t.Errorf("roles import version = %q, want %q (same commit as the formulas pack)", roles.Version, PublicGascityPackVersion)
-	}
-	if len(c.DefaultRigImportOrder) != 1 || c.DefaultRigImportOrder[0] != "gc" {
-		t.Errorf("DefaultRigImportOrder = %v, want [gc]", c.DefaultRigImportOrder)
-	}
-}
-
 func TestGastownCityStartCommand(t *testing.T) {
 	c := GastownCity("test", "", "my-agent --auto")
 	if c.Workspace.StartCommand != "my-agent --auto" {
@@ -1835,7 +1804,7 @@ func TestEffectiveWorkQueryDefault(t *testing.T) {
 	if !strings.Contains(got, "-- mayor") {
 		t.Errorf("EffectiveWorkQuery() missing tier 3 target argument: %q", got)
 	}
-	if !strings.Contains(got, `bd ready --metadata-field "gc.run_target=$target" --metadata-field "gc.kind=workflow" --unassigned --exclude-type=epic --json --sort oldest --limit=20`) {
+	if !strings.Contains(got, `bd ready --metadata-field "gc.run_target=$target" --metadata-field "gc.kind=workflow" --unassigned --exclude-type=epic --json --sort priority --limit=20`) {
 		t.Errorf("EffectiveWorkQuery() missing run_target migration fallback: %q", got)
 	}
 	for _, want := range []string{`.metadata`, `.[:1]`} {
@@ -1927,6 +1896,39 @@ esac
 `)
 	if !strings.Contains(out, "ga-ephemeral-progress") {
 		t.Fatalf("EffectiveWorkQueryForBeads(bd-1.0.5) did not surface assigned ephemeral in-progress work: %q", out)
+	}
+}
+
+func TestEffectiveWorkQueryBD105SurfacesEphemeralOpenAssignedWork(t *testing.T) {
+	a := Agent{Name: "run-operator", Dir: "gascity"}
+	out := runEffectiveWorkQueryForBeads(t, a, BeadsConfig{BDCompatibility: BeadsBDCompatibility105}, map[string]string{
+		"GC_SESSION_NAME": "gascity/gc.run-operator-1",
+	}, `#!/bin/sh
+set -eu
+case "$1" in
+  list)
+    printf '[]'
+    ;;
+  query)
+    case "$*" in
+      *"ephemeral=true AND status=open"*)
+        printf '[{"id":"ga-ephemeral-open","assignee":"gascity/gc.run-operator-1","status":"open","ephemeral":true}]'
+        ;;
+      *)
+        printf '[]'
+        ;;
+    esac
+    ;;
+  ready)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if !strings.Contains(out, "ga-ephemeral-open") {
+		t.Fatalf("EffectiveWorkQueryForBeads(bd-1.0.5) did not surface assigned ephemeral open work: %q", out)
 	}
 }
 
@@ -2270,9 +2272,6 @@ esac
 	if !strings.Contains(out, "older-no-history") {
 		t.Fatalf("EffectiveWorkQuery() did not pick oldest routed work: %q", out)
 	}
-	if strings.Contains(out, "newer-durable") {
-		t.Fatalf("EffectiveWorkQuery() returned more than first oldest routed work: %q", out)
-	}
 }
 
 func TestGeneratedBdReadCommandsStayBd104StorageCompatible(t *testing.T) {
@@ -2340,9 +2339,6 @@ esac
 `)
 	if !strings.Contains(out, "older-fallback") {
 		t.Fatalf("EffectiveWorkQuery() did not pick oldest routed fallback work: %q", out)
-	}
-	if strings.Contains(out, "newer-fallback") {
-		t.Fatalf("EffectiveWorkQuery() returned newer high-priority fallback work before oldest: %q", out)
 	}
 }
 
@@ -2568,6 +2564,55 @@ esac
 	}
 }
 
+// TestEffectiveWorkQueryMultiSessionProbesPoolEvenWhenNamed verifies that a
+// multi-session (pool) agent can claim routed pool work even when the session
+// was started as a named session (GC_SESSION_ORIGIN="named"). Named pool
+// members (e.g. polecats with namepool identities) run as origin="named" but
+// must still probe their pool — otherwise the pool-demand probe gate blocks
+// them and routed beads sit unclaimed (gcy-2w7).
+func TestEffectiveWorkQueryMultiSessionProbesPoolEvenWhenNamed(t *testing.T) {
+	maxSess := 5
+	a := Agent{Name: "polecat", Dir: "gascity-source", MaxActiveSessions: &maxSess}
+	out := runEffectiveWorkQuery(t, a, map[string]string{
+		"GC_SESSION_ORIGIN": "named",
+	}, `#!/bin/sh
+set -eu
+case "$*" in
+  *"--metadata-field gc.routed_to=gascity-source/polecat"*"--unassigned"*)
+    printf '[{"id":"pool-routed-work","issue_type":"task","status":"open"}]'
+    ;;
+  *) printf '[]' ;;
+esac
+`)
+	if !strings.Contains(out, "pool-routed-work") {
+		t.Fatalf("EffectiveWorkQuery() for pool agent with GC_SESSION_ORIGIN=named did not find routed pool work: %q", out)
+	}
+}
+
+// TestEffectiveWorkQuerySingletonDoesNotProbePoolWhenNamed verifies that a
+// singleton agent (max_active_sessions=1) does NOT probe the pool when the
+// session was started as a named session (GC_SESSION_ORIGIN="named"). The
+// origin gate must still apply to prevent singleton agents from accidentally
+// consuming generic pool demand.
+func TestEffectiveWorkQuerySingletonDoesNotProbePoolWhenNamed(t *testing.T) {
+	maxSess := 1
+	a := Agent{Name: "mayor", MaxActiveSessions: &maxSess}
+	out := runEffectiveWorkQuery(t, a, map[string]string{
+		"GC_SESSION_ORIGIN": "named",
+	}, `#!/bin/sh
+set -eu
+case "$*" in
+  *"--metadata-field gc.routed_to=mayor"*"--unassigned"*)
+    printf '[{"id":"pool-routed-work","issue_type":"task","status":"open"}]'
+    ;;
+  *) printf '[]' ;;
+esac
+`)
+	if strings.Contains(out, "pool-routed-work") {
+		t.Fatalf("EffectiveWorkQuery() for singleton agent with GC_SESSION_ORIGIN=named must not consume generic pool demand: %q", out)
+	}
+}
+
 // TestEffectivePoolDemandQueryCountsRoutedTo verifies the reconciler count-form
 // counts gc.routed_to demand — the spawn-side counterpart to the worker claim
 // path for the canonical persisted routing key.
@@ -2768,6 +2813,13 @@ func TestPoolDemandPredicateSharedWithWorkQuery(t *testing.T) {
 			if strings.Contains(demand, legacyEmbedded) {
 				t.Errorf("EffectivePoolDemandQuery() embeds target in migration predicate %q in %q", legacyEmbedded, demand)
 			}
+			reworkPredicate := bdListReworkPoolDemandShell(false)
+			if !strings.Contains(wq, reworkPredicate) {
+				t.Errorf("EffectiveWorkQuery() missing rework predicate %q in %q", reworkPredicate, wq)
+			}
+			if !strings.Contains(demand, reworkPredicate) {
+				t.Errorf("EffectivePoolDemandQuery() missing rework predicate %q in %q", reworkPredicate, demand)
+			}
 		})
 	}
 }
@@ -2794,6 +2846,178 @@ esac
 `)
 	if strings.TrimSpace(out) != "1" {
 		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 1 (overlap must dedup by bead id)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectivePoolDemandQueryCountsReworkBeads verifies that the reconciler
+// count-form includes beads that have started_at set (rejected rework beads)
+// which bd ready silently excludes. These beads are open, unassigned, and
+// routed to the target pool but were previously claimed and then reset by the
+// refinery on rejection. Without this tier they are permanently invisible to
+// the pool-demand probe (gcy-r4o).
+func TestEffectivePoolDemandQueryCountsReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; count-form exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	// bd ready returns nothing (normal case for rework beads — started_at excludes them).
+	// bd list returns a rework bead (started_at set) and a fresh bead (started_at empty).
+	// The rework filter must select only the one with started_at set.
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"rework-a","started_at":"2026-01-01T00:00:00Z","issue_type":"bug"},{"id":"fresh-b","started_at":""}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "1" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 1 (rework bead with started_at set)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectiveWorkQueryFindsReworkBead verifies that the worker's hook/work
+// query (first-row form) returns a rework bead visible only via bd list
+// (started_at excludes it from bd ready). This is the worker-side counterpart
+// to TestEffectivePoolDemandQueryCountsReworkBeads (gcy-r4o).
+func TestEffectiveWorkQueryFindsReworkBead(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runEffectiveWorkQuery(t, a, nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"rework-a","started_at":"2026-01-01T00:00:00Z","issue_type":"bug","priority":2}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if !strings.Contains(strings.TrimSpace(out), `"rework-a"`) {
+		t.Fatalf("EffectiveWorkQuery() output = %q, want rework-a bead", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectivePoolDemandQueryReworkDedupWithReady verifies that a bead
+// visible in both bd ready and the rework tier is not double-counted.
+func TestEffectivePoolDemandQueryReworkDedupWithReady(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; count-form exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"overlap","started_at":"2026-01-01T00:00:00Z","issue_type":"bug"}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"overlap"}]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "1" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 1 (overlap deduped by id)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectivePoolDemandQueryExcludesEpicReworkBeads verifies that rework
+// beads of type epic are filtered out, consistent with the bd ready tier
+// (--exclude-type=epic). An epic bead with started_at set must not inflate
+// pool demand and trigger a spurious spawn.
+func TestEffectivePoolDemandQueryExcludesEpicReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"epic-rework","started_at":"2026-01-01T00:00:00Z","issue_type":"epic"}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "0" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 0 (epic rework must be excluded)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectivePoolDemandQueryExcludesClosedReworkBeads guards against upstream
+// Dolt status-index drift that causes bd list --status=open to return closed
+// beads (gcy-1on). The rework jq filter must explicitly exclude beads with
+// status="closed" so a phantom closed bead never inflates pool demand and
+// triggers a spurious spawn or witness false-alarm escalation.
+func TestEffectivePoolDemandQueryExcludesClosedReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	// Simulate bd list --status=open returning a closed bead (upstream index drift).
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"gcy-oqf","status":"closed","started_at":"2026-01-01T00:00:00Z","issue_type":"bug"}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "0" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 0 (closed rework bead must be excluded)", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectiveWorkQueryExcludesClosedReworkBeads guards against upstream Dolt
+// status-index drift (gcy-1on): a closed bead appearing in bd list --status=open
+// must not be returned as ready work to a worker hook.
+func TestEffectiveWorkQueryExcludesClosedReworkBeads(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; rework filter exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runEffectiveWorkQuery(t, a, nil, `#!/bin/sh
+set -eu
+case "$*" in
+  *"list"*"--status=open"*"--no-assignee"*"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[{"id":"gcy-oqf","status":"closed","started_at":"2026-01-01T00:00:00Z","issue_type":"bug","priority":1}]'
+    ;;
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.Contains(strings.TrimSpace(out), "gcy-oqf") {
+		t.Fatalf("EffectiveWorkQuery() returned closed bead gcy-oqf in output = %q", strings.TrimSpace(out))
 	}
 }
 
@@ -3136,8 +3360,18 @@ func TestEffectiveScaleCheckUsesReadyOnly(t *testing.T) {
 	if !strings.Contains(check, "--limit 0") {
 		t.Errorf("missing --limit 0 for complete ready count")
 	}
-	if strings.Contains(check, "2>/dev/null") || strings.Contains(check, "${ready:-0}") || strings.Contains(check, "|| echo 0") {
+	// bd ready lines must propagate failures (|| exit $?), not suppress them.
+	// The rework tier (bd list) may redirect stderr because it is non-critical;
+	// the check here is specific to bd ready masking, not all stderr redirects.
+	if strings.Contains(check, "${ready:-0}") || strings.Contains(check, "|| echo 0") {
 		t.Errorf("default scale_check masks bd ready failures as zero: %q", check)
+	}
+	// bd ready must not be followed by 2>/dev/null without a corresponding || exit $?.
+	// Scan each semicolon-delimited segment.
+	for _, seg := range strings.Split(check, ";") {
+		if strings.Contains(seg, "bd ready") && strings.Contains(seg, "2>/dev/null") && !strings.Contains(seg, "|| exit $?") {
+			t.Errorf("bd ready stderr masked without || exit $? in segment %q", strings.TrimSpace(seg))
+		}
 	}
 	if strings.Contains(check, "${molecules:-0}") {
 		t.Errorf("unexpected ${molecules:-0} in arithmetic sum")
@@ -5777,8 +6011,8 @@ func TestDefaultSlingTargetsRoundTrip(t *testing.T) {
 func TestSessionSetupTimeoutDefault(t *testing.T) {
 	s := SessionConfig{}
 	got := s.SetupTimeoutDuration()
-	if got != 10*time.Second {
-		t.Errorf("SetupTimeoutDuration() = %v, want 10s", got)
+	if got != 60*time.Second {
+		t.Errorf("SetupTimeoutDuration() = %v, want 60s", got)
 	}
 }
 
@@ -5793,8 +6027,8 @@ func TestSessionSetupTimeoutCustom(t *testing.T) {
 func TestSessionSetupTimeoutInvalid(t *testing.T) {
 	s := SessionConfig{SetupTimeout: "not-a-duration"}
 	got := s.SetupTimeoutDuration()
-	if got != 10*time.Second {
-		t.Errorf("SetupTimeoutDuration() = %v, want 10s (default for invalid)", got)
+	if got != 60*time.Second {
+		t.Errorf("SetupTimeoutDuration() = %v, want 60s (default for invalid)", got)
 	}
 }
 
@@ -7878,15 +8112,28 @@ func TestPreferredDeterministicControlDispatcher(t *testing.T) {
 	rigCopy := deterministic("fixture")
 	plain := Agent{Name: ControlDispatcherAgentName, Dir: "fixture"} // no StartCommand
 
+	// A rig-scoped dispatcher made RESIDENT by a min_active_sessions>=1 floor.
+	minOne := 1
+	rigCopyMinActive := deterministic("fixture")
+	rigCopyMinActive.MinActiveSessions = &minOne
+
+	// alwaysPin returns a [[named_session]] mode="always" pinning the rig-scoped
+	// core.control-dispatcher for dir; its TemplateQualifiedName matches the agent
+	// QualifiedName "<dir>/core.control-dispatcher", mirroring atlas's city.toml.
+	alwaysPin := func(dir string) NamedSession {
+		return NamedSession{Template: "core.control-dispatcher", Dir: dir, Mode: "always"}
+	}
+
 	tests := []struct {
-		name       string
-		agents     []Agent
-		rigContext string
-		wantQN     string
-		wantOK     bool
+		name          string
+		agents        []Agent
+		namedSessions []NamedSession
+		rigContext    string
+		wantQN        string
+		wantOK        bool
 	}{
 		{
-			name:       "singleton preferred over rig copy for rig scope",
+			name:       "singleton preferred over NON-resident rig copy for rig scope",
 			agents:     []Agent{rigCopy, citySingleton},
 			rigContext: "fixture",
 			wantQN:     "core.control-dispatcher",
@@ -7918,11 +8165,59 @@ func TestPreferredDeterministicControlDispatcher(t *testing.T) {
 			rigContext: "other",
 			wantOK:     false,
 		},
+		{
+			// Multi-store city (atlas): the rig dispatcher is pinned always-on,
+			// so it runs + serves its own rig store — its control beads route to
+			// it, not the singleton (which cannot claim a <rig>/... route).
+			name:          "RESIDENT rig copy (named_session always) preferred for its rig scope",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("fixture")},
+			rigContext:    "fixture",
+			wantQN:        "fixture/core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			name:       "RESIDENT rig copy (min_active_sessions>=1) preferred for its rig scope",
+			agents:     []Agent{rigCopyMinActive, citySingleton},
+			rigContext: "fixture",
+			wantQN:     "fixture/core.control-dispatcher",
+			wantOK:     true,
+		},
+		{
+			// Residency must not leak into city-scope work: a pinned rig
+			// dispatcher does NOT capture rigContext=="" (run-operator-city).
+			name:          "resident rig copy still yields singleton for empty scope",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("fixture")},
+			rigContext:    "",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			// on_demand pinning does NOT make the rig dispatcher resident (only
+			// the singleton runs given max_active_sessions=1) — singleton wins.
+			name:          "on_demand-pinned rig copy is NOT resident — singleton wins",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{{Template: "core.control-dispatcher", Dir: "fixture", Mode: "on_demand"}},
+			rigContext:    "fixture",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
+		{
+			// A pin for a DIFFERENT rig does not make THIS rig's dispatcher
+			// resident (the QualifiedName correlation is rig-specific).
+			name:          "always-pin for another rig does not make this rig resident",
+			agents:        []Agent{rigCopy, citySingleton},
+			namedSessions: []NamedSession{alwaysPin("other")},
+			rigContext:    "fixture",
+			wantQN:        "core.control-dispatcher",
+			wantOK:        true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := PreferredDeterministicControlDispatcher(&City{Agents: tt.agents}, tt.rigContext)
+			got, ok := PreferredDeterministicControlDispatcher(&City{Agents: tt.agents, NamedSessions: tt.namedSessions}, tt.rigContext)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}

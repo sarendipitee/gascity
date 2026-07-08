@@ -1082,6 +1082,64 @@ includes = ["packs/gt"]
 	}
 }
 
+func TestLoadWithIncludesDefaultsBDCompatibilityForDoltLiteBackend(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "doltlite-city"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+
+	if got := cfg.Beads.BDCompatibility; got != BeadsBDCompatibility105 {
+		t.Fatalf("cfg.Beads.BDCompatibility = %q, want %q", got, BeadsBDCompatibility105)
+	}
+	if !cfg.Beads.UsesBD105CLISemantics() {
+		t.Fatal("doltlite-backed city should use bd-1.0.5 CLI semantics")
+	}
+}
+
+func TestLoadWithIncludesLeavesBDCompatibilityUnsetForNonDoltLiteBackend(t *testing.T) {
+	tests := []struct {
+		name   string
+		backend string
+	}{
+		{name: "default", backend: ""},
+		{name: "dolt", backend: "dolt"},
+		{name: "postgres", backend: "postgres"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := "[workspace]\nname = \"city\"\n\n[beads]\nprovider = \"bd\"\n"
+			if tc.backend != "" {
+				body += "backend = \"" + tc.backend + "\"\n"
+			}
+			writeFile(t, dir, "city.toml", body)
+
+			cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+			if err != nil {
+				t.Fatalf("LoadWithIncludes: %v", err)
+			}
+
+			if got := cfg.Beads.BDCompatibility; got != "" {
+				t.Fatalf("cfg.Beads.BDCompatibility = %q, want empty for backend %q", got, tc.backend)
+			}
+			if cfg.Beads.UsesBD105CLISemantics() {
+				t.Fatalf("cfg.Beads.UsesBD105CLISemantics() = true, want false for backend %q", tc.backend)
+			}
+		})
+	}
+}
+
 func TestLoadWithIncludes_PackAgentDefaultsProviderAppliesToIncludedAgent(t *testing.T) {
 	dir := t.TempDir()
 

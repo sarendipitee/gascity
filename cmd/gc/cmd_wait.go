@@ -1197,6 +1197,7 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, sess
 	if err != nil {
 		return err
 	}
+	nudgeStore := nudges
 	for _, wait := range waits {
 		if wait.Metadata["state"] != waitStateReady {
 			continue
@@ -1238,7 +1239,7 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, sess
 			ContinuationEpoch: wait.Metadata["registered_epoch"],
 			Reference:         &nudgeReference{Kind: "bead", ID: wait.ID},
 		})
-		if err := enqueueQueuedNudgeWithStore(cityPath, nudges, item); err != nil {
+		if err := enqueueQueuedNudgeWithStore(cityPath, nudgeStore, item); err != nil {
 			return err
 		}
 		if err := sessStore.SetMetadata(wait.ID, "nudge_id", nudgeID); err != nil {

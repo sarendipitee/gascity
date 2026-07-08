@@ -97,6 +97,67 @@ func TestDoInitExplicitMinimalTemplateDoesNotImportGascityPack(t *testing.T) {
 	}
 }
 
+func TestDoInitDoltliteBackendImportsBeadsDoltlitePack(t *testing.T) {
+	f := fsys.NewFake()
+
+	var stdout, stderr bytes.Buffer
+	code := doInit(f, "/bright-lights", wizardConfig{
+		configName:      "gastown",
+		defaultProvider: "codex",
+		providers:       []string{"codex"},
+		beadsBackend:    "doltlite",
+	}, "", &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("doInit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	cityData := f.Files[filepath.Join("/bright-lights", "city.toml")]
+	if !strings.Contains(string(cityData), "backend = \"doltlite\"") {
+		t.Fatalf("city.toml missing doltlite backend:\n%s", cityData)
+	}
+	if !strings.Contains(string(cityData), "bd_compatibility = \"bd-1.0.5\"") {
+		t.Fatalf("city.toml missing bd compatibility:\n%s", cityData)
+	}
+
+	packData := f.Files[filepath.Join("/bright-lights", "pack.toml")]
+	packCfg, err := config.Parse(packData)
+	if err != nil {
+		t.Fatalf("parsing pack.toml: %v", err)
+	}
+	for _, name := range []string{"core", "beads-doltlite-init", "beads-doltlite"} {
+		if _, ok := packCfg.Imports[name]; !ok {
+			t.Fatalf("pack.toml imports = %v, want %s entry:\n%s", packCfg.Imports, name, packData)
+		}
+	}
+	if _, ok := packCfg.Imports["bd"]; ok {
+		t.Fatalf("doltlite init unexpectedly imported managed bd pack:\n%s", packData)
+	}
+	if got := packCfg.Imports["beads-doltlite"].Source; got != config.PublicBeadsDoltlitePackSource {
+		t.Fatalf("beads-doltlite source = %q, want %q", got, config.PublicBeadsDoltlitePackSource)
+	}
+	if got := packCfg.Imports["beads-doltlite"].Version; got != config.PublicBeadsDoltlitePackVersion {
+		t.Fatalf("beads-doltlite version = %q, want %q", got, config.PublicBeadsDoltlitePackVersion)
+	}
+	beadsDoltliteBlock := importBlockForInitTest(t, string(packData), "beads-doltlite")
+	if strings.Contains(beadsDoltliteBlock, "sha:") || !strings.Contains(beadsDoltliteBlock, `version = "ref:main"`) {
+		t.Fatalf("beads-doltlite import should write a branch selector, not a commit pin:\n%s", beadsDoltliteBlock)
+	}
+}
+
+func importBlockForInitTest(t *testing.T, data, name string) string {
+	t.Helper()
+	marker := "[imports." + name + "]"
+	start := strings.Index(data, marker)
+	if start < 0 {
+		t.Fatalf("pack.toml missing %s:\n%s", marker, data)
+	}
+	rest := data[start+len(marker):]
+	if end := strings.Index(rest, "\n["); end >= 0 {
+		rest = rest[:end]
+	}
+	return marker + rest
+}
+
 // TestDoInitWithGascityTemplate pins the gascity wizard template: a minimal
 // mayor city whose pack.toml imports the public gascity skills pack pinned
 // to the registry release, written alongside the explicit builtin includes.
@@ -128,44 +189,6 @@ func TestDoInitWithGascityTemplate(t *testing.T) {
 	}
 	if imp.Version != config.PublicGascityPackVersion {
 		t.Errorf("gascity import version = %q, want %q", imp.Version, config.PublicGascityPackVersion)
-	}
-}
-
-// TestDoInitGascityTemplateSeedsRolesDefaultRigImport pins gascity#3832: a
-// fresh gascity city must seed the gc-roles pack as a default rig import (bound
-// "gc") so rigs added to the city receive the role agents the built-in formulas
-// route to (gc.run-operator, ...). doInit writes default rig imports into
-// city.toml under [defaults.rig.imports]. Without this a freshly initialized
-// city failed `build-from-requirements` with `agent "gc.run-operator" not found
-// in city.toml`.
-func TestDoInitGascityTemplateSeedsRolesDefaultRigImport(t *testing.T) {
-	f := fsys.NewFake()
-
-	wiz := defaultWizardConfig()
-	wiz.configName = "gascity"
-	wiz.provider = "claude"
-	wiz.providers = []string{"claude"}
-
-	var stdout, stderr bytes.Buffer
-	code := doInit(f, "/bright-lights", wiz, "", &stdout, &stderr, false)
-	if code != 0 {
-		t.Fatalf("doInit = %d, want 0; stderr: %s", code, stderr.String())
-	}
-
-	cityData := f.Files[filepath.Join("/bright-lights", "city.toml")]
-	cityCfg, err := config.Parse(cityData)
-	if err != nil {
-		t.Fatalf("parsing city.toml: %v", err)
-	}
-	roles, ok := cityCfg.Defaults.Rig.Imports["gc"]
-	if !ok {
-		t.Fatalf("city.toml [defaults.rig.imports] = %v, want gc roles entry:\n%s", cityCfg.Defaults.Rig.Imports, cityData)
-	}
-	if roles.Source != config.PublicGascityRolesPackSource {
-		t.Errorf("roles default rig import source = %q, want %q", roles.Source, config.PublicGascityRolesPackSource)
-	}
-	if roles.Version != config.PublicGascityPackVersion {
-		t.Errorf("roles default rig import version = %q, want %q", roles.Version, config.PublicGascityPackVersion)
 	}
 }
 

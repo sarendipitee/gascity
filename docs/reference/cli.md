@@ -1965,6 +1965,10 @@ Pass --preserve-existing to keep any pre-authored pack.toml, city.toml, or
 agent prompt files in the target directory (useful when bootstrapping a
 committed workspace — e.g. from a bootstrap.sh shipped in the repo).
 
+Use --beads-backend to configure the bead store backend. "dolt" uses the
+managed Dolt SQL server (default). "doltlite" uses embedded DoltLite
+databases with no server process.
+
 ```
 gc init [path] [flags]
 ```
@@ -1978,6 +1982,8 @@ gc init --default-provider codex ~/my-city
 gc init --template gastown --default-provider codex ~/my-city
 gc init --providers claude,codex --default-provider codex ~/my-city
 gc init --default-provider codex --bootstrap-profile k8s-cell /city
+gc init --beads-backend doltlite ~/my-city
+gc init --template gastown --beads-backend doltlite ~/my-city
 gc init --name my-city
 gc init --from ~/elan --name elan /city
 gc init --file ./my-city.toml ~/bright-lights
@@ -1989,6 +1995,7 @@ gc init --template gascity --default-provider claude \
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--beads-backend` | string |  | bead store backend: "dolt" (managed Dolt server) or "doltlite" (embedded DoltLite); default: dolt |
 | `--bootstrap-profile` | string |  | bootstrap profile to apply for hosted/container defaults |
 | `--default-provider` | string |  | default readiness-aware provider to select from --providers |
 | `--dolt-database` | string |  | hosted beads project database, e.g. bd_prj_… (or GC_DOLT_DATABASE); required with --dolt-host |
@@ -3254,6 +3261,7 @@ gc runtime
 | [gc runtime drain](#gc-runtime-drain) | Signal a session to drain (wind down gracefully) |
 | [gc runtime drain-ack](#gc-runtime-drain-ack) | Acknowledge drain — signal the controller to stop this session |
 | [gc runtime drain-check](#gc-runtime-drain-check) | Check if a session is draining (exit 0 = draining) |
+| [gc runtime heartbeat](#gc-runtime-heartbeat) | Extend idle-timeout window during a long operation |
 | [gc runtime request-restart](#gc-runtime-request-restart) | Request controller restart this session (waits to be killed) |
 | [gc runtime undrain](#gc-runtime-undrain) | Cancel drain on a session |
 
@@ -3362,6 +3370,31 @@ gc runtime drain-check [name] [flags]
 |------|------|---------|-------------|
 | `--json` | bool |  | Output as JSON |
 
+## gc runtime heartbeat
+
+Extend the idle-timeout and max-session-age windows during a long operation.
+
+Sets held_until on the current session's bead, suppressing the idle-timeout
+and max-session-age timers until the hold expires. Call this at the start of
+slow operations that produce no terminal output and would otherwise trigger
+a false-alarm watchdog kill.
+
+The hold is automatically cleared by the reconciler once held_until passes.
+This is the agent-facing API for the held_until bead-metadata mechanism; it
+does not put the session into a suspended state or change its sleep_intent.
+
+The default duration (45m0s) covers long-running operations.
+Pass --duration to override.
+
+```
+gc runtime heartbeat [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--duration` | string |  | hold duration (e.g. 30m, 1h); default 45m0s |
+| `--json` | bool |  | Output as JSON |
+
 ## gc runtime request-restart
 
 Signal the controller to stop and restart this session.
@@ -3377,11 +3410,6 @@ runtime is already gone, or a SIGINT/SIGTERM is received, the command
 exits 0 cleanly. If the controller has not acted within a bounded
 timeout (max(5*PatrolInterval, 5min), capped at 30min) the command exits
 1 with a diagnostic pointing at controller health.
-
-For on-demand configured named sessions, the controller cannot restart
-the user-attended process. In that case this command reports that
-restart was skipped and returns immediately. No session.draining event
-is emitted when restart is skipped.
 
 This command is designed to be called from within a session context.
 It emits a session.draining event before waiting.

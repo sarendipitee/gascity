@@ -61,6 +61,16 @@ issues.jsonl
 # Python bytecode from script tests
 __pycache__/
 
+# Dashboard dependencies
+cmd/gc/dashboard/web/node_modules/
+
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
 .beads.backup-*
+
+# Gas City
+.beads/*
+!.beads/identity.toml
+
+# bt (beadstui) local config and caches
+.bt/

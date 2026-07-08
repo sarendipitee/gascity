@@ -1,0 +1,16 @@
+{
+  "schema": "gascity.workflow-docs.v1",
+  "workflow_root": "gc-d5bf",
+  "docs_workspace": "default",
+  "docs_workspace_path": "/data/projects/doltlite-gascity/gascity",
+  "docs_base_revset": "default@",
+  "artifact_root": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-sling-smoke/20260622T205404Z/jj-build",
+  "artifact_root_relative": "plans/jj-formula-sling-smoke/20260622T205404Z/jj-build",
+  "manifest_path": "/data/projects/doltlite-gascity/gascity/plans/jj-formula-sling-smoke/20260622T205404Z/jj-build/manifest.json",
+  "manifest_path_relative": "plans/jj-formula-sling-smoke/20260622T205404Z/jj-build/manifest.json",
+  "docs_change_id": "uzwkrxrrnvtrstwwqomzuuymwttmnmmr",
+  "source_workspace": "",
+  "source_workspace_path": "",
+  "source_change_id": "",
+  "documents": []
+}
