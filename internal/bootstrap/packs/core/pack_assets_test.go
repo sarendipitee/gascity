@@ -54,6 +54,11 @@ func TestCoreFormulasResolveConvoyMembersFromChildrenOrDependencies(t *testing.T
 		if strings.Contains(text, "if (.children | length) == 1 then .children[0].id else empty end") {
 			t.Fatalf("%s must resolve input convoy members from children or tracked dependencies", path)
 		}
+		if strings.Contains(text, "WORK_BEAD_ID=") &&
+			(!strings.Contains(text, "CONVOY_BEAD=$(gc bd show {{convoy_id}} --json") ||
+				!strings.Contains(text, "$bead.dependencies // []")) {
+			t.Fatalf("%s must include bead dependency fallback when resolving tracked convoy members", path)
+		}
 		return nil
 	})
 	if err != nil {

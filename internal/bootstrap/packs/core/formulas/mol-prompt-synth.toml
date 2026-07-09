@@ -63,7 +63,8 @@ cat {{meta_prompt_path}}
 Derive the synth bead from the input convoy:
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-prompt-synth requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -133,7 +134,8 @@ polls the synth bead for closure, so closing the derived work bead is the
 completion signal:
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 bd update "$WORK_BEAD_ID" --notes "Synthesized: {{dest_path}}"
 bd close "$WORK_BEAD_ID"
 ```
