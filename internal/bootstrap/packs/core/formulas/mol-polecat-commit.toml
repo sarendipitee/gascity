@@ -46,7 +46,7 @@ No feature branch — you will commit directly.
 ```bash
 git fetch --prune origin
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-polecat-commit requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -103,7 +103,7 @@ after this step.
 **1. Derive your work bead and verify clean state (safeguard):**
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 git status --porcelain
 ```
 If ANY output (untracked files, uncommitted changes):

@@ -50,7 +50,7 @@ Derive your work bead from the input convoy, then re-read the issue with
 fresh eyes:
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-polecat-report requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -144,7 +144,7 @@ Compose a clear summary of your findings. Include:
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 REPORT="$(cat <<'ENDREPORT'
 ## Findings
 
