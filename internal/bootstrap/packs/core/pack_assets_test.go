@@ -3,6 +3,7 @@ package core
 import (
 	"io/fs"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -34,6 +35,34 @@ func TestCoreMaintenanceExecAssets(t *testing.T) {
 		if _, err := fs.Stat(PackFS, path); err == nil {
 			t.Fatalf("core pack must not carry retired Dog maintenance asset %s", path)
 		}
+	}
+}
+
+func TestCoreFormulasResolveConvoyMembersFromChildrenOrDependencies(t *testing.T) {
+	err := fs.WalkDir(PackFS, "formulas", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".toml") {
+			return nil
+		}
+		data, err := fs.ReadFile(PackFS, path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if strings.Contains(text, "if (.children | length) == 1 then .children[0].id else empty end") {
+			t.Fatalf("%s must resolve input convoy members from children or tracked dependencies", path)
+		}
+		if strings.Contains(text, "WORK_BEAD_ID=") &&
+			(!strings.Contains(text, "CONVOY_BEAD=$(gc bd show {{convoy_id}} --json") ||
+				!strings.Contains(text, "$bead.dependencies // []")) {
+			t.Fatalf("%s must include bead dependency fallback when resolving tracked convoy members", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk core formulas: %v", err)
 	}
 }
 

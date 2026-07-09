@@ -24,7 +24,8 @@ bead re-derives it from the input convoy:
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 ```"""
 formula = "mol-polecat-base"
 
@@ -71,7 +72,8 @@ bd prime                    # Load beads context
 **2. Derive your work bead and check your hook:**
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-polecat-base requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -159,7 +161,8 @@ FORBIDDEN: Pushing to {{base_branch}}. FORBIDDEN: Fixing pre-existing failures.
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 bd create --title "Pre-existing failure: <description>" --type bug --priority 1
 gc mail send <rig>/witness -s "NOTICE: {{base_branch}} has failing pre-flights" \
   -m "Filed: <bead-id>. Proceeding with $WORK_BEAD_ID."
@@ -187,7 +190,8 @@ rejection — don't redo everything.
 Derive your work bead in this shell context:
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 ```
 
 **Commit frequently with detailed messages.** Every commit gets a
@@ -295,7 +299,8 @@ slipped through the `implement` step (typically a self-review touch-up,
 test addition, or formatter run):
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 git add -A
 git commit -m "<type>: <imperative subject> ($WORK_BEAD_ID)" -m "$(cat <<'BODY'
 <Explain what these residual changes are: a self-review fix,
