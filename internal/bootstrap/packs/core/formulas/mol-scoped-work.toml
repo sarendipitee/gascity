@@ -52,7 +52,7 @@ metadata before doing anything destructive.
 gc prime
 bd prime
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -91,7 +91,7 @@ Ensure there is an isolated worktree for this work item.
 ```bash
 git fetch --prune origin
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -197,7 +197,7 @@ Remove the temporary worktree after the body reaches terminal state.
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r '[(.children // []), (.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
