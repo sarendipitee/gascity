@@ -34,11 +34,11 @@ description = "Optional lint command"
 default = ""
 
 [vars.build_command]
-description = "Optional build command"
+description = "Reserved build command. Agents must not run builds."
 default = ""
 
 [vars.test_command]
-description = "Optional test command"
+description = "Optional focused test command"
 default = ""
 
 [[steps]]
@@ -52,7 +52,8 @@ metadata before doing anything destructive.
 gc prime
 bd prime
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -91,7 +92,8 @@ Ensure there is an isolated worktree for this work item.
 ```bash
 git fetch --prune origin
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
@@ -115,15 +117,15 @@ on_exhausted = "hard_fail"
 
 [[steps]]
 id = "preflight-tests"
-title = "Run preflight checks on the base branch"
+title = "Inspect preflight context on the base branch"
 needs = ["workspace-setup"]
 description = """
-Run the configured checks before implementation.
+Run lightweight configured checks before implementation.
+Never run the full test suite locally. Run only focused tests or checks explicitly requested for the current task.
 
 ```bash
 {{typecheck_command}}
 {{lint_command}}
-{{test_command}}
 ```
 """
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.continuation_group" = "main", "gc.session_affinity" = "require" }
@@ -148,16 +150,16 @@ on_exhausted = "hard_fail"
 
 [[steps]]
 id = "self-review"
-title = "Review the diff and run verification"
+title = "Review the diff and focused verification"
 needs = ["implement"]
 description = """
 Inspect the change and run verification commands.
+Never run the full test suite locally. Run only focused tests or checks explicitly requested for the current task.
 
 ```bash
 git diff origin/{{base_branch}}...HEAD
 {{typecheck_command}}
 {{lint_command}}
-{{build_command}}
 {{test_command}}
 git status
 ```
@@ -197,7 +199,8 @@ Remove the temporary worktree after the body reaches terminal state.
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+CONVOY_BEAD=$(gc bd show {{convoy_id}} --json | jq '.[0] // {}')
+WORK_BEAD_ID=$(jq -n --argjson status "$CONVOY_STATUS" --argjson bead "$CONVOY_BEAD" -r '[($status.children // []), ($status.dependencies // []), ($bead.dependencies // [])] | add | if length == 1 then .[0].id else empty end')
 if [ -z "$WORK_BEAD_ID" ]; then
   echo "mol-scoped-work requires an input convoy with exactly one tracked member" >&2
   exit 1
