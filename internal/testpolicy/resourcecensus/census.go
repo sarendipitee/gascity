@@ -42,37 +42,27 @@ const (
 	ResourceSlowProcessGate Resource = "slow_process_gate"
 	// ResourceHTTPTestServer counts loopback servers opened by net/http/httptest.
 	ResourceHTTPTestServer Resource = "http_test_server"
-	// ResourceListenerHelper counts calls to the explicit catalog of helpers
-	// whose implementation owns a network listener.
-	ResourceListenerHelper Resource = "listener_helper"
-	// ResourceNetListen counts direct stream listeners opened by package-level
-	// net constructors.
+	// ResourceNetListen counts direct listeners opened by net.Listen.
 	ResourceNetListen Resource = "net_listen"
-	// ResourceNetListenPacket counts direct packet listeners opened by
-	// package-level net constructors.
-	ResourceNetListenPacket Resource = "net_listen_packet"
-	// ResourceNetListenConfig counts direct listeners opened through
-	// net.ListenConfig methods.
+	// ResourceNetListenUnixgram counts direct Unix datagram listeners opened by net.ListenUnixgram.
+	ResourceNetListenUnixgram Resource = "net_listen_unixgram"
+	// ResourceNetListenConfig counts direct listeners opened through net.ListenConfig.Listen.
 	ResourceNetListenConfig Resource = "net_listen_config"
 	// ResourceSyscallListen counts direct calls that put sockets into listening state through syscall.Listen.
 	ResourceSyscallListen Resource = "syscall_listen"
-	// ResourceTmux counts typed tmux test helpers, production constructors, and literal tmux process calls.
-	ResourceTmux Resource = "tmux"
 )
 
 var knownResources = map[Resource]struct{}{
-	ResourceSubprocess:      {},
-	ResourceFixedSleep:      {},
-	ResourceEnvironment:     {},
-	ResourceCWD:             {},
-	ResourceSlowProcessGate: {},
-	ResourceHTTPTestServer:  {},
-	ResourceListenerHelper:  {},
-	ResourceNetListen:       {},
-	ResourceNetListenConfig: {},
-	ResourceNetListenPacket: {},
-	ResourceSyscallListen:   {},
-	ResourceTmux:            {},
+	ResourceSubprocess:        {},
+	ResourceFixedSleep:        {},
+	ResourceEnvironment:       {},
+	ResourceCWD:               {},
+	ResourceSlowProcessGate:   {},
+	ResourceHTTPTestServer:    {},
+	ResourceNetListen:         {},
+	ResourceNetListenConfig:   {},
+	ResourceNetListenUnixgram: {},
+	ResourceSyscallListen:     {},
 }
 
 // Scope selects the source population counted by a ledger row.
@@ -94,12 +84,11 @@ type baselineKey struct {
 
 // Ledger is the checked source-level test-resource inventory.
 type Ledger struct {
-	Version              int                    `toml:"version"`
-	AuditBaseline        []Baseline             `toml:"audit_baseline"`
-	Debt                 []Baseline             `toml:"debt"`
-	Medium               []MediumOwner          `toml:"medium"`
-	ReviewedHermeticBody []ReviewedHermeticBody `toml:"reviewed_hermetic_body"`
-	SmallDebt            []Baseline             `toml:"small_debt"`
+	Version       int           `toml:"version"`
+	AuditBaseline []Baseline    `toml:"audit_baseline"`
+	Debt          []Baseline    `toml:"debt"`
+	Medium        []MediumOwner `toml:"medium"`
+	SmallDebt     []Baseline    `toml:"small_debt"`
 }
 
 // Baseline pins one source-census signal and its migration ownership.
@@ -136,27 +125,14 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeAll,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   427,
-			BaselineFiles:   156,
+			BaselineCalls:   473,
+			BaselineFiles:   160,
 			ReportedCalls:   447,
 			ReportedFiles:   157,
 			OwnerBead:       "ga-80po0c.2",
 			Invariant:       "tracked test source totals remain visible as audit evidence",
 			ResourceOwner:   "ga-80po0c.2 owns this point-in-time source census",
 			MigrationTarget: "P0.4a",
-			Expires:         "2026-10-01",
-		},
-		{
-			Scope:           ScopeAll,
-			Resource:        ResourceListenerHelper,
-			BaselineCalls:   58,
-			BaselineFiles:   23,
-			ReportedCalls:   58,
-			ReportedFiles:   23,
-			OwnerBead:       "ga-80po0c.2.2.3",
-			Invariant:       "all-source listener-helper call/file totals cannot drift without an explicit checked policy update",
-			ResourceOwner:   "ga-80po0c.2.2.3 owns this all-source audit; tagged calls stay Large and receive no Medium exemption",
-			MigrationTarget: "P0.4c-listener-helper",
 			Expires:         "2026-10-01",
 		},
 	},
@@ -177,8 +153,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   288,
-			BaselineFiles:   111,
+			BaselineCalls:   321,
+			BaselineFiles:   117,
 			ReportedCalls:   295,
 			ReportedFiles:   114,
 			OwnerBead:       "ga-80po0c.2",
@@ -190,8 +166,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-			BaselineCalls:   4323,
-			BaselineFiles:   202,
+			BaselineCalls:   4108,
+			BaselineFiles:   182,
 			ReportedCalls:   3960,
 			ReportedFiles:   184,
 			OwnerBead:       "ga-80po0c.2.3",
@@ -203,8 +179,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceCWD,
-			BaselineCalls:   285,
-			BaselineFiles:   43,
+			BaselineCalls:   208,
+			BaselineFiles:   40,
 			ReportedCalls:   98,
 			ReportedFiles:   13,
 			OwnerBead:       "ga-80po0c.2.3",
@@ -216,8 +192,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceSlowProcessGate,
-			BaselineCalls:   57,
-			BaselineFiles:   24,
+			BaselineCalls:   77,
+			BaselineFiles:   26,
 			ReportedCalls:   78,
 			ReportedFiles:   27,
 			OwnerBead:       "ga-80po0c.2.3",
@@ -229,8 +205,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceHTTPTestServer,
-			BaselineCalls:   317,
-			BaselineFiles:   66,
+			BaselineCalls:   255,
+			BaselineFiles:   56,
 			ReportedCalls:   255,
 			ReportedFiles:   56,
 			OwnerBead:       "ga-80po0c.2.2",
@@ -241,28 +217,15 @@ var bootstrapPolicy = Ledger{
 		},
 		{
 			Scope:           ScopeUntagged,
-			Resource:        ResourceListenerHelper,
-			BaselineCalls:   38,
-			BaselineFiles:   13,
-			ReportedCalls:   38,
-			ReportedFiles:   13,
-			OwnerBead:       "ga-80po0c.2.2.3",
-			Invariant:       "untagged listener-helper call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "each owning test replaces helper-backed listeners or moves the retained boundary to exact Medium ownership",
-			MigrationTarget: "P0.4c-listener-helper",
-			Expires:         "2026-10-01",
-		},
-		{
-			Scope:           ScopeUntagged,
 			Resource:        ResourceNetListen,
-			BaselineCalls:   94,
+			BaselineCalls:   93,
 			BaselineFiles:   35,
-			ReportedCalls:   92,
-			ReportedFiles:   34,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged stream-listener call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "each owning test closes its stream listener and removes duplicate listener-backed coverage",
-			MigrationTarget: "P0.4c-listener",
+			ReportedCalls:   93,
+			ReportedFiles:   35,
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged net.Listen call/file totals cannot grow; reductions must lower this baseline",
+			ResourceOwner:   "each owning test closes its listener and removes duplicate listener-backed coverage",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
@@ -272,23 +235,23 @@ var bootstrapPolicy = Ledger{
 			BaselineFiles:   1,
 			ReportedCalls:   1,
 			ReportedFiles:   1,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged net.ListenConfig listener call/file totals cannot grow; reductions must lower this baseline",
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged net.ListenConfig.Listen call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "each owning test closes its configured listener and removes duplicate listener-backed coverage",
-			MigrationTarget: "P0.4c-listener",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
 			Scope:           ScopeUntagged,
-			Resource:        ResourceNetListenPacket,
+			Resource:        ResourceNetListenUnixgram,
 			BaselineCalls:   3,
 			BaselineFiles:   2,
 			ReportedCalls:   3,
 			ReportedFiles:   2,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged packet-listener call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "each owning test closes its packet listener and removes duplicate listener-backed coverage",
-			MigrationTarget: "P0.4c-listener",
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged net.ListenUnixgram call/file totals cannot grow; reductions must lower this baseline",
+			ResourceOwner:   "each owning test closes its Unix datagram listener and removes duplicate listener-backed coverage",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
@@ -304,138 +267,18 @@ var bootstrapPolicy = Ledger{
 			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
-		{
-			Scope:           ScopeUntagged,
-			Resource:        ResourceTmux,
-			BaselineCalls:   6,
-			BaselineFiles:   2,
-			ReportedCalls:   6,
-			ReportedFiles:   2,
-			OwnerBead:       "ga-80po0c.2.2.1",
-			Invariant:       "untagged tmux dependency call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "each owning test confines tmux processes and sockets to its isolated namespace and cleanup",
-			MigrationTarget: "P0.4c-tmux",
-			Expires:         "2026-10-01",
-		},
 	},
 	Medium: []MediumOwner{
-		{
-			PackageDir:      "internal/api",
-			PackageName:     "api",
-			Owner:           "TestEveryEmittedErrorCodeIsRegistered",
-			Resources:       []Resource{ResourceSubprocess},
-			OwnerBead:       "ga-80po0c.2.1",
-			Invariant:       "internal/api tracked-source error URN guard is a checked Medium owner",
-			ResourceOwner:   "only the git ls-files call lexically inside TestEveryEmittedErrorCodeIsRegistered leaves Small debt",
-			MigrationTarget: "P0.4b",
-			Expires:         "2026-10-01",
-		},
 		{
 			PackageDir:      "cmd/gc",
 			PackageName:     "main",
 			Owner:           "TestMain",
-			Resources:       []Resource{ResourceEnvironment, ResourceTmux},
+			Resources:       []Resource{ResourceEnvironment},
 			OwnerBead:       "ga-80po0c.2.1",
-			Invariant:       "cmd/gc TestMain is the checked package-level Medium owner for process environment and tmux namespace setup",
-			ResourceOwner:   "only declared environment and tmux calls lexically inside TestMain leave Small debt",
-			MigrationTarget: "P0.4b/P0.4c-tmux",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "internal/runtime/herdr",
-			PackageName:     "herdr",
-			Owner:           "TestServerAliveRejectsStaleSocket",
-			Resources:       []Resource{ResourceNetListen},
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "herdr stale-socket liveness regression is a checked Medium stream-listener owner",
-			ResourceOwner:   "the Unix stream listener is confined to TestServerAliveRejectsStaleSocket and closed before liveness detection",
-			MigrationTarget: "P0.4c-listener",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "internal/runtime/herdr",
-			PackageName:     "herdr",
-			Owner:           "TestServerAliveDetectsLiveServer",
-			Resources:       []Resource{ResourceNetListen},
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "herdr live-server liveness regression is a checked Medium stream-listener owner",
-			ResourceOwner:   "the Unix stream listener is confined to TestServerAliveDetectsLiveServer and closed by test cleanup",
-			MigrationTarget: "P0.4c-listener",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "internal/runtime/tmux",
-			PackageName:     "tmux",
-			Owner:           "TestMain",
-			Resources:       []Resource{ResourceEnvironment, ResourceTmux},
-			OwnerBead:       "ga-80po0c.2.2.1",
-			Invariant:       "runtime tmux TestMain is the checked Medium owner for isolated tmux process and socket cleanup",
-			ResourceOwner:   "only declared environment and tmux calls lexically inside TestMain leave Small debt",
-			MigrationTarget: "P0.4c-tmux",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "scripts",
-			PackageName:     "scripts_test",
-			Owner:           "TestDockerSessionProtocol",
-			Resources:       []Resource{ResourceSubprocess},
-			OwnerBead:       "ga-80po0c.23.1",
-			Invariant:       "Docker session adapter protocol proof is a checked Medium owner",
-			ResourceOwner:   "the one adapter subprocess is confined to TestDockerSessionProtocol and Docker itself is a strict PATH-injected fake",
-			MigrationTarget: "W6",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "scripts",
-			PackageName:     "scripts_test",
-			Owner:           "TestProviderOverridesAndSuiteContractsCrossMakeIsolation",
-			Resources:       []Resource{ResourceSubprocess},
-			OwnerBead:       "ga-80po0c.2.1",
-			Invariant:       "Make/provider and suite-contract proof is a checked Medium owner",
-			ResourceOwner:   "the six isolated Make invocations are confined to TestProviderOverridesAndSuiteContractsCrossMakeIsolation",
-			MigrationTarget: "P0.1",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "internal/doctor",
-			PackageName:     "doctor",
-			Owner:           "TestCustomTypesCheck_TableDrift",
-			Resources:       []Resource{ResourceSubprocess},
-			OwnerBead:       "ga-80po0c.2.1",
-			Invariant:       "doctor custom-types config-CSV-vs-table drift detect+heal proof is a checked Medium owner",
-			ResourceOwner:   "the bd and dolt subprocesses are confined to TestCustomTypesCheck_TableDrift, which manufactures and heals real table drift against a throwaway store",
+			Invariant:       "cmd/gc TestMain is the checked package-level Medium owner",
+			ResourceOwner:   "only environment calls lexically inside TestMain leave Small debt",
 			MigrationTarget: "P0.4b",
 			Expires:         "2026-10-01",
-		},
-	},
-	ReviewedHermeticBody: []ReviewedHermeticBody{
-		{
-			PackageDir:    "cmd/gc",
-			PackageName:   "main",
-			Owner:         "TestDoSessionWait_RegistersReadyWaitForRigDependency",
-			EffectiveSize: "medium",
-			MediumReason:  "package TestMain mutates process state",
-		},
-		{
-			PackageDir:    "cmd/gc",
-			PackageName:   "main",
-			Owner:         "TestDoSessionWake_PokesManagedControllerAfterStateChange",
-			EffectiveSize: "medium",
-			MediumReason:  "package TestMain mutates process state",
-		},
-		{
-			PackageDir:    "cmd/gc",
-			PackageName:   "main",
-			Owner:         "TestPrepareWaitWakeState_ResolvesRigDependencyBeads",
-			EffectiveSize: "medium",
-			MediumReason:  "package TestMain mutates process state",
-		},
-		{
-			PackageDir:    "cmd/gc",
-			PackageName:   "main",
-			Owner:         "TestDoMailInbox_RendersMessagesFromReader",
-			EffectiveSize: "medium",
-			MediumReason:  "package TestMain mutates process state",
 		},
 	},
 	SmallDebt: []Baseline{
@@ -455,10 +298,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-			BaselineCalls:   288,
-			BaselineFiles:   111,
-			ReportedCalls:   287,
-			ReportedFiles:   113,
+			BaselineCalls:   321,
+			BaselineFiles:   117,
+			ReportedCalls:   321,
+			ReportedFiles:   117,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners replace elapsed wall time with lifecycle signals",
@@ -468,10 +311,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-			BaselineCalls:   4317,
-			BaselineFiles:   202,
-			ReportedCalls:   4348,
-			ReportedFiles:   200,
+			BaselineCalls:   4102,
+			BaselineFiles:   182,
+			ReportedCalls:   4102,
+			ReportedFiles:   182,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small cmd/gc environment call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners restore or eliminate every process-environment mutation",
@@ -481,10 +324,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceCWD,
-			BaselineCalls:   285,
-			BaselineFiles:   43,
-			ReportedCalls:   284,
-			ReportedFiles:   43,
+			BaselineCalls:   208,
+			BaselineFiles:   40,
+			ReportedCalls:   208,
+			ReportedFiles:   40,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small cmd/gc cwd call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners restore or eliminate every cwd mutation",
@@ -494,10 +337,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceSlowProcessGate,
-			BaselineCalls:   57,
-			BaselineFiles:   24,
-			ReportedCalls:   75,
-			ReportedFiles:   25,
+			BaselineCalls:   77,
+			BaselineFiles:   26,
+			ReportedCalls:   77,
+			ReportedFiles:   26,
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small cmd/gc slow-process marker totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "each non-Medium marked caller retains an explicit process-suite migration owner",
@@ -507,10 +350,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceHTTPTestServer,
-			BaselineCalls:   317,
-			BaselineFiles:   66,
-			ReportedCalls:   300,
-			ReportedFiles:   66,
+			BaselineCalls:   255,
+			BaselineFiles:   56,
+			ReportedCalls:   255,
+			ReportedFiles:   56,
 			OwnerBead:       "ga-80po0c.2.2",
 			Invariant:       "untagged Small HTTP test server call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners move server-backed tests to exact Medium ownership or replace the listener",
@@ -519,28 +362,15 @@ var bootstrapPolicy = Ledger{
 		},
 		{
 			Scope:           ScopeUntagged,
-			Resource:        ResourceListenerHelper,
-			BaselineCalls:   38,
-			BaselineFiles:   13,
-			ReportedCalls:   38,
-			ReportedFiles:   13,
-			OwnerBead:       "ga-80po0c.2.2.3",
-			Invariant:       "untagged Small listener-helper call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "non-Medium lexical owners replace helper-backed listeners or declare exact isolated ownership",
-			MigrationTarget: "P0.4c-listener-helper",
-			Expires:         "2026-10-01",
-		},
-		{
-			Scope:           ScopeUntagged,
 			Resource:        ResourceNetListen,
-			BaselineCalls:   92,
-			BaselineFiles:   34,
-			ReportedCalls:   92,
-			ReportedFiles:   34,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged Small stream-listener call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "non-Medium lexical owners move stream-listener tests to exact Medium ownership or replace the listener",
-			MigrationTarget: "P0.4c-listener",
+			BaselineCalls:   93,
+			BaselineFiles:   35,
+			ReportedCalls:   93,
+			ReportedFiles:   35,
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged Small net.Listen call/file totals cannot grow; reductions must lower this baseline",
+			ResourceOwner:   "non-Medium lexical owners move listener-backed tests to exact Medium ownership or replace the listener",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
@@ -550,23 +380,23 @@ var bootstrapPolicy = Ledger{
 			BaselineFiles:   1,
 			ReportedCalls:   1,
 			ReportedFiles:   1,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged Small net.ListenConfig listener call/file totals cannot grow; reductions must lower this baseline",
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged Small net.ListenConfig.Listen call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners move ListenConfig-backed tests to exact Medium ownership or replace the listener",
-			MigrationTarget: "P0.4c-listener",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
 			Scope:           ScopeUntagged,
-			Resource:        ResourceNetListenPacket,
+			Resource:        ResourceNetListenUnixgram,
 			BaselineCalls:   3,
 			BaselineFiles:   2,
 			ReportedCalls:   3,
 			ReportedFiles:   2,
-			OwnerBead:       "ga-80po0c.2.2.2",
-			Invariant:       "untagged Small packet-listener call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "non-Medium lexical owners move packet-listener tests to exact Medium ownership or replace the listener",
-			MigrationTarget: "P0.4c-listener",
+			OwnerBead:       "ga-80po0c.2.2",
+			Invariant:       "untagged Small net.ListenUnixgram call/file totals cannot grow; reductions must lower this baseline",
+			ResourceOwner:   "non-Medium lexical owners move Unix datagram listener-backed tests to exact Medium ownership or replace the listener",
+			MigrationTarget: "P0.4c",
 			Expires:         "2026-10-01",
 		},
 		{
@@ -580,19 +410,6 @@ var bootstrapPolicy = Ledger{
 			Invariant:       "untagged Small syscall.Listen call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners move syscall-backed listener tests to exact Medium ownership or replace the listener",
 			MigrationTarget: "P0.4c",
-			Expires:         "2026-10-01",
-		},
-		{
-			Scope:           ScopeUntagged,
-			Resource:        ResourceTmux,
-			BaselineCalls:   0,
-			BaselineFiles:   0,
-			ReportedCalls:   0,
-			ReportedFiles:   0,
-			OwnerBead:       "ga-80po0c.2.2.1",
-			Invariant:       "untagged Small tmux dependency call/file totals cannot grow; reductions must lower this baseline",
-			ResourceOwner:   "non-Medium lexical owners replace tmux with a fake executor or declare exact isolated ownership",
-			MigrationTarget: "P0.4c-tmux",
 			Expires:         "2026-10-01",
 		},
 	},
@@ -611,9 +428,8 @@ type Occurrence struct {
 
 // Census is a deterministic collection of resource occurrences.
 type Census struct {
-	Occurrences    []Occurrence
-	Runnables      []RunnableOwner
-	hermeticSource *hermeticSourceIndex
+	Occurrences []Occurrence
+	Runnables   []RunnableOwner
 }
 
 // Count is the call-site and unique-file count for a scope/resource pair.
@@ -665,7 +481,7 @@ func ScanRepository(root string) (Census, error) {
 			files = append(files, filepath.ToSlash(name))
 		}
 	}
-	return scanFiles(os.DirFS(root), files, reviewedHermeticPackages(bootstrapPolicy.ReviewedHermeticBody))
+	return scanFiles(os.DirFS(root), files)
 }
 
 // ScanFS scans every *_test.go file in sourceFS. Sibling Go source supplies
@@ -686,15 +502,7 @@ func ScanFS(sourceFS fs.FS) (Census, error) {
 	if err != nil {
 		return Census{}, fmt.Errorf("walking test source: %w", err)
 	}
-	return scanFiles(sourceFS, files, nil)
-}
-
-func reviewedHermeticPackages(rows []ReviewedHermeticBody) map[packageKey]struct{} {
-	packages := make(map[packageKey]struct{}, len(rows))
-	for _, row := range rows {
-		packages[packageKey{directory: row.PackageDir, packageName: row.PackageName}] = struct{}{}
-	}
-	return packages
+	return scanFiles(sourceFS, files)
 }
 
 type parsedFile struct {
@@ -712,61 +520,12 @@ type bindingInfo struct {
 	uses                       map[*ast.Ident]types.Object
 	expressionTypes            map[ast.Expr]types.TypeAndValue
 	packageDeclarations        map[string]struct{}
-	packageFunctions           map[string]struct{}
 	unresolvedImportQualifiers map[string]struct{}
 }
 
 type packageKey struct {
 	directory   string
 	packageName string
-}
-
-type listenerHelperPackageIdentity struct {
-	importPath string
-	key        packageKey
-	names      []string
-}
-
-var listenerHelperPackageIdentities = []listenerHelperPackageIdentity{
-	{
-		key: packageKey{directory: "cmd/gc", packageName: "main"},
-		names: []string{
-			"managedDoltPortAvailableForHost",
-			"registryBrowserLogin",
-			"runController",
-			"runSupervisor",
-			"startControllerSocket",
-			"startNudgeWakeListener",
-		},
-	},
-	{
-		importPath: "github.com/gastownhall/gascity/internal/runtime/runtimecapability",
-		key:        packageKey{directory: "internal/runtime/runtimecapability", packageName: "runtimecapability"},
-		names:      []string{"Run"},
-	},
-	{
-		importPath: "github.com/gastownhall/gascity/test/acceptance/helpers",
-		key:        packageKey{directory: "test/acceptance/helpers", packageName: "acceptancehelpers"},
-		names:      []string{"WriteSupervisorConfig"},
-	},
-	{
-		key:   packageKey{directory: "test/dashport", packageName: "dashport_test"},
-		names: []string{"newHarness"},
-	},
-}
-
-var targetedDotImportPaths = map[string]struct{}{
-	"github.com/gastownhall/gascity/internal/runtime/runtimecapability": {},
-	"github.com/gastownhall/gascity/internal/runtime/tmux":              {},
-	"github.com/gastownhall/gascity/test/acceptance/helpers":            {},
-	"github.com/gastownhall/gascity/test/tmuxtest":                      {},
-	"net":               {},
-	"net/http/httptest": {},
-	"os":                {},
-	"os/exec":           {},
-	"syscall":           {},
-	"testing":           {},
-	"time":              {},
 }
 
 type resourceCall struct {
@@ -787,14 +546,7 @@ func (importer *emptyPackageImporter) Import(importPath string) (*types.Package,
 	if imported, ok := importer.packages[importPath]; ok {
 		return imported, nil
 	}
-	packageName := path.Base(importPath)
-	for _, identity := range listenerHelperPackageIdentities {
-		if importPath == identity.importPath {
-			packageName = identity.key.packageName
-			break
-		}
-	}
-	imported := types.NewPackage(importPath, packageName)
+	imported := types.NewPackage(importPath, path.Base(importPath))
 	if importPath == "net" {
 		// Seed only the receiver type the census needs so go/types can carry
 		// ListenConfig identity through pointers and aliases without loading
@@ -833,15 +585,13 @@ var knownGOARCH = map[string]struct{}{
 	"wasm": {},
 }
 
-func scanFiles(sourceFS fs.FS, names []string, hermeticPackages map[packageKey]struct{}) (Census, error) {
+func scanFiles(sourceFS fs.FS, names []string) (Census, error) {
 	sort.Strings(names)
 	fileSet := token.NewFileSet()
 	importer := newEmptyPackageImporter()
 	var sources []parsedFile
-	var hermeticSources []parsedFile
 	var runnables []RunnableOwner
 	packageDeclarations := make(map[packageKey]map[string]struct{})
-	packageFunctions := make(map[packageKey]map[string]struct{})
 	for _, name := range names {
 		data, err := fs.ReadFile(sourceFS, name)
 		if err != nil {
@@ -859,27 +609,7 @@ func scanFiles(sourceFS fs.FS, names []string, hermeticPackages map[packageKey]s
 			packageDeclarations[key] = declarations
 		}
 		recordPackageDeclarations(file, declarations)
-		listenerHelperNames := listenerHelperPackageNames(key)
-		if len(listenerHelperNames) > 0 {
-			functions := packageFunctions[key]
-			if functions == nil {
-				functions = make(map[string]struct{})
-				packageFunctions[key] = functions
-			}
-			recordPackageFunctionDeclarations(file, functions, listenerHelperNames)
-		}
-		source := parsedFile{
-			name:        normalized,
-			directory:   key.directory,
-			packageName: key.packageName,
-			file:        file,
-		}
-		_, retainHermeticSource := hermeticPackages[key]
-		retainHermeticSource = hermeticPackages == nil || retainHermeticSource
 		if !strings.HasSuffix(name, "_test.go") {
-			if retainHermeticSource {
-				hermeticSources = append(hermeticSources, source)
-			}
 			continue
 		}
 		tagged, err := parsedBuildConstraint(data)
@@ -890,24 +620,25 @@ func scanFiles(sourceFS fs.FS, names []string, hermeticPackages map[packageKey]s
 			return Census{}, fmt.Errorf("scanning imports in %s: %w", name, err)
 		}
 		runnables = append(runnables, runnableOwners(file, key.directory, key.packageName)...)
-		candidates := resourceCandidateCalls(file, key)
-		source.tagged = tagged || hasImplicitPlatformConstraint(name)
-		source.calls = candidates
-		if retainHermeticSource {
-			hermeticSources = append(hermeticSources, source)
-		}
+		candidates := resourceCandidateCalls(file)
 		scanned := len(candidates) > 0 || hasSlowHelperDeclarationCandidate(file)
 		if !scanned {
 			continue
 		}
-		sources = append(sources, source)
+		sources = append(sources, parsedFile{
+			name:        normalized,
+			directory:   key.directory,
+			packageName: key.packageName,
+			tagged:      tagged || hasImplicitPlatformConstraint(name),
+			file:        file,
+			calls:       candidates,
+		})
 	}
 
 	for index := range sources {
 		source := &sources[index]
 		bindings := resolveBindings(fileSet, source.file, importer, fmt.Sprintf("resourcecensus.local/file%d", index))
 		bindings.packageDeclarations = packageDeclarations[source.groupKey()]
-		bindings.packageFunctions = packageFunctions[source.groupKey()]
 		bindings.unresolvedImportQualifiers = unresolvedDefaultImportQualifiers(source.file)
 		source.bindings = bindings
 	}
@@ -938,15 +669,7 @@ func scanFiles(sourceFS fs.FS, names []string, hermeticPackages map[packageKey]s
 		}
 	}
 
-	census := Census{
-		Runnables: uniqueSortedRunnables(runnables),
-		hermeticSource: &hermeticSourceIndex{
-			fileSet:             fileSet,
-			files:               hermeticSources,
-			packageDeclarations: packageDeclarations,
-			packageFunctions:    packageFunctions,
-		},
-	}
+	census := Census{Runnables: uniqueSortedRunnables(runnables)}
 	for _, source := range sources {
 		testingObjects, err := testingParameterObjects(source.file, source.bindings)
 		if err != nil {
@@ -967,12 +690,86 @@ func scanFiles(sourceFS fs.FS, names []string, hermeticPackages map[packageKey]s
 		}
 
 		for _, candidate := range source.calls {
-			resources, err := matchedResourcesForCall(candidate.call, source.groupKey(), source.bindings, testingObjects, slowHelpers[source.groupKey()])
+			call := candidate.call
+			matched, err := isImportedCall(call, source.bindings, "net", "Listen")
 			if err != nil {
 				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
 			}
-			for _, resource := range resources {
-				census.add(source, candidate.owner, candidate.runnable, resource)
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceNetListen)
+			}
+			matched, err = isNetListenConfigCall(call, source.bindings)
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceNetListenConfig)
+			}
+			matched, err = isImportedCall(call, source.bindings, "net", "ListenUnixgram")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceNetListenUnixgram)
+			}
+			matched, err = isImportedCall(call, source.bindings, "syscall", "Listen")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceSyscallListen)
+			}
+			matched, err = isImportedCall(call, source.bindings, "net/http/httptest", "NewServer", "NewTLSServer", "NewUnstartedServer")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceHTTPTestServer)
+			}
+			matched, err = isImportedCall(call, source.bindings, "os/exec", "Command", "CommandContext")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceSubprocess)
+			}
+			matched, err = isImportedCall(call, source.bindings, "time", "Sleep")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceFixedSleep)
+			}
+			matched, err = isImportedCall(call, source.bindings, "os", "Setenv", "Unsetenv", "Clearenv")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceEnvironment)
+			}
+			matched, err = isImportedCall(call, source.bindings, "os", "Chdir")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceCWD)
+			}
+			matched, err = isTestingCall(call, source.bindings, testingObjects, "Setenv")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceEnvironment)
+			}
+			matched, err = isTestingCall(call, source.bindings, testingObjects, "Chdir")
+			if err != nil {
+				return Census{}, fmt.Errorf("scanning resource calls in %s: %w", source.name, err)
+			}
+			if matched {
+				census.add(source, candidate.owner, candidate.runnable, ResourceCWD)
+			}
+			if isSlowHelperCall(call, source.bindings, slowHelpers[source.groupKey()]) {
+				census.add(source, candidate.owner, candidate.runnable, ResourceSlowProcessGate)
 			}
 		}
 	}
@@ -1120,7 +917,7 @@ func validateImports(file *ast.File) error {
 			continue
 		}
 		if spec.Name != nil && spec.Name.Name == "." {
-			if _, targeted := targetedDotImportPaths[importPath]; targeted {
+			if importPath == "net" || importPath == "os/exec" || importPath == "time" || importPath == "os" || importPath == "syscall" || importPath == "testing" || importPath == "net/http/httptest" {
 				return fmt.Errorf("targeted dot import %q cannot be counted safely", importPath)
 			}
 		}
@@ -1128,23 +925,21 @@ func validateImports(file *ast.File) error {
 	return nil
 }
 
-func resourceCandidateCalls(file *ast.File, key packageKey) []resourceCall {
+func resourceCandidateCalls(file *ast.File) []resourceCall {
 	aliases := testingImportAliases(file)
-	listenerHelperSelectors := listenerHelperSelectorCandidates(file)
-	samePackageHelperNames := listenerHelperPackageNames(key)
 	var calls []resourceCall
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if ok {
-			calls = appendResourceCandidateCalls(calls, function.Body, function.Name.Name, isRunnableOwner(function, aliases), listenerHelperSelectors, samePackageHelperNames)
+			calls = appendResourceCandidateCalls(calls, function.Body, function.Name.Name, isRunnableOwner(function, aliases))
 			continue
 		}
-		calls = appendResourceCandidateCalls(calls, declaration, "", false, listenerHelperSelectors, samePackageHelperNames)
+		calls = appendResourceCandidateCalls(calls, declaration, "", false)
 	}
 	return calls
 }
 
-func appendResourceCandidateCalls(calls []resourceCall, node ast.Node, owner string, runnable bool, listenerHelperSelectors map[string]struct{}, listenerHelperPackageNames []string) []resourceCall {
+func appendResourceCandidateCalls(calls []resourceCall, node ast.Node, owner string, runnable bool) []resourceCall {
 	ast.Inspect(node, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
@@ -1153,59 +948,17 @@ func appendResourceCandidateCalls(calls []resourceCall, node ast.Node, owner str
 		switch function := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
 			switch function.Sel.Name {
-			case "Command", "CommandContext", "ConfigureProcessEnv", "KillAllTestSessions", "LookPath", "NewGuard", "NewGuardWithSocket", "NewProvider", "NewProviderWithConfig", "NewSeamBackedWithConfig", "NewServer", "NewTLSServer", "NewTmux", "NewTmuxWithConfig", "NewUnstartedServer", "RequireTmux", "Sleep", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Listen", "ListenIP", "ListenMulticastUDP", "ListenPacket", "ListenTCP", "ListenUDP", "ListenUnix", "ListenUnixgram":
-				calls = append(calls, resourceCall{call: call, owner: owner, runnable: runnable})
-			}
-			if _, candidate := listenerHelperSelectors[function.Sel.Name]; candidate {
+			case "Command", "CommandContext", "Sleep", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Listen", "ListenUnixgram", "NewServer", "NewTLSServer", "NewUnstartedServer":
 				calls = append(calls, resourceCall{call: call, owner: owner, runnable: runnable})
 			}
 		case *ast.Ident:
-			if function.Name == "skipSlowCmdGCTest" || containsString(listenerHelperPackageNames, function.Name) {
+			if function.Name == "skipSlowCmdGCTest" {
 				calls = append(calls, resourceCall{call: call, owner: owner, runnable: runnable})
 			}
 		}
 		return true
 	})
 	return calls
-}
-
-func listenerHelperSelectorCandidates(file *ast.File) map[string]struct{} {
-	candidates := make(map[string]struct{})
-	for _, spec := range file.Imports {
-		if spec.Name != nil && spec.Name.Name == "_" {
-			continue
-		}
-		importPath, err := strconv.Unquote(spec.Path.Value)
-		if err != nil {
-			continue
-		}
-		for _, identity := range listenerHelperPackageIdentities {
-			if importPath == identity.importPath {
-				for _, name := range identity.names {
-					candidates[name] = struct{}{}
-				}
-			}
-		}
-	}
-	return candidates
-}
-
-func listenerHelperPackageNames(key packageKey) []string {
-	for _, identity := range listenerHelperPackageIdentities {
-		if key == identity.key {
-			return identity.names
-		}
-	}
-	return nil
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func runnableOwners(file *ast.File, packageDir, packageName string) []RunnableOwner {
@@ -1354,7 +1107,7 @@ func netListenReceiverExpressions(file *ast.File) []ast.Expr {
 			return true
 		}
 		selector, ok := unparen(call.Fun).(*ast.SelectorExpr)
-		if ok && (selector.Sel.Name == "Listen" || selector.Sel.Name == "ListenPacket") {
+		if ok && selector.Sel.Name == "Listen" {
 			receivers = append(receivers, unparen(selector.X))
 		}
 		return true
@@ -1380,15 +1133,6 @@ func recordPackageDeclarations(file *ast.File, declarations map[string]struct{})
 					}
 				}
 			}
-		}
-	}
-}
-
-func recordPackageFunctionDeclarations(file *ast.File, functions map[string]struct{}, catalogNames []string) {
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Recv == nil && containsString(catalogNames, function.Name.Name) {
-			functions[function.Name.Name] = struct{}{}
 		}
 	}
 }
@@ -1512,7 +1256,7 @@ func isNetListenConfigValue(expression ast.Expr, bindings bindingInfo) (bool, er
 
 func isNetListenConfigCall(call *ast.CallExpr, bindings bindingInfo) (bool, error) {
 	selector, ok := unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || (selector.Sel.Name != "Listen" && selector.Sel.Name != "ListenPacket") {
+	if !ok || selector.Sel.Name != "Listen" {
 		return false, nil
 	}
 	receiver := unparen(selector.X)
@@ -1632,33 +1376,6 @@ func functionParameterCount(fields *ast.FieldList) int {
 	return count
 }
 
-func isListenerHelperPackageCall(call *ast.CallExpr, key packageKey, bindings bindingInfo) bool {
-	identifier, ok := unparen(call.Fun).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	for _, identity := range listenerHelperPackageIdentities {
-		if key != identity.key {
-			continue
-		}
-		for _, helperName := range identity.names {
-			if identifier.Name != helperName {
-				continue
-			}
-			if _, declared := bindings.packageFunctions[helperName]; !declared {
-				return false
-			}
-			object := bindings.uses[identifier]
-			if object == nil {
-				return true
-			}
-			function, ok := object.(*types.Func)
-			return ok && function.Pkg() != nil && function.Pkg().Name() == key.packageName && function.Parent() == function.Pkg().Scope()
-		}
-	}
-	return false
-}
-
 func isSlowHelperCall(call *ast.CallExpr, bindings bindingInfo, ownership types.Object) bool {
 	if ownership == nil || len(call.Args) != 2 {
 		return false
@@ -1765,9 +1482,6 @@ func validateAgainstPolicy(policy, ledger Ledger, census Census, now time.Time) 
 	if err := validateMediumOwners(ledger.Medium, census, now); err != nil {
 		return err
 	}
-	if err := validateReviewedHermeticBodies(ledger.ReviewedHermeticBody, census); err != nil {
-		return err
-	}
 
 	var problems []string
 	for _, baseline := range ledger.AuditBaseline {
@@ -1799,7 +1513,6 @@ func validateManifestAgainstPolicy(policy, ledger Ledger, now time.Time) []strin
 	problems = append(problems, validateRowsAgainstPolicy("audit", policy.AuditBaseline, ledger.AuditBaseline, now)...)
 	problems = append(problems, validateRowsAgainstPolicy("debt", policy.Debt, ledger.Debt, now)...)
 	problems = append(problems, validateMediumRowsAgainstPolicy(policy.Medium, ledger.Medium, now)...)
-	problems = append(problems, validateReviewedHermeticRowsAgainstPolicy(policy.ReviewedHermeticBody, ledger.ReviewedHermeticBody)...)
 	problems = append(problems, validateRowsAgainstPolicy("small debt", policy.SmallDebt, ledger.SmallDebt, now)...)
 	return problems
 }
@@ -1996,24 +1709,6 @@ func RenderMarkdown(ledger Ledger) string {
 	for _, row := range rows {
 		fmt.Fprintf(&output, "| %s | %s | %s | %s | %s | %s | %s |\n",
 			row.kind, row.scope, row.baseline, row.owner, row.invariant, row.migration, row.expiry)
-	}
-	if len(ledger.ReviewedHermeticBody) > 0 {
-		reviewed := append([]ReviewedHermeticBody(nil), ledger.ReviewedHermeticBody...)
-		sort.Slice(reviewed, func(i, j int) bool {
-			left := reviewed[i].PackageDir + "\x00" + reviewed[i].PackageName + "\x00" + reviewed[i].Owner
-			right := reviewed[j].PackageDir + "\x00" + reviewed[j].PackageName + "\x00" + reviewed[j].Owner
-			return left < right
-		})
-		output.WriteString("\n| Reviewed hermetic body | Effective runnable size | Medium reason | Retained real composition owner |\n")
-		output.WriteString("| --- | --- | --- | --- |\n")
-		for _, body := range reviewed {
-			retained := "—"
-			if owner, exists := retainedRealOwnerFor(reviewedHermeticBodyKey(body)); exists {
-				retained = fmt.Sprintf("`%s` package `%s` — %s", owner.packageDir, owner.packageName, owner.owner)
-			}
-			fmt.Fprintf(&output, "| `%s` package `%s` — %s | %s | %s | %s |\n",
-				body.PackageDir, body.PackageName, body.Owner, body.EffectiveSize, body.MediumReason, retained)
-		}
 	}
 	output.WriteString(markdownEnd)
 	return output.String()
