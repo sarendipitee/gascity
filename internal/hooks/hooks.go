@@ -647,8 +647,13 @@ func upgradeCodexHooks(existing, desired []byte, cityDir string) ([]byte, bool, 
 	hasManagedCommand := codexHookValueHasManagedCommand(root, "")
 	needsPreCompact := codexHookDocCanAddPreCompact(root)
 	changed := upgradeCodexHookValue(root, "", cityDir)
-	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root, cityDir) {
-		changed = true
+	if desiredCodexPreCompactHook(desired) != nil {
+		if normalizeCodexManagedHookEntries(root, cityDir) {
+			changed = true
+		}
+		if canonicalizeCodexSessionStartHooks(root, cityDir) {
+			changed = true
+		}
 	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
@@ -670,6 +675,9 @@ func normalizeCodexHookCommands(existing []byte, cityDir string) ([]byte, bool, 
 	}
 	hasManagedCommand := codexHookValueHasManagedCommand(root, "")
 	changed := upgradeCodexHookValue(root, "", cityDir)
+	if canonicalizeCodexSessionStartHooks(root, cityDir) {
+		changed = true
+	}
 	if normalizeCodexManagedHookEntries(root, cityDir) {
 		changed = true
 	}
@@ -701,11 +709,14 @@ func CodexHooksNeedManagedUpgrade(data []byte, cityDir string) bool {
 	if err := json.Unmarshal(data, &root); err != nil {
 		return false
 	}
-	return applyCodexManagedHookUpgrade(root, nil, cityDir)
+	return upgradeCodexHookValue(root, "", cityDir)
 }
 
 func applyCodexManagedHookUpgrade(root any, desired []byte, cityDir string) bool {
 	changed := upgradeCodexHookValue(root, "", cityDir)
+	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root, cityDir) {
+		changed = true
+	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
 	}
@@ -741,6 +752,68 @@ func codexHookValueHasManagedCommand(v any, event string) bool {
 			if codexHookValueHasManagedCommand(elem, event) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func canonicalizeCodexSessionStartHooks(root any, cityDir string) bool {
+	doc, ok := root.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooksMap, ok := doc["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	entries, ok := hooksMap["SessionStart"].([]any)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	keptManaged := false
+	out := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		entryMap, ok := entry.(map[string]any)
+		if !ok || !codexSessionStartEntryIsManaged(entryMap, cityDir) {
+			out = append(out, entry)
+			continue
+		}
+		if keptManaged {
+			changed = true
+			continue
+		}
+		if matcher, ok := entryMap["matcher"].(string); !ok || matcher != "startup" {
+			entryMap["matcher"] = "startup"
+			changed = true
+		}
+		keptManaged = true
+		out = append(out, entry)
+	}
+	if len(out) != len(entries) {
+		hooksMap["SessionStart"] = out
+		changed = true
+	}
+	return changed
+}
+
+func codexSessionStartEntryIsManaged(entry map[string]any, cityDir string) bool {
+	hookCmds, ok := entry["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hookCmds {
+		hMap, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		command, ok := hMap["command"].(string)
+		if !ok {
+			continue
+		}
+		if commandBodyAfterCanonicalPrefix(command) == sessionStartCurrentFormBody(cityDir) {
+			return true
 		}
 	}
 	return false
@@ -1514,19 +1587,23 @@ func upgradeClaudeHookCommand(event, command string) (string, bool) {
 	switch event {
 	case "PreCompact":
 		// Older legacy: PreCompact used `gc prime --hook` before
-		// `gc handoff` was introduced. Upgrade to the current
-		// `gc handoff --auto "context cycle"` form. Tested first
-		// because it changes the same trailing token the bare-handoff
-		// form would otherwise patch.
+		// `gc handoff` was introduced. Upgrade to the current form.
+		// Tested first because it changes the same trailing token the
+		// bare-handoff form would otherwise patch.
 		if equalsLegacyCommandBody(body, `gc prime --hook`) {
-			return strings.Replace(command, `gc prime --hook`, `gc handoff --auto "context cycle"`, 1), true
+			return strings.Replace(command, `gc prime --hook`, preCompactCurrentFormBody(""), 1), true
 		}
 		// Legacy: bare `gc handoff "context cycle"` (no --auto)
 		// requests a controller restart on every Claude Code
 		// compaction event, killing the session (gc-flp1). Upstream
 		// fix landed in commit 7b3b913a; this patches existing cities.
 		if equalsLegacyCommandBody(body, `gc handoff "context cycle"`) {
-			return strings.Replace(command, `gc handoff "context cycle"`, `gc handoff --auto "context cycle"`, 1), true
+			return strings.Replace(command, `gc handoff "context cycle"`, preCompactCurrentFormBody(""), 1), true
+		}
+		// Legacy: `gc handoff --auto "context cycle"` (pre --hook-format).
+		// Upgrade to the current form that includes --hook-format codex.
+		if equalsLegacyCommandBody(body, `gc handoff --auto "context cycle"`) {
+			return strings.Replace(command, `gc handoff --auto "context cycle"`, preCompactCurrentFormBody(""), 1), true
 		}
 	case "SessionStart":
 		// Legacy: bare `gc prime --hook` without the
