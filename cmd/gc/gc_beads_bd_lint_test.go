@@ -181,6 +181,24 @@ func TestDoltliteMaintenanceDueUsesPortableStatFallback(t *testing.T) {
 	}
 }
 
+func TestDoltliteReindexUsesBdSQL(t *testing.T) {
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	fn := extractShellFunction(t, string(data), "run_doltlite_reindex")
+	if !strings.Contains(fn, `run_bd_doltlite "$dir" sql 'REINDEX'`) {
+		t.Fatalf("run_doltlite_reindex must use bd SQL against metadata-resolved store:\n%s", fn)
+	}
+	for _, forbidden := range []string{"doltlite-client", "DOLTLITE_CLIENT_BIN", "sqlite3", "*.db"} {
+		if strings.Contains(fn, forbidden) {
+			t.Fatalf("run_doltlite_reindex contains forbidden direct-store path %q:\n%s", forbidden, fn)
+		}
+	}
+}
+
 func countShellFunctionDefinitions(script, name string) int {
 	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `\(\) \{`)
 	return len(pattern.FindAllStringIndex(script, -1))
