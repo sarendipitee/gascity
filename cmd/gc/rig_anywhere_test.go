@@ -1335,6 +1335,11 @@ func TestRigAnywhere_ResolveRigToContext(t *testing.T) {
 
 	t.Run("rig_not_registered_anywhere", func(t *testing.T) {
 		t.Setenv("GC_HOME", t.TempDir())
+		// Isolate cwd so the upward local-city search can't discover an
+		// ambient city (e.g. when tests run from a worktree nested under a
+		// real Gas City tree), which would surface that city's import-cache
+		// state instead of the intended "not registered" result.
+		t.Chdir(t.TempDir())
 
 		_, err := resolveRigToContext("nonexistent-rig")
 		if err == nil {
@@ -1421,6 +1426,11 @@ func TestRigAnywhere_ResolveRigToContext(t *testing.T) {
 	t.Run("legacy_city_toml_path_is_not_registered_binding", func(t *testing.T) {
 		gcHome := t.TempDir()
 		t.Setenv("GC_HOME", gcHome)
+		// Isolate cwd so the upward local-city search can't discover an
+		// ambient city (e.g. when tests run from a worktree nested under a
+		// real Gas City tree) and surface its bindings instead of the
+		// intended "not registered" result.
+		t.Chdir(t.TempDir())
 
 		cityPath := setupCity(t, "legacy-city")
 		rigDir := filepath.Join(t.TempDir(), "legacy-rig")
