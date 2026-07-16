@@ -1976,12 +1976,8 @@ func takeQueuedNudgesByID(items []queuedNudge, id string, removed []queuedNudge)
 }
 
 func enqueueQueuedNudgeWithStore(cityPath string, store beads.NudgesStore, item queuedNudge) error {
-	ownStore := false
 	if store.Store == nil {
 		store = openNudgeBeadStore(cityPath)
-		ownStore = true
-	}
-	if ownStore {
 		defer closeBeadStoreHandle(store.Store) //nolint:errcheck // best-effort
 	}
 	var front *nudgequeue.Store
@@ -2198,12 +2194,8 @@ func recordQueuedNudgeFailureDetailed(cityPath string, store beads.NudgesStore, 
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	ownStore := false
 	if store.Store == nil {
 		store = openNudgeBeadStore(cityPath)
-		ownStore = true
-	}
-	if ownStore {
 		defer closeBeadStoreHandle(store.Store) //nolint:errcheck // best-effort
 	}
 	var front *nudgequeue.Store
