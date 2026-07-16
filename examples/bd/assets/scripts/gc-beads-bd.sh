@@ -2542,6 +2542,14 @@ doltlite_maintenance_due() {
     [ $((now - last)) -ge "$interval" ]
 }
 
+# run_doltlite_reindex rebuilds secondary indexes through the same
+# libdoltlite-linked bd used for other maintenance. bd resolves the live
+# database from metadata.json, avoiding direct client and database glob drift.
+run_doltlite_reindex() {
+    local dir="$1"
+    run_bd_doltlite "$dir" sql 'REINDEX' >/dev/null
+}
+
 run_doltlite_existing_db_maintenance() {
     local dir="$1"
     local stamp="$dir/.beads/doltlite/.gc-maintenance.stamp"
@@ -2551,6 +2559,7 @@ run_doltlite_existing_db_maintenance() {
     echo "gc-beads-bd: running doltlite maintenance for $dir" >&2
     run_bd_doltlite "$dir" flatten --force --json >/dev/null 2>&1 || echo "warning: bd flatten failed for $dir" >&2
     run_bd_doltlite "$dir" gc --skip-decay --force --json >/dev/null 2>&1 || echo "warning: bd gc failed for $dir" >&2
+    run_doltlite_reindex "$dir" || echo "warning: DoltLite REINDEX failed for $dir" >&2
     mkdir -p "$dir/.beads/doltlite" 2>/dev/null || true
     date +%s > "$stamp" 2>/dev/null || true
 }
