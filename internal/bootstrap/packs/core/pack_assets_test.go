@@ -56,6 +56,22 @@ func findBareBDCommands(data []byte) []int {
 	return result
 }
 
+func TestMolDoWorkResolvesConvoyMembersFromDependencies(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "formulas/mol-do-work.toml")
+	if err != nil {
+		t.Fatalf("read mol-do-work formula: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "if (.children | length) == 1 then .children[0].id else empty end") {
+		t.Fatal("mol-do-work must resolve input convoy members from children or tracked dependencies")
+	}
+	if !strings.Contains(text, "CONVOY_BEAD=$(gc bd show {{convoy_id}} --json") ||
+		!strings.Contains(text, "$status.dependencies // []") ||
+		!strings.Contains(text, "$bead.dependencies // []") {
+		t.Fatal("mol-do-work must include status and bead dependency fallbacks")
+	}
+}
+
 func TestCoreShippedAssetsRouteBDCommandsThroughGC(t *testing.T) {
 	err := fs.WalkDir(PackFS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
