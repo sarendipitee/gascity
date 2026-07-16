@@ -3816,6 +3816,63 @@ exit 0
 	}
 }
 
+func TestDoltliteScopeStoreExists(t *testing.T) {
+	dir := t.TempDir()
+	if doltliteScopeStoreExists(dir) {
+		t.Fatal("empty scope reported an existing DoltLite store")
+	}
+	doltliteDir := filepath.Join(dir, ".beads", "doltlite")
+	if err := os.MkdirAll(doltliteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(doltliteDir, "hq.db"), []byte("store"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !doltliteScopeStoreExists(dir) {
+		t.Fatal("existing DoltLite database was not detected")
+	}
+}
+
+func TestInitBeadsForDirSkipsOnlyExistingDoltliteStore(t *testing.T) {
+	cityDir := t.TempDir()
+	cityConfig := `[workspace]
+name = "demo"
+
+[beads]
+provider = "bd"
+backend = "doltlite"
+`
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls int
+	execute := func(string, []string, ...string) error {
+		calls++
+		return nil
+	}
+	if err := initBeadsForDirWithExecutor(cityDir, cityDir, "gc", "hq", execute); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("fresh store provider calls = %d, want 1", calls)
+	}
+
+	doltliteDir := filepath.Join(cityDir, ".beads", "doltlite")
+	if err := os.MkdirAll(doltliteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(doltliteDir, "hq.db"), []byte("store"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := initBeadsForDirWithExecutor(cityDir, cityDir, "gc", "hq", execute); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("existing store provider calls = %d, want unchanged 1", calls)
+	}
+}
+
 func TestInitBeadsForDirBuildsCanonicalBdInitProviderOp(t *testing.T) {
 	tests := []struct {
 		name       string

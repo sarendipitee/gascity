@@ -819,6 +819,14 @@ func shutdownBeadsProvider(cityPath string) error {
 // exec providers get the scope's bead directory in the subprocess env and
 // providers that run bd init elsewhere (for example gc-beads-k8s inside the
 // pod) must set it in their own wrapper before invoking bd init.
+// doltliteScopeStoreExists reports whether dir already contains an embedded
+// DoltLite database. Initialization uses this existence check rather than
+// matching provider error text, so fresh-store failures remain visible.
+func doltliteScopeStoreExists(dir string) bool {
+	matches, err := filepath.Glob(filepath.Join(dir, ".beads", "doltlite", "*.db"))
+	return err == nil && len(matches) > 0
+}
+
 func initBeadsForDir(cityPath, dir, prefix, doltDatabase string) error {
 	return initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase, runProviderOpWithEnv)
 }
@@ -842,6 +850,9 @@ func initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase string, exe
 			args = append(args, doltDatabase)
 		}
 		script := strings.TrimPrefix(provider, "exec:")
+		if execProviderUsesCanonicalBdScopeFiles(provider) && cityUsesDoltliteBeadsBackend(cityPath) && doltliteScopeStoreExists(dir) {
+			return nil
+		}
 		if execProviderUsesCanonicalBdScopeFiles(provider) && cityUsesDoltliteBeadsBackend(cityPath) {
 			env, err := providerLifecycleProcessEnvWithError(cityPath, provider)
 			if err != nil {
