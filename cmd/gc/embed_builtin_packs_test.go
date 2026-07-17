@@ -70,7 +70,7 @@ func TestPeekEventsProvider(t *testing.T) {
 // cmd/gc depends on: the bundled pack set, and a registered source plus
 // embedded FS for every name requiredBuiltinPackNames can return.
 func TestBuiltinPacksUseCanonicalRegistry(t *testing.T) {
-	want := []string{"core", "bd", "dolt", "gastown", "gascity"}
+	want := []string{"core", "beads-doltlite-init", "bd", "dolt", "gastown", "gascity"}
 	registry := builtinpacks.All()
 	got := make([]string, 0, len(registry))
 	for _, pack := range registry {

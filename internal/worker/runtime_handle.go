@@ -263,7 +263,8 @@ func (h *RuntimeHandle) Nudge(ctx context.Context, req NudgeRequest) (result Nud
 	}
 	switch req.Delivery {
 	case "", NudgeDeliveryDefault:
-		if runtimeHandleUsesImmediateDefaultNudge(h.providerName, h.transport) {
+		if runtimeHandleUsesImmediateDefaultNudge(h.providerName, h.transport) &&
+			!runtimeHandleIsActivitylessTimedOnly(h.provider, h.sessionName) {
 			if err := h.nudgeNow(req.Text); err != nil {
 				return NudgeResult{}, err
 			}
@@ -395,6 +396,16 @@ func runtimeHandleUsesImmediateDefaultNudge(providerName, transport string) bool
 		return false
 	}
 	return runtimeHandleProviderFamily(providerName) == "codex"
+}
+
+// runtimeHandleIsActivitylessTimedOnly reports whether nudges must wait for
+// timer-driven wake because provider cannot report session activity.
+func runtimeHandleIsActivitylessTimedOnly(provider runtime.Provider, sessionName string) bool {
+	if provider == nil || provider.Capabilities().CanReportActivity {
+		return false
+	}
+	sleeper, ok := provider.(runtime.SleepCapabilityProvider)
+	return ok && sleeper.SleepCapability(sessionName) == runtime.SessionSleepCapabilityTimedOnly
 }
 
 func runtimeHandleProviderFamily(providerName string) string {
