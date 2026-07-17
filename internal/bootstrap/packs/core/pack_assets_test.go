@@ -56,19 +56,31 @@ func findBareBDCommands(data []byte) []int {
 	return result
 }
 
-func TestMolDoWorkResolvesConvoyMembersFromDependencies(t *testing.T) {
-	data, err := fs.ReadFile(PackFS, "formulas/mol-do-work.toml")
+func TestCoreFormulasResolveConvoyMembersFromChildrenOrDependencies(t *testing.T) {
+	err := fs.WalkDir(PackFS, "formulas", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".toml") {
+			return nil
+		}
+		data, err := fs.ReadFile(PackFS, path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if strings.Contains(text, "if (.children | length) == 1 then .children[0].id else empty end") {
+			t.Fatalf("%s must resolve input convoy members from children or tracked dependencies", path)
+		}
+		if strings.Contains(text, "WORK_BEAD_ID=") &&
+			(!strings.Contains(text, "CONVOY_BEAD=$(gc bd show {{convoy_id}} --json") ||
+				!strings.Contains(text, "$bead.dependencies // []")) {
+			t.Fatalf("%s must include bead dependency fallback when resolving tracked convoy members", path)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("read mol-do-work formula: %v", err)
-	}
-	text := string(data)
-	if strings.Contains(text, "if (.children | length) == 1 then .children[0].id else empty end") {
-		t.Fatal("mol-do-work must resolve input convoy members from children or tracked dependencies")
-	}
-	if !strings.Contains(text, "CONVOY_BEAD=$(gc bd show {{convoy_id}} --json") ||
-		!strings.Contains(text, "$status.dependencies // []") ||
-		!strings.Contains(text, "$bead.dependencies // []") {
-		t.Fatal("mol-do-work must include status and bead dependency fallbacks")
+		t.Fatalf("walk core formulas: %v", err)
 	}
 }
 
