@@ -472,7 +472,7 @@ Import defines a named import of another pack.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `source` | string | **yes** |  | Source is the durable authored pack location: a local path, a remote git URL, or a dereferenceable GitHub tree URL for a pack below a repository root, such as "https://github.com/org/repo/tree/main/packs/foo". Registry handles are lookup-only in this release wave; authored [imports.*] entries store the resolved source plus optional version. |
-| `version` | string |  |  | Version is an optional semver constraint for git-backed imports (e.g., "^1.2"). Empty for local paths. "sha:&lt;hex&gt;" pins a specific commit; "ref:&lt;name&gt;" follows a branch, tag, or ref and records the resolved commit in packs.lock. |
+| `version` | string |  |  | Version is an optional semver constraint for git-backed imports (e.g., "^1.2"). Empty for local paths. "sha:&lt;hex&gt;" pins a specific commit. |
 
 ## K8sConfig
 
