@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -3085,6 +3084,18 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("cmdNudgeDrainWithFormat = %d, want 0; stderr=%s", code, stderr.String())
 			}
+			if tc.inject {
+				if !strings.Contains(stdout.String(), "check hook output") {
+					t.Fatalf("inject stdout missing queued nudge text: %q", stdout.String())
+				}
+				state, err := nudgequeue.LoadState(cityDir)
+				if err != nil {
+					t.Fatalf("LoadState: %v", err)
+				}
+				if len(state.Pending) != 0 || len(state.InFlight) != 0 {
+					t.Fatalf("pending/in-flight = %d/%d, want 0/0 after inject ack", len(state.Pending), len(state.InFlight))
+				}
+			}
 			if !strings.Contains(stdout.String(), "check hook output") {
 				t.Fatalf("stdout = %q, want drained nudge text", stdout.String())
 			}
@@ -3108,7 +3119,25 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 	}
 }
 
-func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T) {
+func TestCmdNudgeDrainInjectDegradesWithoutTargetOrCity(t *testing.T) {
+	clearGCEnv(t)
+	t.Setenv("GC_INJECT_CLOCK", "1")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNudgeDrainWithFormat(nil, true, "codex", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgeDrainWithFormat = %d, want degraded success", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty degraded hook stderr", stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "UserPromptSubmit") || !strings.Contains(out, "gc nudge drain degraded") {
+		t.Fatalf("stdout = %q, want one provider-formatted degraded context", out)
+	}
+}
+
+func TestCmdNudgeDrainInjectDeliversDurableQueue(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
 	t.Setenv("GC_BEADS", "file")
@@ -3117,71 +3146,35 @@ func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T)
 	cityDir := t.TempDir()
 	writeNamedSessionCityTOML(t, cityDir)
 	t.Setenv("GC_CITY", cityDir)
-
 	store, err := openCityStoreAt(cityDir)
 	if err != nil {
 		t.Fatalf("openCityStoreAt: %v", err)
 	}
 	created, err := store.Create(beads.Bead{
-		Title:  "Session: worker",
-		Type:   session.BeadType,
-		Status: "open",
-		Labels: []string{session.LabelSession},
-		Metadata: map[string]string{
-			"session_name": "worker-session",
-			"agent_name":   "worker",
-			"template":     "worker",
-			"state":        string(session.StateActive),
-		},
+		Title: "Session: worker", Type: session.BeadType, Status: "open", Labels: []string{session.LabelSession},
+		Metadata: map[string]string{"session_name": "worker-session", "agent_name": "worker", "template": "worker", "state": string(session.StateActive)},
 	})
 	if err != nil {
 		t.Fatalf("store.Create session: %v", err)
 	}
-	lockPath := nudgequeue.LockPath(cityDir)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll lock dir: %v", err)
+	item := newQueuedNudgeWithOptions("worker", "deliver me", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{SessionID: created.ID})
+	if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
 	}
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("OpenFile lock: %v", err)
-	}
-	defer lockFile.Close() //nolint:errcheck
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatalf("Flock lock: %v", err)
-	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	origTimeout := nudgeDrainInjectTimeout
-	nudgeDrainInjectTimeout = 25 * time.Millisecond
-	defer func() { nudgeDrainInjectTimeout = origTimeout }()
-
-	start := time.Now()
 	var stdout, stderr bytes.Buffer
-	code := cmdNudgeDrainWithFormat([]string{created.ID}, true, "codex", &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("cmdNudgeDrainWithFormat = %d, want degraded success; stderr=%s", code, stderr.String())
+	if code := cmdNudgeDrainWithFormat([]string{created.ID}, true, "codex", &stdout, &stderr); code != 0 {
+		t.Fatalf("cmdNudgeDrainWithFormat = %d, want success; stderr=%s", code, stderr.String())
 	}
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatalf("Flock unlock: %v", err)
+	if out := stdout.String(); !strings.Contains(out, "deliver me") || strings.Contains(out, "gc nudge drain degraded") {
+		t.Fatalf("stdout = %q, want delivered provider context", out)
 	}
-	if err := nudgequeue.WithState(cityDir, func(*nudgequeue.State) error { return nil }); err != nil {
-		t.Fatalf("waiting for background drain to release queue lock: %v", err)
+	state, err := nudgequeue.LoadState(cityDir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("cmdNudgeDrainWithFormat took %s, want bounded hook return", elapsed)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty degraded hook stderr", stderr.String())
-	}
-	out := stdout.String()
-	if !strings.Contains(out, "UserPromptSubmit") {
-		t.Fatalf("stdout = %q, want provider-formatted UserPromptSubmit context", out)
-	}
-	if !strings.Contains(out, "gc nudge drain degraded") {
-		t.Fatalf("stdout = %q, want degraded hook notice", out)
-	}
-	if !strings.Contains(out, "Current time:") {
-		t.Fatalf("stdout = %q, want clock context preserved", out)
+	if len(state.Pending) != 0 || len(state.InFlight) != 0 {
+		t.Fatalf("pending/in-flight = %d/%d, want 0/0", len(state.Pending), len(state.InFlight))
 	}
 }
 

@@ -1,10 +1,14 @@
 package nudgequeue
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -597,5 +601,35 @@ func TestNilStoreIsNoOp(t *testing.T) {
 	}
 	if shadow, ok, err := s.FindIncludingTerminal(item.ID); err != nil || ok {
 		t.Errorf("FindIncludingTerminal on nil store = (%+v,%v,%v), want (zero,false,nil)", shadow, ok, err)
+	}
+}
+
+func TestWithStateContextCancelsWhileQueueLocked(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(LockPath(cityPath)), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	lockFile, err := os.OpenFile(LockPath(cityPath), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer lockFile.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("Flock: %v", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	called := false
+	err = WithStateContext(ctx, cityPath, func(*State) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WithStateContext error = %v, want deadline exceeded", err)
+	}
+	if called {
+		t.Fatal("mutation callback ran without queue lock")
 	}
 }
