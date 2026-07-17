@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -3108,7 +3108,46 @@ func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 	}
 }
 
-func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T) {
+
+func TestCmdNudgeDrainInjectDegradesWithoutTargetOrCity(t *testing.T) {
+	clearGCEnv(t)
+	t.Setenv("GC_ALIAS", "poison-alias")
+	t.Setenv("GC_SESSION_ID", "poison-session")
+	t.Setenv("GC_CITY", filepath.Join(t.TempDir(), "missing-city"))
+	t.Setenv("GC_INJECT_CLOCK", "1")
+
+	origResolve := nudgeDrainResolveTarget
+	nudgeDrainResolveTarget = func(string, ...io.Writer) (nudgeTarget, error) {
+		t.Fatal("inject drain must return before target resolution")
+		return nudgeTarget{}, errors.New("unreachable")
+	}
+	defer func() { nudgeDrainResolveTarget = origResolve }()
+
+	origOpen := openNudgeBeadStore
+	openNudgeBeadStore = func(string) beads.NudgesStore {
+		t.Fatal("inject drain must return before durable store resolution")
+		return beads.NudgesStore{}
+	}
+	defer func() { openNudgeBeadStore = origOpen }()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNudgeDrainWithFormat([]string{"poison-argument"}, true, "codex", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgeDrainWithFormat = %d, want degraded success", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty degraded hook stderr", stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "UserPromptSubmit") {
+		t.Fatalf("stdout = %q, want provider-formatted UserPromptSubmit context", out)
+	}
+	if !strings.Contains(out, "gc nudge drain degraded") {
+		t.Fatalf("stdout = %q, want degraded hook notice", out)
+	}
+}
+
+func TestCmdNudgeDrainInjectDoesNotTouchDurableQueue(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
 	t.Setenv("GC_BEADS", "file")
@@ -3137,23 +3176,17 @@ func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T)
 	if err != nil {
 		t.Fatalf("store.Create session: %v", err)
 	}
-	lockPath := nudgequeue.LockPath(cityDir)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll lock dir: %v", err)
+	item := newQueuedNudge("worker", "preserve me", time.Now().Add(-time.Minute))
+	if err := enqueueQueuedNudge(cityDir, item); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
 	}
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("OpenFile lock: %v", err)
-	}
-	defer lockFile.Close() //nolint:errcheck
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatalf("Flock lock: %v", err)
-	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	origTimeout := nudgeDrainInjectTimeout
-	nudgeDrainInjectTimeout = 25 * time.Millisecond
-	defer func() { nudgeDrainInjectTimeout = origTimeout }()
+	origOpen := openNudgeBeadStore
+	openNudgeBeadStore = func(string) beads.NudgesStore {
+		t.Fatal("inject drain must not open durable nudge store")
+		return beads.NudgesStore{}
+	}
+	defer func() { openNudgeBeadStore = origOpen }()
 
 	start := time.Now()
 	var stdout, stderr bytes.Buffer
@@ -3161,27 +3194,25 @@ func TestCmdNudgeDrainInjectDegradesWhenQueueLockExceedsHookBudget(t *testing.T)
 	if code != 0 {
 		t.Fatalf("cmdNudgeDrainWithFormat = %d, want degraded success; stderr=%s", code, stderr.String())
 	}
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatalf("Flock unlock: %v", err)
-	}
-	if err := nudgequeue.WithState(cityDir, func(*nudgequeue.State) error { return nil }); err != nil {
-		t.Fatalf("waiting for background drain to release queue lock: %v", err)
-	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("cmdNudgeDrainWithFormat took %s, want bounded hook return", elapsed)
+		t.Fatalf("cmdNudgeDrainWithFormat took %s, want immediate hook return", elapsed)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty degraded hook stderr", stderr.String())
 	}
-	out := stdout.String()
-	if !strings.Contains(out, "UserPromptSubmit") {
-		t.Fatalf("stdout = %q, want provider-formatted UserPromptSubmit context", out)
-	}
-	if !strings.Contains(out, "gc nudge drain degraded") {
+	if out := stdout.String(); !strings.Contains(out, "gc nudge drain degraded") {
 		t.Fatalf("stdout = %q, want degraded hook notice", out)
 	}
-	if !strings.Contains(out, "Current time:") {
-		t.Fatalf("stdout = %q, want clock context preserved", out)
+
+	state, err := nudgequeue.LoadState(cityDir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(state.Pending) != 1 || state.Pending[0].ID != item.ID {
+		t.Fatalf("pending = %+v, want original item %q", state.Pending, item.ID)
+	}
+	if len(state.InFlight) != 0 || len(state.Dead) != 0 {
+		t.Fatalf("inFlight/dead = %d/%d, want 0/0", len(state.InFlight), len(state.Dead))
 	}
 }
 

@@ -87,7 +87,6 @@ const (
 
 var errNudgeSessionFenceMismatch = errors.New("queued nudge session fence mismatch")
 
-var nudgeDrainInjectTimeout = 12 * time.Second
 
 var (
 	// Test seams for cmd_nudge_test.go. Tests that replace these package
@@ -96,6 +95,7 @@ var (
 	nudgePokeController                      = pokeController
 	nudgeObserveTarget                       = workerObserveNudgeTarget
 	nudgeWithdrawQueuedWaitNudges            = withdrawQueuedWaitNudges
+	nudgeDrainResolveTarget                 = resolveNudgeTarget
 	nudgeWarningWriter             io.Writer = os.Stderr
 )
 
@@ -410,7 +410,7 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 	// provider hook context is written per invocation, so JSON formats
 	// (codex/gemini) stay one valid document rather than two concatenated objects.
 	// See clock_inject.go and wisp_step_inject.go.
-	var wispExtra string // set after target resolution; captured by defer closure
+	var wispExtra string // captured by deferred hook fallback
 	emittedHookContext := false
 	var injectPrefix string
 	if inject {
@@ -419,6 +419,9 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		// the clock line plus, when context pressure crosses its threshold,
 		// the context-usage guidance (see context_inject.go).
 		injectPrefix = clockInjectLine() + contextInjectLine(readHookStdin())
+		wispExtra = "<system-reminder>\n" +
+			"gc nudge drain degraded: durable queue delivery is disabled in hook injection; deferred reminders remain queued.\n" +
+			"</system-reminder>\n"
 		defer func() {
 			if !emittedHookContext {
 				line := injectPrefix + wispExtra
@@ -427,7 +430,9 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 				}
 			}
 		}()
+		return 0
 	}
+
 	targetID := os.Getenv("GC_ALIAS")
 	if targetID == "" {
 		targetID = os.Getenv("GC_SESSION_ID")
@@ -436,54 +441,28 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		targetID = args[0]
 	}
 	if targetID == "" {
-		if inject {
-			return 0
-		}
 		fmt.Fprintln(stderr, "gc nudge drain: session not specified (set $GC_ALIAS/$GC_SESSION_ID or pass an alias/id)") //nolint:errcheck
 		return 1
 	}
 
-	target, err := resolveNudgeTarget(targetID, stderr)
+
+	target, err := nudgeDrainResolveTarget(targetID, stderr)
 	if err != nil {
-		if inject {
-			return 0
-		}
 		fmt.Fprintf(stderr, "gc nudge drain: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	if inject {
-		wispExtra = wispStepInjectionContent(target.cityPath)
-	}
 
 	now := time.Now()
-	var items []queuedNudge
-	if inject {
-		ctx, cancel := context.WithTimeout(context.Background(), nudgeDrainInjectTimeout)
-		defer cancel()
-		items, err = claimDueQueuedNudgesForTargetContext(ctx, target.cityPath, target, now)
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			wispExtra += "<system-reminder>\n" +
-				"gc nudge drain degraded: queue claim timed out; deferred reminders remain queued.\n" +
-				"</system-reminder>\n"
-			return 0
-		}
-	} else {
-		items, err = claimDueQueuedNudgesForTarget(target.cityPath, target, now)
-	}
+	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, now)
+	var deliveryStore beads.NudgesStore
 	if err != nil {
-		if inject {
-			return 0
-		}
 		fmt.Fprintf(stderr, "gc nudge drain: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	if len(items) == 0 {
-		if inject {
-			return 0
-		}
 		return 1
 	}
-	deliveryStore := openNudgeBeadStore(target.cityPath)
+	deliveryStore = openNudgeBeadStore(target.cityPath)
 	// Two-store split: the nudge-queue delivery store stays on the nudges class
 	// (openNudgeBeadStore), while the session-class ops — wait-bead reads in
 	// splitQueuedNudgesForDelivery and the last-nudge-delivered stamp — route
@@ -1789,6 +1768,7 @@ func (m *nudgeMaintenanceStore) frontForState(state *nudgeQueueState) *nudgequeu
 	return m.front
 }
 
+
 // ensureOpen opens the underlying store exactly once (idempotent) and returns
 // it. ack uses it directly to stamp terminal beads once it has confirmed
 // terminal items to terminalize.
@@ -1802,6 +1782,7 @@ func (m *nudgeMaintenanceStore) ensureOpen() beads.NudgesStore {
 	}
 	return m.store
 }
+
 
 // close releases the store this frame opened (if any). It never touches a
 // caller-passed store because this type only ever holds a store it opened.
@@ -1820,24 +1801,16 @@ func nudgeQueueHasWork(state *nudgeQueueState) bool {
 }
 
 func claimDueQueuedNudgesForTarget(cityPath string, target nudgeTarget, now time.Time) ([]queuedNudge, error) {
-	return claimDueQueuedNudgesForTargetContext(context.Background(), cityPath, target, now)
-}
-
-func claimDueQueuedNudgesForTargetContext(ctx context.Context, cityPath string, target nudgeTarget, now time.Time) ([]queuedNudge, error) {
-	return claimDueQueuedNudgesMatchingContext(ctx, cityPath, now, func(item queuedNudge) bool {
+	return claimDueQueuedNudgesMatching(cityPath, now, func(item queuedNudge) bool {
 		return queuedNudgeClaimableForTarget(target, item)
 	})
 }
 
 func claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(queuedNudge) bool) ([]queuedNudge, error) {
-	return claimDueQueuedNudgesMatchingContext(context.Background(), cityPath, now, match)
-}
-
-func claimDueQueuedNudgesMatchingContext(ctx context.Context, cityPath string, now time.Time, match func(queuedNudge) bool) ([]queuedNudge, error) {
 	maint := nudgeMaintenanceStore{cityPath: cityPath}
 	defer maint.close() //nolint:errcheck // best-effort
 	var claimed []queuedNudge
-	err := withNudgeQueueStateContext(ctx, cityPath, func(state *nudgeQueueState) error {
+	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
 		front := maint.frontForState(state)
 		deadline := noMaintenanceDeadline()
 		if err := recoverExpiredInFlightNudges(state, front, now, deadline); err != nil {
@@ -1868,7 +1841,10 @@ func claimDueQueuedNudgesMatchingContext(ctx context.Context, cityPath string, n
 		sortQueuedNudges(state)
 		return nil
 	})
-	return claimed, err
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
 }
 
 func listQueuedNudges(cityPath, agentName string, now time.Time) ([]queuedNudge, []queuedNudge, []queuedNudge, error) {
@@ -2472,9 +2448,6 @@ func withNudgeQueueState(cityPath string, fn func(*nudgeQueueState) error) error
 	return nudgequeue.WithState(cityPath, fn)
 }
 
-func withNudgeQueueStateContext(ctx context.Context, cityPath string, fn func(*nudgeQueueState) error) error {
-	return nudgequeue.WithStateContext(ctx, cityPath, fn)
-}
 
 func nudgePollerPIDPath(cityPath, sessionName, agentName string) string {
 	return citylayout.RuntimePath(cityPath, "nudges", "pollers", nudgepoller.PollerFileStem(sessionName, agentName)+".pid")
