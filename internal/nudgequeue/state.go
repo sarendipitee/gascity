@@ -2,6 +2,7 @@
 package nudgequeue
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -88,6 +89,15 @@ func SortState(state *State) {
 
 // WithState locks, loads, mutates, and atomically rewrites the queue state.
 func WithState(cityPath string, fn func(*State) error) error {
+	return WithStateContext(context.Background(), cityPath, fn)
+}
+
+// WithStateContext locks, loads, mutates, and atomically rewrites the queue state.
+// It abandons lock acquisition when ctx is canceled before loading or rewriting state.
+func WithStateContext(ctx context.Context, cityPath string, fn func(*State) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := filepath.Dir(StatePath(cityPath))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating nudge queue dir: %w", err)
@@ -99,21 +109,51 @@ func WithState(cityPath string, fn func(*State) error) error {
 	}
 	defer lockFile.Close() //nolint:errcheck
 
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("locking nudge queue: %w", err)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return fmt.Errorf("locking nudge queue: %w", err)
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	state, err := LoadState(cityPath)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := fn(&state); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal nudge queue: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := fsys.WriteFileAtomic(fsys.OSFS{}, StatePath(cityPath), append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write nudge queue: %w", err)
@@ -121,7 +161,7 @@ func WithState(cityPath string, fn func(*State) error) error {
 	return nil
 }
 
-// LoadState reads the persisted queue state from disk.
+// LoadState reads
 func LoadState(cityPath string) (State, error) {
 	data, err := os.ReadFile(StatePath(cityPath))
 	if errors.Is(err, os.ErrNotExist) {
