@@ -32,6 +32,7 @@ import (
 	"github.com/gastownhall/gascity/internal/processgroup/processgrouptest"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/supervisor"
+	"github.com/gastownhall/gascity/internal/testutil"
 	"github.com/gastownhall/gascity/internal/workspacesvc"
 )
 
@@ -204,12 +205,7 @@ func startTestSupervisorSocket(t *testing.T, sockPath string, handler func(strin
 
 func shortTempDir(t *testing.T, prefix string) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", prefix)
-	if err != nil {
-		t.Fatalf("MkdirTemp(/tmp, %q): %v", prefix, err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) }) //nolint:errcheck
-	return dir
+	return testutil.ShortTempDir(t, prefix)
 }
 
 func installFakeSystemctl(t *testing.T) string {
@@ -1767,9 +1763,21 @@ func TestInstallSupervisorSystemdWarmRefreshLeavesUnregisteredWorkspaceServices(
 
 	oldRun := supervisorSystemctlRun
 	oldActive := supervisorSystemctlActive
-	supervisorSystemctlRun = func(_ ...string) error { return nil }
+	var calls []string
+	supervisorSystemctlRun = func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
 	supervisorSystemctlActive = func(service string) bool {
-		return service == unitName
+		if service != unitName {
+			return false
+		}
+		for _, call := range calls {
+			if call == "--user kill --kill-who=main --signal=SIGTERM "+unitName {
+				return false
+			}
+		}
+		return true
 	}
 	stubSupervisorRunningPreserveSignalReady(t, true)
 	t.Cleanup(func() {
