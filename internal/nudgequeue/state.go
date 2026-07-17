@@ -87,17 +87,10 @@ func SortState(state *State) {
 	})
 }
 
-// WithState locks, loads, mutates, and atomically rewrites the queue state.
-func WithState(cityPath string, fn func(*State) error) error {
-	return WithStateContext(context.Background(), cityPath, fn)
-}
-
 // WithStateContext locks, loads, mutates, and atomically rewrites the queue state.
-// It abandons lock acquisition when ctx is canceled before loading or rewriting state.
+// It supports cancelable lock acquisition and state I/O.
+// The callback must remain bounded and must not open external durable stores.
 func WithStateContext(ctx context.Context, cityPath string, fn func(*State) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	dir := filepath.Dir(StatePath(cityPath))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating nudge queue dir: %w", err)
@@ -108,7 +101,6 @@ func WithStateContext(ctx context.Context, cityPath string, fn func(*State) erro
 		return fmt.Errorf("opening nudge queue lock: %w", err)
 	}
 	defer lockFile.Close() //nolint:errcheck
-
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -148,12 +140,47 @@ func WithStateContext(ctx context.Context, cityPath string, fn func(*State) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	SortState(&state)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal nudge queue: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err := fsys.WriteFileAtomic(fsys.OSFS{}, StatePath(cityPath), append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write nudge queue: %w", err)
+	}
+	return nil
+}
+
+// WithState locks, loads, mutates, and atomically rewrites the queue state.
+func WithState(cityPath string, fn func(*State) error) error {
+	dir := filepath.Dir(StatePath(cityPath))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating nudge queue dir: %w", err)
+	}
+
+	lockFile, err := os.OpenFile(LockPath(cityPath), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening nudge queue lock: %w", err)
+	}
+	defer lockFile.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("locking nudge queue: %w", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	state, err := LoadState(cityPath)
+	if err != nil {
+		return err
+	}
+	if err := fn(&state); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal nudge queue: %w", err)
 	}
 	if err := fsys.WriteFileAtomic(fsys.OSFS{}, StatePath(cityPath), append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write nudge queue: %w", err)
