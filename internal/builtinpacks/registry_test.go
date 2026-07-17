@@ -21,6 +21,7 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 
 	want := []string{
 		"core=internal/bootstrap/packs/core",
+		"beads-doltlite-init=internal/bootstrap/packs/beadsdoltliteinit",
 		"bd=examples/bd",
 		"dolt=examples/bd/dolt",
 		"gastown=examples/gastown/packs/gastown",
