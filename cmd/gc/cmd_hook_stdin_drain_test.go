@@ -33,9 +33,14 @@ func (t *trackingReader) Read(p []byte) (int, error) {
 //
 // gc hook run must fully consume its stdin so the provider's write always
 // completes, regardless of whether the wrapped command reads it. The wrapped
+<<<<<<< HEAD
 // executable here is "true" (resolved via LookPath — its absolute path
 // differs by platform, e.g. /usr/bin/true on macOS vs /bin/true on Linux),
 // which exits 0 without reading stdin.
+=======
+// executable here is `true` (resolved on PATH — /usr/bin/true on macOS,
+// /bin/true on Linux), which exits 0 without reading stdin.
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 func TestHookRunConsumesStdinWhenWrappedCommandIgnoresIt(t *testing.T) {
 	orig := hookRunExecutable
 	hookRunExecutable = func() (string, error) { return exec.LookPath("true") }
@@ -132,8 +137,12 @@ func TestHookRunReturnsWithinTimeoutWhenStdinNeverEOFs(t *testing.T) {
 // A PTY master from /dev/ptmx is the terminal proxy: it is a char-device
 // *os.File whose Read blocks forever with no EOF while no slave writes to it,
 // which is exactly the shape of os.Stdin on a real terminal. The wrapped
+<<<<<<< HEAD
 // executable is "true" (resolved via LookPath), which exits 0 without
 // reading stdin.
+=======
+// executable is `true` (resolved on PATH), which exits 0 without reading stdin.
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 func TestHookRunSkipsStdinDrainForTerminal(t *testing.T) {
 	tty, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {

@@ -312,6 +312,12 @@ type startExecutionOptions struct {
 	// deferred under storeQueryPartial today.
 	deferSessionClosesOnBoot bool
 	readyAssignedFlags       []bool
+	// warmClaimProbe, when set, enables the warm-bind claim nudge: it reports
+	// whether a pool slot's newly-bound trigger bead is still unclaimed, read from
+	// the store named by the session's gc.trigger_bead_store_ref. Built by the
+	// reconciler where the cached rig stores are in scope and consumed in
+	// startPreparedStartCandidate's warm-reuse branch. Nil disables the nudge.
+	warmClaimProbe warmClaimTriggerProbe
 }
 
 type startExecutionOption func(*startExecutionOptions)
@@ -362,6 +368,7 @@ func withTaskWorkDirResolver(resolver taskWorkDirResolver) startExecutionOption 
 	}
 }
 
+<<<<<<< HEAD
 func withStartStabilityWaiter(waiter startStabilityWaiter) startExecutionOption {
 	return func(opts *startExecutionOptions) {
 		opts.stabilityWaiter = waiter
@@ -381,6 +388,16 @@ func resolveStartStabilityWaiter(waiter startStabilityWaiter) startStabilityWait
 	return waiter
 }
 
+=======
+// withWarmClaimProbe installs the warm-bind claim-nudge probe for this reconcile
+// pass. Nil (or the option omitted) leaves the warm-bind claim nudge disabled.
+func withWarmClaimProbe(probe warmClaimTriggerProbe) startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.warmClaimProbe = probe
+	}
+}
+
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 // withDeferSessionClosesOnBoot defers the per-session orphan/failed-create
 // session-bead closes for this reconcile pass (gastownhall/gascity#3288). Used
 // only on the synchronous boot reconcile so readiness does not wait on the
@@ -1292,7 +1309,11 @@ func executePreparedStartWave(
 	startupTimeout time.Duration,
 	options ...startExecutionOption,
 ) []startResult {
+<<<<<<< HEAD
 	return executePreparedStartWaveForCity(ctx, prepared, "", sp, store, nil, startupTimeout, 1, options...)
+=======
+	return executePreparedStartWaveForCity(ctx, prepared, "", sp, store, nil, startupTimeout, 1, nil)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 }
 
 func executePreparedStartWaveForCity(
@@ -1304,7 +1325,11 @@ func executePreparedStartWaveForCity(
 	cfg *config.City,
 	startupTimeout time.Duration,
 	maxParallel int,
+<<<<<<< HEAD
 	options ...startExecutionOption,
+=======
+	warmClaim warmClaimTriggerProbe,
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 ) []startResult {
 	if len(prepared) == 0 {
 		return nil
@@ -1330,7 +1355,11 @@ func executePreparedStartWaveForCity(
 				<-sem
 				done <- i
 			}()
+<<<<<<< HEAD
 			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, startOpts.sessionStaleKeyDetectionWaiter)
+=======
+			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, warmClaim)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 		}()
 	}
 	for range prepared {
@@ -1347,8 +1376,12 @@ func runPreparedStartCandidate(
 	store beads.Store,
 	cfg *config.City,
 	startupTimeout time.Duration,
+<<<<<<< HEAD
 	stabilityWaiter startStabilityWaiter,
 	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+=======
+	warmClaim warmClaimTriggerProbe,
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 ) (result startResult) {
 	started := time.Now()
 	result = startResult{
@@ -1377,7 +1410,11 @@ func runPreparedStartCandidate(
 	defer cancel()
 	var phases startPhaseTimings
 	startCallBegin := time.Now()
+<<<<<<< HEAD
 	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, sessionStaleKeyDetectionWaiter)
+=======
+	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, warmClaim)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 	startCtxErr := startCtx.Err()
 	// Split start_call into provider.Start and the ErrStateSync recovery
 	// branch (gc-9ha). The recovery branch hits the worker observation
@@ -1542,8 +1579,12 @@ func enqueuePreparedStartWaveForCity(
 	stdout, stderr io.Writer,
 	trace *sessionReconcilerTraceCycle,
 	asyncFollowUp func(),
+<<<<<<< HEAD
 	stabilityWaiter startStabilityWaiter,
 	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+=======
+	warmClaim warmClaimTriggerProbe,
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 ) []startResult {
 	if len(prepared) == 0 {
 		return nil
@@ -1568,7 +1609,11 @@ func enqueuePreparedStartWaveForCity(
 			if release != nil {
 				defer release()
 			}
+<<<<<<< HEAD
 			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, sessionStaleKeyDetectionWaiter)
+=======
+			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, warmClaim)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 			commitAsyncStartResultWithContext(ctx, result, sp, store, clk, rec, wave, stdout, stderr, trace)
 			if asyncFollowUp != nil {
 				asyncFollowUp()
@@ -1789,7 +1834,11 @@ func startPreparedStartCandidate(
 	sp runtime.Provider,
 	cfg *config.City,
 	phases *startPhaseTimings,
+<<<<<<< HEAD
 	staleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+=======
+	warmClaim warmClaimTriggerProbe,
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 ) (bool, error) {
 	name := item.candidate.name()
 	if sp != nil {
@@ -1798,6 +1847,23 @@ func startPreparedStartCandidate(
 			if alive {
 				if shouldRollbackPendingCreateInfo(item.candidate.info) && !runningSessionMatchesPendingCreateInfo(item.candidate.info, name, sp) {
 					return false, fmt.Errorf("%w: session %q", runtime.ErrSessionExists, name)
+				}
+				// Warm reuse: the slot is already up, so cold Start's startup nudge
+				// never fires. If on-demand work was bound to it since it last Started
+				// (bindPoolSessionTriggerBead) and is still unclaimed, deliver the
+				// claim nudge once — the event-based symmetric counterpart to that
+				// cold-Start nudge. Best-effort; never fails the (successful) warm start.
+				// The warm-bind lane reads bind-edge metadata keys that session.Info
+				// does not project, so it re-reads the raw bead at this edge (same
+				// pattern as the idle-claim nudge lane).
+				//
+				// store is nil in unit contexts (and the cold-start path below
+				// guards it too); the warm-bind claim nudge is best-effort, so
+				// skip it rather than dereference a nil store.
+				if store != nil {
+					if raw, rawErr := store.Get(item.candidate.info.ID); rawErr == nil {
+						deliverWarmBindClaimNudge(ctx, sp, store, &raw, item.cfg.Nudge, warmClaim)
+					}
 				}
 				return false, nil
 			}
@@ -2800,11 +2866,16 @@ func executePlannedStartsTraced(
 				return wakeCount
 			}
 			if startOpts.async {
+<<<<<<< HEAD
 				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, stabilityWaiter, sessionStaleKeyDetectionWaiter)
+=======
+				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, startOpts.warmClaimProbe)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 				if len(results) > 0 && asyncStartBatchNeedsFollowUp(batchCandidates, cfg) {
 					asyncFollowUpRequired = true
 				}
 			} else {
+<<<<<<< HEAD
 				results = executePreparedStartWaveForCity(
 					ctx,
 					prepared,
@@ -2817,6 +2888,9 @@ func executePlannedStartsTraced(
 					withStartStabilityWaiter(stabilityWaiter),
 					withSessionStaleKeyDetectionWaiter(sessionStaleKeyDetectionWaiter),
 				)
+=======
+				results = executePreparedStartWaveForCity(ctx, prepared, cityPath, sp, store, cfg, startupTimeout, batchSize, startOpts.warmClaimProbe)
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 			}
 			for _, result := range results {
 				if trace != nil {

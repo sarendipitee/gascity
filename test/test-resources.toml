@@ -10,8 +10,13 @@ version = 2
 [[audit_baseline]]
 scope = "all"
 resource = "subprocess"
+<<<<<<< HEAD
 baseline_calls = 529
 baseline_files = 162
+=======
+baseline_calls = 499
+baseline_files = 140
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 495
 reported_files = 135
 owner_bead = "ga-80po0c.2"
@@ -23,8 +28,13 @@ expires = "2026-10-01"
 [[audit_baseline]]
 scope = "all"
 resource = "fixed_sleep"
+<<<<<<< HEAD
 baseline_calls = 427
 baseline_files = 156
+=======
+baseline_calls = 473
+baseline_files = 160
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 447
 reported_files = 157
 owner_bead = "ga-80po0c.2"
@@ -38,8 +48,13 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "subprocess"
+<<<<<<< HEAD
 baseline_calls = 394
 baseline_files = 112
+=======
+baseline_calls = 382
+baseline_files = 101
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 380
 reported_files = 98
 owner_bead = "ga-80po0c.2"
@@ -51,8 +66,13 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "fixed_sleep"
+<<<<<<< HEAD
 baseline_calls = 288
 baseline_files = 111
+=======
+baseline_calls = 321
+baseline_files = 117
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 295
 reported_files = 114
 owner_bead = "ga-80po0c.2"
@@ -64,8 +84,13 @@ expires = "2026-10-01"
 [[debt]]
 scope = "cmd/gc+untagged"
 resource = "environment"
+<<<<<<< HEAD
 baseline_calls = 4326
 baseline_files = 203
+=======
+baseline_calls = 4108
+baseline_files = 182
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 3960
 reported_files = 184
 owner_bead = "ga-80po0c.2.3"
@@ -116,10 +141,10 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "net_listen"
-baseline_calls = 92
-baseline_files = 34
-reported_calls = 92
-reported_files = 34
+baseline_calls = 93
+baseline_files = 35
+reported_calls = 93
+reported_files = 35
 owner_bead = "ga-80po0c.2.2"
 invariant = "untagged net.Listen call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "each owning test closes its listener and removes duplicate listener-backed coverage"
@@ -250,10 +275,17 @@ medium_reason = "package TestMain mutates process state"
 [[small_debt]]
 scope = "untagged"
 resource = "subprocess"
+<<<<<<< HEAD
 baseline_calls = 391
 baseline_files = 110
 reported_calls = 394
 reported_files = 105
+=======
+baseline_calls = 382
+baseline_files = 101
+reported_calls = 382
+reported_files = 101
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small subprocess call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners remove or replace each process call site"
@@ -263,10 +295,17 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "fixed_sleep"
+<<<<<<< HEAD
 baseline_calls = 288
 baseline_files = 111
 reported_calls = 287
 reported_files = 113
+=======
+baseline_calls = 321
+baseline_files = 117
+reported_calls = 321
+reported_files = 117
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners replace elapsed wall time with lifecycle signals"
@@ -276,10 +315,17 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "cmd/gc+untagged"
 resource = "environment"
+<<<<<<< HEAD
 baseline_calls = 4320
 baseline_files = 203
 reported_calls = 4348
 reported_files = 200
+=======
+baseline_calls = 4102
+baseline_files = 182
+reported_calls = 4102
+reported_files = 182
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small cmd/gc environment call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners restore or eliminate every process-environment mutation"
@@ -328,10 +374,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "net_listen"
-baseline_calls = 92
-baseline_files = 34
-reported_calls = 92
-reported_files = 34
+baseline_calls = 93
+baseline_files = 35
+reported_calls = 93
+reported_files = 35
 owner_bead = "ga-80po0c.2.2"
 invariant = "untagged Small net.Listen call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners move listener-backed tests to exact Medium ownership or replace the listener"

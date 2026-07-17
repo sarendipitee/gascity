@@ -12,10 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
+<<<<<<< HEAD
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
+=======
+	"github.com/gastownhall/gascity/internal/session"
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 	"github.com/spf13/cobra"
 )
 
@@ -235,6 +240,10 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 	}
 	resolveRigPaths(cityPath, cfg.Rigs)
 
+	if suppressHookPrompt && startupPromptDeliveredMarkerStale(cityPath) {
+		suppressHookPrompt = false
+	}
+
 	if citySuspended(cfg) {
 		// Suspended is a legitimate quiet state, not a strict failure —
 		// keep hook behavior consistent with non-strict (which already
@@ -308,6 +317,12 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			if sessionName == "" {
 				sessionName = cliSessionName(cityPath, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
 			}
+			// Resolve the session provider so the spawn respects the
+			// event-capable suppression. Fail open on resolution errors
+			// (nil provider → today's spawn) — a hook must not start
+			// failing because the provider config is momentarily broken.
+			spctx := sessionProviderContextForCity(cfg, cityPath, os.Getenv("GC_SESSION"))
+			hookSP, _ := newSessionProviderFromContextWithError(spctx, nil)
 			maybeStartNudgePoller(withNudgeTargetFence(openNudgeBeadStore(cityPath).Store, nudgeTarget{
 				cityPath:          cityPath,
 				cityName:          cityName,
@@ -317,7 +332,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 				sessionID:         os.Getenv("GC_SESSION_ID"),
 				continuationEpoch: os.Getenv("GC_CONTINUATION_EPOCH"),
 				sessionName:       sessionName,
-			}))
+			}), hookSP)
 		}
 		var ctx PromptContext
 		if a.PromptTemplate != "" || hookMode || sessionTemplateContext {
@@ -499,15 +514,31 @@ func managedSessionHookPromptAlreadyDelivered(ctx primeHookContext) bool {
 	return strings.TrimSpace(ctx.HookEventName) == "SessionStart"
 }
 
+<<<<<<< HEAD
 func primeHookSessionStart(ctx primeHookContext) bool {
 	return strings.TrimSpace(ctx.HookEventName) == "SessionStart"
 }
 
 func primeHookHasLiveManagedSession(cityPath string) bool {
+=======
+// startupPromptDeliveredMarkerStale reports whether the pane-stamped
+// GC_STARTUP_PROMPT_DELIVERED marker predates the session's current
+// continuation epoch. The marker (and GC_CONTINUATION_EPOCH) is written once
+// into the pane/session environment at pane creation; an in-pane agent
+// restart after a continuation-epoch bump (drain handoff, config-drift reset,
+// crash-loop recovery) re-fires the SessionStart hook with the stale marker
+// still set, which would suppress the prime prompt for a fresh conversation
+// that never received it. A newer epoch on the session bead means the marker
+// belongs to a previous incarnation, so the prompt must be delivered.
+// Fail-safe: any missing value, parse failure, or store error preserves the
+// existing suppression.
+func startupPromptDeliveredMarkerStale(cityPath string) bool {
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 	sessionID := strings.TrimSpace(os.Getenv("GC_SESSION_ID"))
 	if sessionID == "" {
 		return false
 	}
+<<<<<<< HEAD
 	sessionName := strings.TrimSpace(os.Getenv("GC_SESSION_NAME"))
 	if sessionName == "" {
 		return false
@@ -552,6 +583,28 @@ func primeHookHasLiveManagedSession(cityPath string) bool {
 }
 
 func writePrimePromptWithFormat(stdout io.Writer, cityName, agentName, prompt string, hookMode bool, hookFormat string, suppressPrompt bool, hookContextSuffix string) {
+=======
+	paneEpoch, err := strconv.Atoi(strings.TrimSpace(os.Getenv("GC_CONTINUATION_EPOCH")))
+	if err != nil {
+		return false
+	}
+	store, err := openStoreAtForCity(cityPath, cityPath)
+	if err != nil {
+		return false
+	}
+	markers, err := session.NewStore(beads.SessionStore{Store: store}).PersistedMarkers(sessionID)
+	if err != nil {
+		return false
+	}
+	beadEpoch, err := strconv.Atoi(strings.TrimSpace(markers.ContinuationEpoch))
+	if err != nil {
+		return false
+	}
+	return beadEpoch > paneEpoch
+}
+
+func writePrimePromptWithFormat(stdout io.Writer, cityName, agentName, prompt string, hookMode bool, hookFormat string, suppressPrompt bool) {
+>>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 	if hookMode && suppressPrompt {
 		// Managed sessions receive the rendered startup prompt through the
 		// launch payload or nudge path. SessionStart hooks add context only.
