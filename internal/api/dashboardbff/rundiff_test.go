@@ -526,6 +526,30 @@ func TestFilterReviewablePatch(t *testing.T) {
 	}
 }
 
+func TestNormalizeRunGitNewFilePatch(t *testing.T) {
+	patch := strings.Join([]string{
+		"diff --git 1/docs/plan.md 2/docs/plan.md",
+		"new file mode 100644",
+		"index 0000000..6085be4",
+		"--- /dev/null",
+		"+++ 2/docs/plan.md",
+		"@@ -0,0 +1 @@",
+		"+plan output",
+	}, "\n")
+
+	got := normalizeRunGitNewFilePatch(patch, "docs/plan.md")
+
+	if !strings.Contains(got, "diff --git a/docs/plan.md b/docs/plan.md") {
+		t.Fatalf("normalized header missing canonical a/b paths:\n%s", got)
+	}
+	if !strings.Contains(got, "--- /dev/null") {
+		t.Fatalf("normalized patch lost /dev/null source:\n%s", got)
+	}
+	if !strings.Contains(got, "+++ b/docs/plan.md") {
+		t.Fatalf("normalized patch missing canonical new-file target:\n%s", got)
+	}
+}
+
 func TestFilterReviewablePatchEmpty(t *testing.T) {
 	if got := filterReviewablePatch("   \n  "); got != "" {
 		t.Errorf("empty patch = %q, want empty", got)

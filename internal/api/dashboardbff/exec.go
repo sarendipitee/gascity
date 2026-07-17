@@ -271,6 +271,7 @@ var gitHardeningArgs = []string{
 	"-c", "protocol.ext.allow=never",
 	"-c", "core.fsmonitor=false",
 	"-c", "core.hooksPath=/dev/null",
+	"-c", "diff.mnemonicPrefix=false",
 }
 
 // gitArgs assembles a hardened `git -c … -C <cwd> <args…>` argv.
