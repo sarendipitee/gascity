@@ -87,6 +87,8 @@ const (
 
 var errNudgeSessionFenceMismatch = errors.New("queued nudge session fence mismatch")
 
+var nudgeDrainInjectTimeout = 15 * time.Second
+
 var (
 	// Test seams for cmd_nudge_test.go. Tests that replace these package
 	// variables must stay serial; do not use t.Parallel in those tests.
@@ -454,7 +456,30 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 	}
 
 	now := time.Now()
-	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, now)
+	var items []queuedNudge
+	var err error
+	if inject {
+		type claimResult struct {
+			items []queuedNudge
+			err   error
+		}
+		result := make(chan claimResult, 1)
+		go func() {
+			claimed, claimErr := claimDueQueuedNudgesForTarget(target.cityPath, target, now)
+			result <- claimResult{items: claimed, err: claimErr}
+		}()
+		timer := time.NewTimer(nudgeDrainInjectTimeout)
+		defer timer.Stop()
+		select {
+		case claimed := <-result:
+			items, err = claimed.items, claimed.err
+		case <-timer.C:
+			wispExtra += "<system-reminder>\ngc nudge drain degraded: queue lock exceeded hook budget.\n</system-reminder>\n"
+			return 0
+		}
+	} else {
+		items, err = claimDueQueuedNudgesForTarget(target.cityPath, target, now)
+	}
 	if err != nil {
 		if inject {
 			return 0
@@ -1815,6 +1840,44 @@ func claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(que
 	defer maint.close() //nolint:errcheck // best-effort
 	var claimed []queuedNudge
 	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
+		front := maint.frontForState(state)
+		deadline := noMaintenanceDeadline()
+		if err := recoverExpiredInFlightNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+		if err := pruneExpiredQueuedNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+		if err := pruneDeadQueuedNudges(state, front, now, deadline); err != nil {
+			return err
+		}
+		pending := state.Pending[:0]
+		for _, item := range state.Pending {
+			if !match(item) {
+				pending = append(pending, item)
+				continue
+			}
+			if !item.DeliverAfter.IsZero() && item.DeliverAfter.After(now) {
+				pending = append(pending, item)
+				continue
+			}
+			item.ClaimedAt = now.UTC()
+			item.LeaseUntil = now.Add(defaultQueuedNudgeClaimTTL).UTC()
+			state.InFlight = append(state.InFlight, item)
+			claimed = append(claimed, item)
+		}
+		state.Pending = pending
+		sortQueuedNudges(state)
+		return nil
+	})
+	return claimed, err
+}
+
+func claimDueQueuedNudgesMatchingWithState(cityPath string, now time.Time, match func(queuedNudge) bool, withState func(func(*nudgeQueueState) error) error) ([]queuedNudge, error) {
+	maint := nudgeMaintenanceStore{cityPath: cityPath}
+	defer maint.close() //nolint:errcheck // best-effort
+	var claimed []queuedNudge
+	err := withState(func(state *nudgeQueueState) error {
 		front := maint.frontForState(state)
 		deadline := noMaintenanceDeadline()
 		if err := recoverExpiredInFlightNudges(state, front, now, deadline); err != nil {
