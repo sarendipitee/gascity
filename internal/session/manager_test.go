@@ -3388,7 +3388,7 @@ func TestSendImmediateFallsBackToDefaultNudge(t *testing.T) {
 func TestSendDefaultCodexUsesImmediateNudge(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := runtime.NewFake()
-	mgr := NewManager(store, sp)
+	mgr := NewManagerWithOptions(store, sp)
 
 	info, err := mgr.Create(context.Background(), "helper", "", "codex", "/tmp", "codex", nil, ProviderResume{}, runtime.Config{})
 	if err != nil {
@@ -3417,7 +3417,7 @@ func TestSendDefaultCodexUsesImmediateNudge(t *testing.T) {
 func TestTryWaitIdleNudgeCodexFallsBackToImmediateAfterIdleTimeout(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := runtime.NewFake()
-	mgr := NewManager(store, sp)
+	mgr := NewManagerWithOptions(store, sp)
 
 	info, err := mgr.Create(context.Background(), "helper", "", "codex", "/tmp", "codex", nil, ProviderResume{}, runtime.Config{})
 	if err != nil {
