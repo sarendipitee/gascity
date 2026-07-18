@@ -149,6 +149,17 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// poked into that window judged the live runtime as belonging to no
 	// session and rolled back the pending create (live-verified churn).
 	p.stampIdentityMeta(name, cfg.Env)
+	if runtime.ShouldAcceptStartupDialogs(cfg) {
+		_ = runtime.AcceptStartupDialogs(
+			ctx,
+			func(lines int) (string, error) { return p.c.read(ctx, name, "visible", lines) },
+			func(keys ...string) error { return p.c.sendKeys(ctx, info.PaneID, keys...) },
+		)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
 	//
