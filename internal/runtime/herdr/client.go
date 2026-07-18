@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type client struct {
 	bin      string // herdr binary (default "herdr")
 	cityRoot string // city root: the shared server's launch cwd, and the effectiveWorkDir fallback when a session's WorkDir doesn't exist yet (empty in city-less/standalone construction)
 	sockPath string // test override for socketPath (unit tests point it at a fake server)
+	serverMu sync.Mutex
 }
 
 func newClient(session, cityRoot string) *client {
@@ -509,15 +511,26 @@ func (c *client) socketPath() string {
 	return filepath.Join(home, ".config", "herdr", "sessions", c.session, "herdr.sock")
 }
 
-// serverRunning reports whether the session-server socket is present.
+// serverRunning reports whether herdr confirms the session server is running.
+// Socket existence is insufficient because herdr can leave a socket behind
+// after shutdown; connecting to that stale path returns ECONNREFUSED.
 func (c *client) serverRunning() bool {
-	fi, err := os.Stat(c.socketPath())
-	return err == nil && fi.Mode()&os.ModeSocket != 0
+	out, err := exec.Command(c.bin, "--session", c.session, "status", "server", "--json").Output()
+	if err != nil {
+		return false
+	}
+	var status struct {
+		Running bool `json:"running"`
+	}
+	return json.Unmarshal(out, &status) == nil && status.Running
 }
 
 // startServer launches the headless herdr server for this session (detached)
 // and waits for its socket. Idempotent — no-op if already running.
 func (c *client) startServer() error {
+	c.serverMu.Lock()
+	defer c.serverMu.Unlock()
+
 	if c.serverRunning() {
 		return nil
 	}
