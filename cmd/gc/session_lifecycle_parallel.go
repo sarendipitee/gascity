@@ -40,12 +40,24 @@ const (
 	defaultMaxParallelInterrupts   = 16
 )
 
-// staleKeyDetectDelay is how long to wait after starting a session before
-// checking if it died immediately (stale resume key detection). Matches the
-// same value in internal/session/chat.go. Made a var so tests driving the
-// start path through a fake runtime can shorten it via
-// setStaleKeyDetectDelayForTest (defined in the test file).
-var staleKeyDetectDelay = 2 * time.Second
+// staleKeyDetectDelay is how long production waits after starting a session
+// before checking if it died immediately (stale resume key detection). It
+// matches the same value in internal/session/chat.go. Tests inject a waiter
+// instead of mutating this policy.
+const staleKeyDetectDelay = 2 * time.Second
+
+type startStabilityWaiter func(context.Context, string) bool
+
+func waitForStartStability(ctx context.Context, _ string) bool {
+	timer := time.NewTimer(staleKeyDetectDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 type asyncStartLimiter struct {
 	mu       sync.Mutex
@@ -240,7 +252,7 @@ type startPhaseTimings struct {
 	StartCall         time.Duration // startPreparedStartCandidate total (provider Start + any ErrStateSync recovery)
 	ZombieRecycle     time.Duration // provider Stop of a running session whose agent process died (subset of StartCall; ga-yms)
 	StateSyncRecovery time.Duration // workerSessionTargetRunningWithConfig branch when provider Start returned ErrStateSync (subset of StartCall; gc-9ha)
-	PostStartObserve  time.Duration // staleKeyDetectDelay + workerObserveSessionTarget when session_key present
+	PostStartObserve  time.Duration // stability wait + workerObserveSessionTarget when session_key present
 	CommitRefresh     time.Duration // refreshAsyncStartResult bead reload (async path only)
 }
 
@@ -281,13 +293,15 @@ func (p startPhaseTimings) formatLog() string {
 }
 
 type startExecutionOptions struct {
-	async            bool
-	asyncFollowUp    func()
-	asyncLimiter     *asyncStartLimiter
-	asyncTracker     *asyncStartTracker
-	asyncStopTracker *asyncStartTracker
-	maxSessionAgeTr  maxSessionAgeTracker
-	workDirResolver  taskWorkDirResolver
+	async                          bool
+	asyncFollowUp                  func()
+	asyncLimiter                   *asyncStartLimiter
+	asyncTracker                   *asyncStartTracker
+	asyncStopTracker               *asyncStartTracker
+	maxSessionAgeTr                maxSessionAgeTracker
+	workDirResolver                taskWorkDirResolver
+	stabilityWaiter                startStabilityWaiter
+	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter
 	// deferSessionClosesOnBoot suppresses the per-session orphan/failed-create
 	// session-bead closes during the synchronous boot reconcile. Those closes
 	// gate on a per-session open-work probe that reads the wisp tier
@@ -352,6 +366,25 @@ func withTaskWorkDirResolver(resolver taskWorkDirResolver) startExecutionOption 
 	return func(opts *startExecutionOptions) {
 		opts.workDirResolver = resolver
 	}
+}
+
+func withStartStabilityWaiter(waiter startStabilityWaiter) startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.stabilityWaiter = waiter
+	}
+}
+
+func withSessionStaleKeyDetectionWaiter(waiter sessionpkg.StaleKeyDetectionWaiter) startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.sessionStaleKeyDetectionWaiter = waiter
+	}
+}
+
+func resolveStartStabilityWaiter(waiter startStabilityWaiter) startStabilityWaiter {
+	if waiter == nil {
+		return waitForStartStability
+	}
+	return waiter
 }
 
 // withWarmClaimProbe installs the warm-bind claim-nudge probe for this reconcile
@@ -1271,8 +1304,9 @@ func executePreparedStartWave(
 	sp runtime.Provider,
 	store beads.Store,
 	startupTimeout time.Duration,
+	options ...startExecutionOption,
 ) []startResult {
-	return executePreparedStartWaveForCity(ctx, prepared, "", sp, store, nil, startupTimeout, 1, nil)
+	return executePreparedStartWaveForCity(ctx, prepared, "", sp, store, nil, startupTimeout, 1, options...)
 }
 
 func executePreparedStartWaveForCity(
@@ -1284,7 +1318,7 @@ func executePreparedStartWaveForCity(
 	cfg *config.City,
 	startupTimeout time.Duration,
 	maxParallel int,
-	warmClaim warmClaimTriggerProbe,
+	options ...startExecutionOption,
 ) []startResult {
 	if len(prepared) == 0 {
 		return nil
@@ -1292,6 +1326,13 @@ func executePreparedStartWaveForCity(
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
+	startOpts := startExecutionOptions{}
+	for _, apply := range options {
+		if apply != nil {
+			apply(&startOpts)
+		}
+	}
+	stabilityWaiter := resolveStartStabilityWaiter(startOpts.stabilityWaiter)
 	results := make([]startResult, len(prepared))
 	sem := make(chan struct{}, maxParallel)
 	done := make(chan int, len(prepared))
@@ -1303,7 +1344,7 @@ func executePreparedStartWaveForCity(
 				<-sem
 				done <- i
 			}()
-			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, warmClaim)
+			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, startOpts.sessionStaleKeyDetectionWaiter, startOpts.warmClaimProbe)
 		}()
 	}
 	for range prepared {
@@ -1320,6 +1361,8 @@ func runPreparedStartCandidate(
 	store beads.Store,
 	cfg *config.City,
 	startupTimeout time.Duration,
+	stabilityWaiter startStabilityWaiter,
+	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
 	warmClaim warmClaimTriggerProbe,
 ) (result startResult) {
 	started := time.Now()
@@ -1349,7 +1392,7 @@ func runPreparedStartCandidate(
 	defer cancel()
 	var phases startPhaseTimings
 	startCallBegin := time.Now()
-	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, warmClaim)
+	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, sessionStaleKeyDetectionWaiter, warmClaim)
 	startCtxErr := startCtx.Err()
 	// Split start_call into provider.Start and the ErrStateSync recovery
 	// branch (gc-9ha). The recovery branch hits the worker observation
@@ -1372,9 +1415,7 @@ func runPreparedStartCandidate(
 	// recordWakeFailure clears the key for the next attempt.
 	if startedFresh && err == nil && strings.TrimSpace(item.candidate.info.ID) != "" && item.candidate.info.SessionKey != "" {
 		postStartBegin := time.Now()
-		staleTimer := time.NewTimer(staleKeyDetectDelay)
-		select {
-		case <-staleTimer.C:
+		if stabilityWaiter(startCtx, item.candidate.name()) {
 			running := false
 			alive := false
 			if store == nil || strings.TrimSpace(item.candidate.info.ID) == "" {
@@ -1388,8 +1429,6 @@ func runPreparedStartCandidate(
 			if err != nil || !running || !alive {
 				err = fmt.Errorf("session %q died during startup", item.candidate.name())
 			}
-		case <-startCtx.Done():
-			staleTimer.Stop()
 		}
 		phases.PostStartObserve = time.Since(postStartBegin)
 	}
@@ -1518,11 +1557,14 @@ func enqueuePreparedStartWaveForCity(
 	stdout, stderr io.Writer,
 	trace *sessionReconcilerTraceCycle,
 	asyncFollowUp func(),
+	stabilityWaiter startStabilityWaiter,
+	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
 	warmClaim warmClaimTriggerProbe,
 ) []startResult {
 	if len(prepared) == 0 {
 		return nil
 	}
+	stabilityWaiter = resolveStartStabilityWaiter(stabilityWaiter)
 	results := make([]startResult, len(prepared))
 	for i, reserved := range prepared {
 		item := clonePreparedStartForAsync(reserved.item)
@@ -1542,7 +1584,7 @@ func enqueuePreparedStartWaveForCity(
 			if release != nil {
 				defer release()
 			}
-			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, warmClaim)
+			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, sessionStaleKeyDetectionWaiter, warmClaim)
 			commitAsyncStartResultWithContext(ctx, result, sp, store, clk, rec, wave, stdout, stderr, trace)
 			if asyncFollowUp != nil {
 				asyncFollowUp()
@@ -1764,6 +1806,7 @@ func startPreparedStartCandidate(
 	sp runtime.Provider,
 	cfg *config.City,
 	phases *startPhaseTimings,
+	staleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
 	warmClaim warmClaimTriggerProbe,
 ) (bool, error) {
 	name := item.candidate.name()
@@ -1830,7 +1873,7 @@ func startPreparedStartCandidate(
 		}
 		return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	}
-	handle, err := workerHandleForSessionWithConfig(cityPath, store, sp, cfg, item.candidate.info.ID)
+	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
 	if err != nil {
 		return true, err
 	}
@@ -2491,8 +2534,9 @@ func executePlannedStarts(
 	rec events.Recorder,
 	startupTimeout time.Duration,
 	stdout, stderr io.Writer,
+	options ...startExecutionOption,
 ) int {
-	return executePlannedStartsTraced(ctx, candidates, cfg, desiredState, sp, store, cityName, "", clk, rec, startupTimeout, stdout, stderr, nil)
+	return executePlannedStartsTraced(ctx, candidates, cfg, desiredState, sp, store, cityName, "", clk, rec, startupTimeout, stdout, stderr, nil, options...)
 }
 
 func executePlannedStartsTraced(
@@ -2531,6 +2575,8 @@ func executePlannedStartsTraced(
 			apply(&startOpts)
 		}
 	}
+	stabilityWaiter := resolveStartStabilityWaiter(startOpts.stabilityWaiter)
+	sessionStaleKeyDetectionWaiter := startOpts.sessionStaleKeyDetectionWaiter
 	cbCfg, cbEnabled := sessionCircuitBreakerConfigFromCity(cfg)
 	var cb *sessionCircuitBreaker
 	if cbEnabled {
@@ -2705,12 +2751,24 @@ func executePlannedStartsTraced(
 				return wakeCount
 			}
 			if startOpts.async {
-				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, startOpts.warmClaimProbe)
+				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, stabilityWaiter, sessionStaleKeyDetectionWaiter, startOpts.warmClaimProbe)
 				if len(results) > 0 && asyncStartBatchNeedsFollowUp(batchCandidates, cfg) {
 					asyncFollowUpRequired = true
 				}
 			} else {
-				results = executePreparedStartWaveForCity(ctx, prepared, cityPath, sp, store, cfg, startupTimeout, batchSize, startOpts.warmClaimProbe)
+				results = executePreparedStartWaveForCity(
+					ctx,
+					prepared,
+					cityPath,
+					sp,
+					store,
+					cfg,
+					startupTimeout,
+					batchSize,
+					withStartStabilityWaiter(stabilityWaiter),
+					withSessionStaleKeyDetectionWaiter(sessionStaleKeyDetectionWaiter),
+					withWarmClaimProbe(startOpts.warmClaimProbe),
+				)
 			}
 			for _, result := range results {
 				if trace != nil {
