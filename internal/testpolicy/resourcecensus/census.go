@@ -113,13 +113,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeAll,
 			Resource:        ResourceSubprocess,
-<<<<<<< HEAD
-			BaselineCalls:   529,
-			BaselineFiles:   162,
-=======
-			BaselineCalls:   499,
-			BaselineFiles:   140,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
+			BaselineCalls:   528,
+			BaselineFiles:   154,
 			ReportedCalls:   495,
 			ReportedFiles:   135,
 			OwnerBead:       "ga-80po0c.2",
@@ -131,13 +126,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeAll,
 			Resource:        ResourceFixedSleep,
-<<<<<<< HEAD
-			BaselineCalls:   427,
-			BaselineFiles:   156,
-=======
-			BaselineCalls:   473,
-			BaselineFiles:   160,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
+			BaselineCalls:   440,
+			BaselineFiles:   158,
 			ReportedCalls:   447,
 			ReportedFiles:   157,
 			OwnerBead:       "ga-80po0c.2",
@@ -151,13 +141,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceSubprocess,
-<<<<<<< HEAD
-			BaselineCalls:   394,
-			BaselineFiles:   112,
-=======
-			BaselineCalls:   382,
-			BaselineFiles:   101,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
+			BaselineCalls:   401,
+			BaselineFiles:   108,
 			ReportedCalls:   380,
 			ReportedFiles:   98,
 			OwnerBead:       "ga-80po0c.2",
@@ -169,13 +154,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-<<<<<<< HEAD
-			BaselineCalls:   288,
-			BaselineFiles:   111,
-=======
-			BaselineCalls:   321,
-			BaselineFiles:   117,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
+			BaselineCalls:   286,
+			BaselineFiles:   113,
 			ReportedCalls:   295,
 			ReportedFiles:   114,
 			OwnerBead:       "ga-80po0c.2",
@@ -187,13 +167,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-<<<<<<< HEAD
-			BaselineCalls:   4326,
-			BaselineFiles:   203,
-=======
-			BaselineCalls:   4108,
-			BaselineFiles:   182,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
+			BaselineCalls:   4345,
+			BaselineFiles:   202,
 			ReportedCalls:   3960,
 			ReportedFiles:   184,
 			OwnerBead:       "ga-80po0c.2.3",
@@ -205,7 +180,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceCWD,
-			BaselineCalls:   285,
+			BaselineCalls:   284,
 			BaselineFiles:   43,
 			ReportedCalls:   98,
 			ReportedFiles:   13,
@@ -218,8 +193,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceSlowProcessGate,
-			BaselineCalls:   57,
-			BaselineFiles:   24,
+			BaselineCalls:   74,
+			BaselineFiles:   25,
 			ReportedCalls:   78,
 			ReportedFiles:   27,
 			OwnerBead:       "ga-80po0c.2.3",
@@ -231,7 +206,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceHTTPTestServer,
-			BaselineCalls:   317,
+			BaselineCalls:   300,
 			BaselineFiles:   66,
 			ReportedCalls:   255,
 			ReportedFiles:   56,
@@ -244,10 +219,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceNetListen,
-			BaselineCalls:   93,
-			BaselineFiles:   35,
-			ReportedCalls:   93,
-			ReportedFiles:   35,
+			BaselineCalls:   92,
+			BaselineFiles:   34,
+			ReportedCalls:   92,
+			ReportedFiles:   34,
 			OwnerBead:       "ga-80po0c.2.2",
 			Invariant:       "untagged net.Listen call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "each owning test closes its listener and removes duplicate listener-backed coverage",
@@ -320,17 +295,6 @@ var bootstrapPolicy = Ledger{
 		{
 			PackageDir:      "scripts",
 			PackageName:     "scripts_test",
-			Owner:           "TestDockerSessionProtocol",
-			Resources:       []Resource{ResourceSubprocess},
-			OwnerBead:       "ga-80po0c.23.1",
-			Invariant:       "Docker session adapter protocol proof is a checked Medium owner",
-			ResourceOwner:   "the one adapter subprocess is confined to TestDockerSessionProtocol and Docker itself is a strict PATH-injected fake",
-			MigrationTarget: "W6",
-			Expires:         "2026-10-01",
-		},
-		{
-			PackageDir:      "scripts",
-			PackageName:     "scripts_test",
 			Owner:           "TestProviderOverridesAndSuiteContractsCrossMakeIsolation",
 			Resources:       []Resource{ResourceSubprocess},
 			OwnerBead:       "ga-80po0c.2.1",
@@ -374,17 +338,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceSubprocess,
-<<<<<<< HEAD
-			BaselineCalls:   391,
-			BaselineFiles:   110,
+			BaselineCalls:   399,
+			BaselineFiles:   107,
 			ReportedCalls:   394,
 			ReportedFiles:   105,
-=======
-			BaselineCalls:   382,
-			BaselineFiles:   101,
-			ReportedCalls:   382,
-			ReportedFiles:   101,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small subprocess call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners remove or replace each process call site",
@@ -394,17 +351,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceFixedSleep,
-<<<<<<< HEAD
-			BaselineCalls:   288,
-			BaselineFiles:   111,
+			BaselineCalls:   286,
+			BaselineFiles:   113,
 			ReportedCalls:   287,
 			ReportedFiles:   113,
-=======
-			BaselineCalls:   321,
-			BaselineFiles:   117,
-			ReportedCalls:   321,
-			ReportedFiles:   117,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners replace elapsed wall time with lifecycle signals",
@@ -414,17 +364,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceEnvironment,
-<<<<<<< HEAD
-			BaselineCalls:   4320,
-			BaselineFiles:   203,
+			BaselineCalls:   4339,
+			BaselineFiles:   202,
 			ReportedCalls:   4348,
 			ReportedFiles:   200,
-=======
-			BaselineCalls:   4102,
-			BaselineFiles:   182,
-			ReportedCalls:   4102,
-			ReportedFiles:   182,
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 			OwnerBead:       "ga-80po0c.2.1",
 			Invariant:       "untagged Small cmd/gc environment call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners restore or eliminate every process-environment mutation",
@@ -434,7 +377,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceCWD,
-			BaselineCalls:   285,
+			BaselineCalls:   284,
 			BaselineFiles:   43,
 			ReportedCalls:   284,
 			ReportedFiles:   43,
@@ -447,8 +390,8 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeCmdGCUntagged,
 			Resource:        ResourceSlowProcessGate,
-			BaselineCalls:   57,
-			BaselineFiles:   24,
+			BaselineCalls:   74,
+			BaselineFiles:   25,
 			ReportedCalls:   75,
 			ReportedFiles:   25,
 			OwnerBead:       "ga-80po0c.2.1",
@@ -460,7 +403,7 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceHTTPTestServer,
-			BaselineCalls:   317,
+			BaselineCalls:   300,
 			BaselineFiles:   66,
 			ReportedCalls:   300,
 			ReportedFiles:   66,
@@ -473,10 +416,10 @@ var bootstrapPolicy = Ledger{
 		{
 			Scope:           ScopeUntagged,
 			Resource:        ResourceNetListen,
-			BaselineCalls:   93,
-			BaselineFiles:   35,
-			ReportedCalls:   93,
-			ReportedFiles:   35,
+			BaselineCalls:   92,
+			BaselineFiles:   34,
+			ReportedCalls:   92,
+			ReportedFiles:   34,
 			OwnerBead:       "ga-80po0c.2.2",
 			Invariant:       "untagged Small net.Listen call/file totals cannot grow; reductions must lower this baseline",
 			ResourceOwner:   "non-Medium lexical owners move listener-backed tests to exact Medium ownership or replace the listener",

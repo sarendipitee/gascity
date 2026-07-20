@@ -83,7 +83,6 @@ func TestResetConfiguredNamedSessionForConfigDrift_PreservesSessionKeyOnContinua
 		t.Fatalf("prepareStartCandidateForCity: %v", err)
 	}
 
-<<<<<<< HEAD
 	if _, err := startPreparedStartCandidate(
 		context.Background(),
 		*prepared,
@@ -93,10 +92,8 @@ func TestResetConfiguredNamedSessionForConfigDrift_PreservesSessionKeyOnContinua
 		cfg,
 		nil,
 		immediateSessionStaleKeyDetectionWaiter,
+		nil,
 	); err != nil {
-=======
-	if _, err := startPreparedStartCandidate(context.Background(), *prepared, "", env.store, env.sp, cfg, nil, nil); err != nil {
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 		t.Fatalf("startPreparedStartCandidate: %v", err)
 	}
 
