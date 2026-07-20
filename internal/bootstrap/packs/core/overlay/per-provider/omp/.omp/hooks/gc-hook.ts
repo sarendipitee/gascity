@@ -79,9 +79,10 @@ export default function gascityOmpExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    const work = run(["hook", "--inject"], ctx.cwd);
     const nudges = run(["nudge", "drain", "--inject"], ctx.cwd);
     const mail = run(["mail", "check", "--inject"], ctx.cwd);
-    const systemPrompt = appendSystemPrompt(event.systemPrompt, [nudges, mail]);
+    const systemPrompt = appendSystemPrompt(event.systemPrompt, [work, nudges, mail]);
     if (systemPrompt !== event.systemPrompt) {
       return { systemPrompt };
     }
