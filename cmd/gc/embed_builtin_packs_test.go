@@ -368,6 +368,8 @@ func TestBundledOmpHookPublishesProviderSessionID(t *testing.T) {
 		`pi.on("session_start"`,
 		`pi.on("session_compact"`,
 		`pi.on("before_agent_start"`,
+		`run(["hook", "--inject"], ctx.cwd)`,
+		`appendSystemPrompt(event.systemPrompt, [work, nudges, mail])`,
 		`GC_PROVIDER_SESSION_ID`,
 		`GC_PROVIDER_SESSION_ID_REQUIRED`,
 		`stdio: ["ignore", "pipe", "inherit"]`,
