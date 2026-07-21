@@ -118,6 +118,23 @@ func TestCascadeNudgeRoutesCrossRig(t *testing.T) {
 	}
 }
 
+// TestCascadeNudgeFallsBackToRoutedPool guards the unblock-after-drain path.
+// A pool worker may release its assignment before the blocker closes, leaving
+// the now-runnable dependent unassigned but still routed to the pool base.
+// The cascade must use gc.routed_to and enumerate active pool members.
+func TestCascadeNudgeFallsBackToRoutedPool(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "assets/scripts/cascade-nudge-on-blocker-close.sh")
+	if err != nil {
+		t.Fatalf("reading cascade-nudge-on-blocker-close.sh: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{".metadata.\"gc.routed_to\"", "gc session list", "--template \"$routed_to\""} {
+		if !strings.Contains(body, want) {
+			t.Errorf("cascade-nudge script must wake an unassigned routed pool; missing %q", want)
+		}
+	}
+}
+
 // TestNudgeOnRouteResolvesPoolMembers guards the pool-base fan-out: a
 // multi-session pool routes to the pool BASE (sling's NormalizePoolRouteTarget
 // collapses slot -> base), which is the members' template, not a session name

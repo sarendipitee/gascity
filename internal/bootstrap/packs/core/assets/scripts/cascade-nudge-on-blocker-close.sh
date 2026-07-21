@@ -110,16 +110,23 @@ while IFS= read -r blocker; do
             --direction=up --type=blocks --json 2>/dev/null)" || continue
     if [ -z "$DEPS" ] || [ "$DEPS" = "[]" ]; then continue; fi
 
-    # Dependents that are still open/deferred and have an assignee to nudge.
+    # Dependents that are still open/deferred need a wake signal even after
+    # their prior pool assignment was released. Prefer the concrete assignee;
+    # otherwise fall back to gc.routed_to and fan a pool base out to its active
+    # members. Without the routed fallback, a blocker can close after the old
+    # worker drains and leave newly runnable work unassigned forever.
     ROWS="$(printf '%s' "$DEPS" \
         | jq -r '.[]
-                 | select((.status == "open" or .status == "deferred")
-                          and (.assignee != null and .assignee != ""))
-                 | [.id, .assignee] | @tsv' 2>/dev/null)" || ROWS=""
+                 | select(.status == "open" or .status == "deferred")
+                 | [.id,
+                    (.assignee // ""),
+                    (.metadata."gc.routed_to" // "")]
+                 | select(.[1] != "" or .[2] != "")
+                 | @tsv' 2>/dev/null)" || ROWS=""
     [ -n "$ROWS" ] || continue
 
-    while IFS="$(printf '\t')" read -r dep_id assignee; do
-        if [ -z "$dep_id" ] || [ -z "$assignee" ]; then continue; fi
+    while IFS="$(printf '\t')" read -r dep_id assignee routed_to; do
+        if [ -z "$dep_id" ]; then continue; fi
         key="$blocker|$dep_id"
         if echo "$STATE" | jq -e --arg k "$key" 'has($k)' >/dev/null 2>&1; then
             STATE="$(echo "$STATE" | jq --arg k "$key" --arg now "$NOW" '.[$k] = $now')"
@@ -127,7 +134,24 @@ while IFS= read -r blocker; do
         fi
         set_rig_args "$dep_id"
         msg="blocker $blocker closed — your dependent $dep_id may be unblocked"
-        if gc session nudge ${RIG_ARG1:+"$RIG_ARG1" "$RIG_ARG2"} "$assignee" "$msg" >/dev/null 2>&1; then
+        nudged=1
+        if [ -n "$assignee" ]; then
+            gc session nudge ${RIG_ARG1:+"$RIG_ARG1" "$RIG_ARG2"} "$assignee" "$msg" >/dev/null 2>&1 && nudged=0
+        elif [ -n "$routed_to" ]; then
+            members="$(gc session list ${RIG_ARG1:+"$RIG_ARG1" "$RIG_ARG2"} --json --state active --template "$routed_to" 2>/dev/null \
+                | jq -r '(.sessions // [])[] | .name // .id' 2>/dev/null)" || members=""
+            if [ -n "$members" ]; then
+                while IFS= read -r member; do
+                    [ -n "$member" ] || continue
+                    gc session nudge ${RIG_ARG1:+"$RIG_ARG1" "$RIG_ARG2"} "$member" "$msg" >/dev/null 2>&1 && nudged=0
+                done <<MEMBERS
+$members
+MEMBERS
+            else
+                gc session nudge ${RIG_ARG1:+"$RIG_ARG1" "$RIG_ARG2"} "$routed_to" "$msg" >/dev/null 2>&1 && nudged=0
+            fi
+        fi
+        if [ "$nudged" -eq 0 ]; then
             STATE="$(echo "$STATE" | jq --arg k "$key" --arg now "$NOW" '.[$k] = $now')"
             NUDGED=$((NUDGED + 1))
         fi
