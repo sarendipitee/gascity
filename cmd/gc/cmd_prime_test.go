@@ -400,6 +400,122 @@ prompt_template = "prompts/polecat.template.md"
 	}
 }
 
+func TestDoPrimeWithHookFormat_DirectIncludesActiveFormulaStep(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	promptDir := filepath.Join(cityDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "worker.md"), []byte("worker prompt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.md"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	mol := mustCreateInProgressStore(t, store, beads.Bead{Title: "Formula: mol-worker", Type: "molecule", Assignee: "worker"})
+	step := mustCreateInProgressStore(t, store, beads.Bead{
+		Title: "Step 1: implement widget", Description: "Write the widget code", Type: "step", Assignee: "worker", ParentID: mol.ID,
+	})
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_ALIAS", "")
+	t.Setenv("GC_AGENT", "worker")
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat(nil, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{step.Title, step.ID, step.Description} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want active formula step substring %q", stdout.String(), want)
+		}
+	}
+	if count := strings.Count(stdout.String(), "<system-reminder>"); count != 1 {
+		t.Fatalf("stdout contains %d system reminders, want exactly 1: %q", count, stdout.String())
+	}
+}
+
+func TestDoPrimeWithHookFormat_ExplicitAgentIncludesActiveFormulaStep(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	mol := mustCreateInProgressStore(t, store, beads.Bead{Title: "Formula: mol-worker", Type: "molecule", Assignee: "worker"})
+	step := mustCreateInProgressStore(t, store, beads.Bead{Title: "Step 1: explicit invocation", Description: "Injected through argv", Type: "step", Assignee: "worker", ParentID: mol.ID})
+	t.Setenv("GC_CITY", cityDir)
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat([]string{"worker"}, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{step.Title, step.ID, step.Description} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want active formula step substring %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestDoPrimeWithHookFormat_DirectWithoutActiveFormulaStepDoesNotInject(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	promptDir := filepath.Join(cityDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "worker.md"), []byte("worker prompt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.md"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_ALIAS", "worker")
+	t.Setenv("GC_AGENT", "worker")
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat(nil, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "<system-reminder>") {
+		t.Fatalf("stdout = %q, want no formula step reminder", stdout.String())
+	}
+}
+
 func TestDoPrimeWithHook_StartupPromptDeliveryEnvControlsPromptSuppression(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
@@ -693,6 +809,9 @@ prompt_template = "prompts/worker.md"
 				if !strings.Contains(context, want) {
 					t.Fatalf("additionalContext = %q, want step reminder substring %q", context, want)
 				}
+			}
+			if count := strings.Count(context, "<system-reminder>"); count != 1 {
+				t.Fatalf("additionalContext contains %d system reminders, want exactly 1: %q", count, context)
 			}
 			if !strings.Contains(context, "[gastown] worker") {
 				t.Fatalf("additionalContext = %q, want hook beacon", context)
