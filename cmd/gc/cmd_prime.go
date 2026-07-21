@@ -206,10 +206,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			writePrimePromptWithFormat(stdout, "", "", "", hookMode, hookFormat, false, "")
 			return 0
 		}
-		var stepReminder string
-		if hookMode {
-			stepReminder = wispStepInjectionContent("")
-		}
+		stepReminder := wispStepInjectionContent("", agentName)
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 		return 0
 	}
@@ -226,10 +223,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: loading city config: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		var stepReminder string
-		if hookMode {
-			stepReminder = wispStepInjectionContent(cityPath)
-		}
+		stepReminder := wispStepInjectionContent(cityPath, agentName)
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 		return 0
 	}
@@ -343,10 +337,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
 				packDirs, fragments, nil)
 			if prompt != "" {
-				var stepReminder string
-				if hookMode {
-					stepReminder = wispStepInjectionContent(cityPath)
-				}
+				stepReminder := wispStepInjectionContent(cityPath, agentName)
 				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, prompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 				return 0
 			}
@@ -370,10 +361,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			}
 			if promptFile != "" {
 				if content, fErr := os.ReadFile(promptFile); fErr == nil {
-					var stepReminder string
-					if hookMode {
-						stepReminder = wispStepInjectionContent(cityPath)
-					}
+					stepReminder := wispStepInjectionContent(cityPath, agentName)
 					writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt, stepReminder)
 					return 0
 				}
@@ -385,10 +373,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 	// when the agent has no prompt_template and doesn't match a builtin
 	// worker prompt — a supported config shape, so the default prompt is
 	// the correct output even under --strict.
-	var stepReminder string
-	if hookMode {
-		stepReminder = wispStepInjectionContent(cityPath)
-	}
+	stepReminder := wispStepInjectionContent(cityPath, agentName)
 	writePrimePromptWithFormat(stdout, cityName, agentName, defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 	return 0
 }
@@ -565,11 +550,13 @@ func writePrimePromptWithFormat(stdout io.Writer, cityName, agentName, prompt st
 	}
 	if hookMode {
 		prompt = prependHookBeacon(cityName, agentName, prompt)
-		// The step reminder is hook-only context, not the startup prompt, so it
-		// survives suppression — managed SessionStart hooks still carry it. Folded
-		// into the single write below to keep exactly one provider hook context.
-		prompt += hookContextSuffix
+		// Fold the step reminder into the single provider write below to keep
+		// exactly one hook context document.
 	}
+	// The assigned formula step is runtime context for both direct prime and
+	// provider hooks. It survives hook prompt suppression because it is not part
+	// of the startup prompt itself.
+	prompt += hookContextSuffix
 	if hookMode && hookFormat != "" {
 		_ = writeProviderHookContextForEvent(stdout, hookFormat, "SessionStart", prompt)
 		return
