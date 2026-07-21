@@ -32,6 +32,7 @@ var (
 	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
 	_ runtime.TransportCapabilityProvider   = (*Provider)(nil)
 	_ runtime.RelaunchProvider              = (*Provider)(nil)
+	_ runtime.LivenessObserver              = (*Provider)(nil)
 )
 
 // New creates a composite provider. defaultSP handles sessions not
@@ -220,6 +221,16 @@ func (p *Provider) Attach(name string) error {
 // ProcessAlive delegates to the routed backend.
 func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	return p.route(name).ProcessAlive(name, processNames)
+}
+
+// ObserveLiveness delegates to the routed backend through runtime.ObserveLiveness
+// so the backend's native LivenessObserver fast-path is preserved — e.g. herdr's
+// agent-status liveness. Without this, wrapping a LivenessObserver backend in an
+// auto router would silently collapse it to the generic IsRunning+ProcessAlive
+// fold (the fragile process-table walk), reintroducing the singleton
+// restart-loop for any city that also routes some sessions to ACP.
+func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
+	return runtime.ObserveLiveness(p.route(name), name, processNames)
 }
 
 // Nudge delegates to the routed backend.
