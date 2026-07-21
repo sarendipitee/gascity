@@ -451,7 +451,7 @@ func cmdNudgeDrainWithFormat(args []string, inject bool, hookFormat string, stdo
 		return 1
 	}
 	if inject {
-		wispExtra = wispStepInjectionContent(target.cityPath)
+		wispExtra = wispStepInjectionContent(target.cityPath, "")
 	}
 
 	now := time.Now()

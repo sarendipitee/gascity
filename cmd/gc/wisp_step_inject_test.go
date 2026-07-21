@@ -36,9 +36,9 @@ func mustCreateInProgress(t *testing.T, store *beads.MemStore, b beads.Bead) bea
 	return created
 }
 
-func TestResolveActiveWispStep_FoundWithDescription(t *testing.T) {
+func TestResolveActiveWispStep_OrdinaryAssignedTaskWithDescription(t *testing.T) {
 	store := beads.NewMemStore()
-	created := mustCreateInProgress(t, store, beads.Bead{
+	mustCreateInProgress(t, store, beads.Bead{
 		Title:       "Implement feature X",
 		Description: "Write the code for feature X",
 		Type:        "task",
@@ -49,11 +49,8 @@ func TestResolveActiveWispStep_FoundWithDescription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b == nil {
-		t.Fatal("expected bead, got nil")
-	}
-	if b.ID != created.ID {
-		t.Errorf("got ID %q, want %q", b.ID, created.ID)
+	if b != nil {
+		t.Fatalf("expected nil for ordinary assigned task, got %+v", b)
 	}
 }
 
@@ -94,19 +91,102 @@ func TestResolveActiveWispStep_WrongAssignee(t *testing.T) {
 
 func TestResolveActiveWispStep_MultipleAssignees(t *testing.T) {
 	store := beads.NewMemStore()
-	mustCreateInProgress(t, store, beads.Bead{
-		Title:       "Work for bob",
-		Description: "Bob's work",
-		Type:        "task",
+	mol := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Formula for bob",
+		Type:     "molecule",
+		Assignee: "bob",
+	})
+	step := mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Bob's formula step",
+		Description: "Do the formula work",
+		Type:        "step",
 		Assignee:    "bob",
+		ParentID:    mol.ID,
 	})
 
 	b, err := resolveActiveWispStep(store, []string{"alice", "bob"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b == nil {
-		t.Fatal("expected bead via secondary assignee match, got nil")
+	if b == nil || b.ID != step.ID {
+		t.Fatalf("got %+v, want step %s via secondary assignee match", b, step.ID)
+	}
+}
+
+func TestResolveActiveWispStep_PrefersInvocationIdentityOverNewerFallbackMolecule(t *testing.T) {
+	store := beads.NewMemStore()
+	invocationRoot := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Invocation formula",
+		Type:     "molecule",
+		Assignee: "invocation-agent",
+	})
+	invocationStep := mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Invocation step",
+		Description: "Do invocation work",
+		Type:        "step",
+		ParentID:    invocationRoot.ID,
+	})
+
+	fallbackRoot := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Newer fallback formula",
+		Type:     "molecule",
+		Assignee: "fallback-agent",
+	})
+	mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Fallback step",
+		Description: "Do fallback work",
+		Type:        "step",
+		ParentID:    fallbackRoot.ID,
+	})
+
+	b, err := resolveActiveWispStep(store, []string{"invocation-agent", "fallback-agent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b == nil || b.ID != invocationStep.ID {
+		t.Fatalf("got %+v, want invocation step %s", b, invocationStep.ID)
+	}
+}
+
+func TestResolveActiveWispStep_PrefersInvocationBridgeOverFallbackDirectRoot(t *testing.T) {
+	store := beads.NewMemStore()
+	invocationRoot := mustCreateInProgress(t, store, beads.Bead{
+		Title: "Invocation attached formula",
+		Type:  "molecule",
+	})
+	invocationStep := mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Invocation attached step",
+		Description: "Do invocation attached work",
+		Type:        "step",
+		ParentID:    invocationRoot.ID,
+	})
+	invocationSource := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Invocation attached source",
+		Type:     "task",
+		Assignee: "invocation-agent",
+	})
+	if err := store.SetMetadata(invocationSource.ID, beadmeta.MoleculeIDMetadataKey, invocationRoot.ID); err != nil {
+		t.Fatalf("SetMetadata(invocation molecule_id): %v", err)
+	}
+
+	fallbackRoot := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Fallback direct formula",
+		Type:     "molecule",
+		Assignee: "fallback-agent",
+	})
+	mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Fallback direct step",
+		Description: "Do fallback direct work",
+		Type:        "step",
+		ParentID:    fallbackRoot.ID,
+	})
+
+	b, err := resolveActiveWispStep(store, []string{"invocation-agent", "fallback-agent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b == nil || b.ID != invocationStep.ID {
+		t.Fatalf("got %+v, want invocation bridged step %s", b, invocationStep.ID)
 	}
 }
 
@@ -245,6 +325,44 @@ func TestResolveActiveWispStep_WispTypeMolecule(t *testing.T) {
 	}
 }
 
+func TestResolveActiveWispStep_PrefersNewerWispOverOlderMoleculeForSameAssignee(t *testing.T) {
+	store := beads.NewMemStore()
+
+	olderMolecule := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Older molecule",
+		Type:     "molecule",
+		Assignee: "alice",
+	})
+	mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Older molecule step",
+		Description: "Do the older molecule work",
+		Type:        "step",
+		Assignee:    "alice",
+		ParentID:    olderMolecule.ID,
+	})
+
+	newerWisp := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Newer wisp",
+		Type:     "wisp",
+		Assignee: "alice",
+	})
+	newerWispStep := mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Newer wisp step",
+		Description: "Do the newer wisp work",
+		Type:        "step",
+		Assignee:    "alice",
+		ParentID:    newerWisp.ID,
+	})
+
+	b, err := resolveActiveWispStep(store, []string{"alice"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b == nil || b.ID != newerWispStep.ID {
+		t.Fatalf("got %+v, want newer wisp step %s", b, newerWispStep.ID)
+	}
+}
+
 // TestResolveActiveWispStep_AttachedMoleculeIDBridge covers the attached (v1)
 // formula shape: only the source work bead is assigned to the agent and
 // in-progress, and it carries a molecule_id pointing at a molecule root that is
@@ -295,6 +413,71 @@ func TestResolveActiveWispStep_AttachedMoleculeIDBridge(t *testing.T) {
 	}
 }
 
+func TestResolveActiveWispStep_PrefersInvocationIdentityOverNewerFallbackBridge(t *testing.T) {
+	store := beads.NewMemStore()
+	invocationRoot := mustCreateInProgress(t, store, beads.Bead{Title: "Invocation bridge formula", Type: "molecule"})
+	invocationStep := mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Invocation bridged step",
+		Description: "Do invocation bridge work",
+		Type:        "step",
+		ParentID:    invocationRoot.ID,
+	})
+	invocationSource := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Invocation source",
+		Type:     "task",
+		Assignee: "invocation-agent",
+	})
+	if err := store.SetMetadata(invocationSource.ID, beadmeta.MoleculeIDMetadataKey, invocationRoot.ID); err != nil {
+		t.Fatalf("SetMetadata(invocation molecule_id): %v", err)
+	}
+
+	fallbackRoot := mustCreateInProgress(t, store, beads.Bead{Title: "Newer fallback bridge formula", Type: "molecule"})
+	mustCreateInProgress(t, store, beads.Bead{
+		Title:       "Fallback bridged step",
+		Description: "Do fallback bridge work",
+		Type:        "step",
+		ParentID:    fallbackRoot.ID,
+	})
+	fallbackSource := mustCreateInProgress(t, store, beads.Bead{
+		Title:    "Newer fallback source",
+		Type:     "task",
+		Assignee: "fallback-agent",
+	})
+	if err := store.SetMetadata(fallbackSource.ID, beadmeta.MoleculeIDMetadataKey, fallbackRoot.ID); err != nil {
+		t.Fatalf("SetMetadata(fallback molecule_id): %v", err)
+	}
+
+	b, err := resolveActiveWispStep(store, []string{"invocation-agent", "fallback-agent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b == nil || b.ID != invocationStep.ID {
+		t.Fatalf("got %+v, want invocation bridged step %s", b, invocationStep.ID)
+	}
+}
+
+func TestResolveActiveWispStep_IgnoresBridgeToNonFormulaRoot(t *testing.T) {
+	store := beads.NewMemStore()
+	root := mustCreateInProgress(t, store, beads.Bead{Title: "Ordinary parent", Type: "task"})
+	mustCreateInProgress(t, store, beads.Bead{
+		Title: "Unrelated child", Description: "Do not inject", Type: "step", ParentID: root.ID,
+	})
+	source := mustCreateInProgress(t, store, beads.Bead{
+		Title: "Assigned work", Description: "Ordinary task", Type: "task", Assignee: "alice",
+	})
+	if err := store.SetMetadata(source.ID, beadmeta.MoleculeIDMetadataKey, root.ID); err != nil {
+		t.Fatalf("SetMetadata(molecule_id): %v", err)
+	}
+
+	b, err := resolveActiveWispStep(store, []string{"alice"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b != nil {
+		t.Fatalf("expected nil for bridge to non-formula root, got %+v", b)
+	}
+}
+
 func TestFormatWispStepReminder_ContainsKeyContent(t *testing.T) {
 	b := &beads.Bead{
 		ID:          "gcy-abc",
@@ -331,7 +514,7 @@ func TestWispStepAssignees_Dedup(t *testing.T) {
 	t.Setenv("GC_SESSION_NAME", "alice") // duplicate
 	t.Setenv("GC_SESSION_ID", "sess-123")
 
-	got := wispStepAssignees()
+	got := wispStepAssignees("")
 	if len(got) != 2 {
 		t.Fatalf("expected 2 unique assignees, got %d: %v", len(got), got)
 	}
@@ -340,12 +523,29 @@ func TestWispStepAssignees_Dedup(t *testing.T) {
 	}
 }
 
+func TestWispStepAssignees_InvocationAgentPrecedesEnvironment(t *testing.T) {
+	t.Setenv("GC_ALIAS", "alias")
+	t.Setenv("GC_SESSION_NAME", "session")
+	t.Setenv("GC_SESSION_ID", "alias")
+
+	got := wispStepAssignees("invocation")
+	want := []string{"invocation", "alias", "session"}
+	if len(got) != len(want) {
+		t.Fatalf("wispStepAssignees() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("wispStepAssignees() = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestWispStepAssignees_Empty(t *testing.T) {
 	t.Setenv("GC_ALIAS", "")
 	t.Setenv("GC_SESSION_NAME", "")
 	t.Setenv("GC_SESSION_ID", "")
 
-	got := wispStepAssignees()
+	got := wispStepAssignees("")
 	if len(got) != 0 {
 		t.Fatalf("expected empty, got %v", got)
 	}
