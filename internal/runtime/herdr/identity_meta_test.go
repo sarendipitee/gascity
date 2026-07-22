@@ -2,24 +2,25 @@ package herdr
 
 import "testing"
 
-// TestStampIdentityMeta pins the start-time identity stamp: the reconciler
-// binds a live runtime to its session bead by probing GC_SESSION_ID /
-// GC_INSTANCE_TOKEN / GC_RUNTIME_EPOCH via GetMeta, so Start must make them
-// readable the moment the agent exists — not after the (up to a minute)
-// startup delivery completes. An empty or missing env key stays unstamped.
-func TestStampIdentityMeta(t *testing.T) {
+// TestSeedMetaFromEnv pins the start-time metadata seed. Herdr has no native
+// session environment, so Start mirrors cfg.Env into its metadata sidecar;
+// ownership keys must be readable as soon as the agent exists and the rest of
+// the environment follows tmux's GetMeta contract.
+func TestSeedMetaFromEnv(t *testing.T) {
 	p := New("gctest-identity-meta", t.TempDir(), t.TempDir(), 0)
-	p.stampIdentityMeta("canary", map[string]string{
+	if err := p.seedMetaFromEnv("canary", map[string]string{
 		"GC_SESSION_ID":     "gm-abc123",
 		"GC_INSTANCE_TOKEN": "tok-1",
 		"GC_RUNTIME_EPOCH":  "3",
 		"GC_CITY":           "not-an-identity-key",
-	})
+	}); err != nil {
+		t.Fatalf("seedMetaFromEnv: %v", err)
+	}
 	for key, want := range map[string]string{
 		"GC_SESSION_ID":     "gm-abc123",
 		"GC_INSTANCE_TOKEN": "tok-1",
 		"GC_RUNTIME_EPOCH":  "3",
-		"GC_CITY":           "",
+		"GC_CITY":           "not-an-identity-key",
 	} {
 		got, err := p.GetMeta("canary", key)
 		if err != nil {
@@ -30,7 +31,9 @@ func TestStampIdentityMeta(t *testing.T) {
 		}
 	}
 
-	p.stampIdentityMeta("empty", map[string]string{"GC_SESSION_ID": ""})
+	if err := p.seedMetaFromEnv("empty", map[string]string{"GC_SESSION_ID": ""}); err != nil {
+		t.Fatalf("seedMetaFromEnv empty: %v", err)
+	}
 	if got, _ := p.GetMeta("empty", "GC_SESSION_ID"); got != "" {
 		t.Errorf("empty env value stamped as %q, want unstamped", got)
 	}
