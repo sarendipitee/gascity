@@ -6,8 +6,8 @@
 Go source through parsed syntax and import identity, while only `*_test.go`
 files contribute resource occurrences. The raw audit and source-debt rows
 freeze process, sleep, environment, CWD, slow-process, HTTP test-server, and
-package-level `net.Listen`, `net.ListenConfig.Listen`, `net.ListenUnixgram`,
-and direct `syscall.Listen` call/file totals.
+package-level `net` stream/packet listeners, `net.ListenConfig` listeners,
+direct `syscall.Listen`, and typed or literal tmux dependency call/file totals.
 Exact Medium rows name a repository-relative directory, package clause,
 top-level runnable owner, and resource list. Small-debt rows apply those exact
 owners without weakening the raw anti-growth ratchets.
@@ -33,13 +33,22 @@ calls inside `TestMain`, never sibling tests.
 This bootstrap does **not** infer resources recursively through arbitrary
 helper calls or claim a complete shared-resource inventory. P0.4c currently
 covers the three `net/http/httptest` constructors that open loopback servers
-and the exact package-level `net.Listen` and `net.ListenUnixgram` constructors,
-`net.ListenConfig.Listen` on lexically identified receivers, and direct
-`syscall.Listen`. Direct `syscall.Socket`/`Bind` setup calls, typed and
-packet-specific `net` constructors, helper-backed listeners whose constructors
-live outside test source, tmux, Dolt, and other shared-host resources remain
-explicit follow-up catalogs. A Medium resource may describe a helper-backed
-runtime cost, but only syntax-owned calls in that exact runnable declaration
+and the exact package-level stream constructors `net.Listen`, `net.ListenTCP`,
+and `net.ListenUnix`; packet constructors `net.ListenPacket`, `net.ListenUDP`,
+`net.ListenIP`, `net.ListenUnixgram`, and `net.ListenMulticastUDP`;
+`net.ListenConfig.Listen` and `ListenPacket` on lexically identified receivers;
+and direct `syscall.Listen`. The tmux catalog recognizes canonical `test/tmuxtest`
+namespace/lifecycle helpers, imported `internal/runtime/tmux` production
+constructors, and literal `os/exec` tmux commands and probes. Its untagged
+source census is 6 calls in 2 files, all owned by exact Medium `TestMain`
+rows; build-tagged calls remain E1 Large inventory rather than being relabeled
+Medium. `NewSocketParentDir`, `HoldAliveSentinel`, and the PID-directory
+helpers remain part of the separate shared-host resource tail. Direct
+`syscall.Socket`/`Bind` setup calls, `net.FileListener`/`FilePacketConn`
+descriptor duplication, helper-backed listeners whose constructors live
+outside test source, Dolt, and other shared-host resources remain explicit
+follow-up catalogs. A Medium resource may describe a helper-backed runtime
+cost, but only syntax-owned calls in that exact runnable declaration
 leave Small-debt accounting. The `ListenConfig` matcher uses lexical Go types
 to follow same-file values, pointers, parameters, aliases, and typed factory
 results rooted in the imported `net.ListenConfig` type; it does not load
@@ -48,8 +57,10 @@ cross-file package bodies or host toolchain export data.
 separately owns Large journey and provider entries.
 
 The scanner recognizes direct calls to `os/exec.Command{,Context}` and
-`time.Sleep`; package-level `net.Listen` and `net.ListenUnixgram`;
-`net.ListenConfig.Listen` on identified receivers; direct `syscall.Listen`;
+`time.Sleep`; package-level `net.Listen`, `ListenTCP`, `ListenUnix`,
+`ListenPacket`, `ListenUDP`, `ListenIP`, `ListenUnixgram`, and
+`ListenMulticastUDP`; `net.ListenConfig.Listen` and `ListenPacket` on identified
+receivers; direct `syscall.Listen`;
 `net/http/httptest.NewServer`,
 `NewTLSServer`, and `NewUnstartedServer`; `os.Setenv`, `os.Unsetenv`,
 `os.Clearenv`, and `os.Chdir`; and
