@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/proctable"
 	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
@@ -122,20 +123,30 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
+	// Seed the metadata sidecar from cfg.Env NOW, before the (long) startup
+	// delivery below. tmux gets this for free — its GetMeta reads the tmux
+	// session environment, which new-session initializes from cfg.Env — but
+	// herdr's meta store is a sidecar populated only by SetMeta. The reconciler's
+	// pending-create ownership check (runningSessionMatchesPendingCreateInfo)
+	// reads GC_SESSION_ID / GC_INSTANCE_TOKEN via GetMeta on ticks that fire
+	// while Start is still waiting for the agent to idle; with an unseeded
+	// sidecar it misreads the fresh runtime as "live runtime belongs to another
+	// session" and reaps it seconds after a successful start.
+	//
+	// Seeding the whole env also persists GC_SESSION_ID, which ProcessAlive's
+	// session-scoped tree-walk widening reads (herdr does not capture the
+	// creation environment the way tmux does): process env survives reparenting
+	// (only ppid changes), so this is what lets the walk find the agent when it
+	// is no longer a descendant of the pane's shell/foreground PIDs. Stop clears
+	// the whole meta dir, so teardown is covered.
+	if err := p.seedMetaFromEnv(name, cfg.Env); err != nil {
+		return fmt.Errorf("herdr: seed session metadata for %q: %w", name, err)
+	}
 	// herdr auto-spawns a stray shell pane when it creates a workspace/tab; close
 	// it so the tab holds only the agent.
 	if strayPane != "" && strayPane != info.PaneID {
 		_ = p.c.closePane(ctx, strayPane)
 	}
-	// Mirror the session's identity keys from cfg.Env into the metadata
-	// sidecar now, before the slow startup delivery below. tmux exposes
-	// identity instantly (env injected at session creation, readable via
-	// GetMeta); herdr's GetMeta reads the sidecar, which callers stamp only
-	// after Start returns — leaving the agent alive-but-anonymous for the
-	// whole delivery wait (up to startupNudgeIdleTimeout). Any reconcile
-	// poked into that window judged the live runtime as belonging to no
-	// session and rolled back the pending create (live-verified churn).
-	p.stampIdentityMeta(name, cfg.Env)
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
 	//
@@ -172,10 +183,8 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if startupText != "" && info.PaneID != "" {
 		if err := p.c.deliverNudge(ctx, info.PaneID, name, startupText); err != nil {
 			// Best-effort: the submit didn't confirm (TUI race under boot load).
-			// Surface it rather than silently leaving a stranded startup turn; the
-			// warm-bind claim nudge (startPreparedStartCandidate's warm-reuse branch)
-			// re-delivers on the next reconcile tick — by then the slot is running with
-			// its trigger still unclaimed, which is precisely that hook's condition.
+			// Surface it rather than silently leaving a stranded startup turn;
+			// nudgeStalledPoolClaims is the reconcile-tick backstop of last resort.
 			fmt.Fprintf(os.Stderr, "herdr: startup delivery for %q not confirmed: %v\n", name, err) //nolint:errcheck // best-effort diagnostic
 		}
 	}
@@ -194,6 +203,11 @@ func (p *Provider) runPreStart(ctx context.Context, cfg runtime.Config) error {
 	setupEnv := make(map[string]string, len(cfg.Env))
 	for k, v := range cfg.Env {
 		setupEnv[k] = v
+	}
+	if workDir := strings.TrimSpace(setupEnv["GC_DIR"]); workDir != "" {
+		if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
+			setupEnv["GC_DIR"] = p.c.cityRoot
+		}
 	}
 	for i, cmd := range cfg.PreStart {
 		if err := runtime.RunSetupCommand(ctx, cmd, setupEnv, p.setupTimeout); err != nil {
@@ -240,20 +254,39 @@ func hasSessionSetup(cfg runtime.Config) bool {
 }
 
 // startupDeliveryText resolves the first-turn text Start delivers to a freshly
-// spawned agent. A pool/sling slot carries its claim instruction in cfg.Nudge and
-// is delivered unchanged (it takes precedence, so the working pool path is
-// untouched). A named always-awake Claude session instead carries its behavioral
-// prime in cfg.PromptSuffix (PromptMode=arg, shell-quoted for argv use that herdr's
-// exec launch has no slot for); unquote it — mirroring the parts[0] round-trip used
-// on the resume path in session_lifecycle_parallel.go — and deliver it through the
-// same post-idle paste+submit path. Returns "" when there is nothing to deliver
-// (deterministic workers, suppressed startup prompt). Falls back to the raw string
-// if PromptSuffix somehow fails to unquote: delivering something beats stranding the
-// agent idle.
+// spawned agent. Two independent sources, mirroring the tmux provider — which
+// rides the behavioral prime on the launch arg (buildLaunchCommand) and sends the
+// nudge as a separate Step-6 keystroke:
+//
+//   - a named always-awake Claude session carries its behavioral prime in
+//     cfg.PromptSuffix (PromptMode=arg, shell-quoted for argv use that herdr's
+//     exec launch has no slot for); startupPrimeText unquotes it.
+//   - a pool/sling slot carries its claim instruction in cfg.Nudge.
+//
+// A session may carry BOTH — a named session whose pack also configures a startup
+// nudge (e.g. an oversight tick). Deliver the prime first (the behavioral prompt)
+// then the nudge (the first task): returning only the nudge left such sessions
+// unprimed, because the prime was dropped and GC_STARTUP_PROMPT_DELIVERED=1 also
+// suppresses the SessionStart hook's fallback copy of the prime. A pool slot has
+// no prime, so its claim nudge is returned byte-for-byte unchanged. Returns ""
+// when there is nothing to deliver (deterministic workers, suppressed prompt).
 func startupDeliveryText(cfg runtime.Config) string {
-	if cfg.Nudge != "" {
+	prime := startupPrimeText(cfg)
+	if prime == "" {
 		return cfg.Nudge
 	}
+	if cfg.Nudge == "" {
+		return prime
+	}
+	return prime + "\n\n" + cfg.Nudge
+}
+
+// startupPrimeText recovers the behavioral prime from cfg.PromptSuffix, which is
+// shell-quoted for the launch-arg slot that herdr's exec launch lacks — mirroring
+// the parts[0] round-trip used on the resume path in session_lifecycle_parallel.go.
+// Falls back to the raw string if it somehow fails to unquote: delivering
+// something beats stranding the agent idle. Returns "" when no prime is set.
+func startupPrimeText(cfg runtime.Config) string {
 	if cfg.PromptSuffix == "" {
 		return ""
 	}
@@ -319,6 +352,17 @@ func (p *Provider) Attach(name string) error {
 
 // ProcessAlive reports whether the agent's pane has a live foreground process,
 // optionally requiring one of processNames to be present.
+//
+// Foreground-process matching alone misses an agent that runs as a
+// descendant of a wrapper process rather than as the pane's foreground itself
+// — e.g. a mayor session launched under macOS `caffeinate` (a keep-awake
+// wrapper): caffeinate stays the pane's reported foreground for the agent's
+// entire lifetime, with the agent running underneath it as a child. That
+// foreground-only check reports Alive=false for a session that is very much
+// alive, which upstream (lifecycle_projection.go) reads as "runtime missing"
+// and drives an endless respawn loop. So: check the cheap foreground list
+// first, then fall back to a host process-table walk from the pane's shell
+// and foreground PIDs to catch a wanted name living deeper in the tree.
 func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	ctx := context.Background()
 	pid, err := p.paneID(ctx, name)
@@ -339,7 +383,41 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 			}
 		}
 	}
-	return false
+	sessionID, _ := p.GetMeta(name, "GC_SESSION_ID")
+	return processTreeAlive(shellPID, fg, processNames, strings.TrimSpace(sessionID))
+}
+
+// processTreeAlive is the descendant-walk fallback for ProcessAlive: it takes
+// a host-wide process snapshot and checks whether any process reachable from
+// the pane's shell PID or foreground PIDs matches one of processNames. When
+// sessionID is non-empty, every process in the snapshot carrying that
+// GC_SESSION_ID is also treated as a root — this widens the walk to find the
+// agent even when it has been reparented off the shell/foreground subtree,
+// since process env (unlike ppid) survives reparenting. Purely additive: it
+// never narrows the shell/foreground-rooted match, so a genuinely-dead agent
+// still reports false.
+var snapshotProcesses = proctable.SnapshotProcesses
+
+func processTreeAlive(shellPID int, fg []proc, processNames []string, sessionID string) bool {
+	records, err := snapshotProcesses()
+	if err != nil || len(records) == 0 {
+		return false
+	}
+	roots := make([]int, 0, len(fg)+1)
+	if shellPID != 0 {
+		roots = append(roots, shellPID)
+	}
+	for _, pr := range fg {
+		roots = append(roots, pr.PID)
+	}
+	if sessionID != "" {
+		for _, r := range records {
+			if r.SessionID == sessionID {
+				roots = append(roots, r.PID)
+			}
+		}
+	}
+	return proctable.DescendantAlive(records, roots, processNames)
 }
 
 // Nudge injects and submits text into a running agent's input.
@@ -442,23 +520,19 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 
 // ── metadata sidecar (herdr has no per-session KV) ───────────────────────────
 
-// identityMetaKeys are the session-identity keys the reconciler probes via
-// GetMeta to bind a live runtime to its session bead (session id, instance
-// token, runtime epoch). Start mirrors them from cfg.Env into the sidecar so
-// the binding is readable from the moment the agent exists.
-var identityMetaKeys = []string{"GC_SESSION_ID", "GC_INSTANCE_TOKEN", "GC_RUNTIME_EPOCH"}
-
-// stampIdentityMeta copies the identity keys present in env into the sidecar,
-// best-effort: a failed write only means GetMeta stays empty until a caller
-// stamps the key itself — exactly the pre-stamp status quo.
-func (p *Provider) stampIdentityMeta(name string, env map[string]string) {
-	for _, key := range identityMetaKeys {
-		if v := env[key]; v != "" {
-			if err := p.SetMeta(name, key, v); err != nil {
-				fmt.Fprintf(os.Stderr, "herdr: stamping %s for %q: %v\n", key, name, err) //nolint:errcheck // best-effort diagnostic
-			}
+// seedMetaFromEnv initializes the session's metadata sidecar from cfg.Env,
+// mirroring tmux's contract where the session environment (seeded from cfg.Env
+// at creation) doubles as the GetMeta store. Ownership/identity keys like
+// GC_SESSION_ID and GC_INSTANCE_TOKEN must be readable via GetMeta from the
+// moment the runtime is alive. Later SetMeta calls override individual keys,
+// exactly as tmux setenv does.
+func (p *Provider) seedMetaFromEnv(name string, env map[string]string) error {
+	for k, v := range env {
+		if err := p.SetMeta(name, k, v); err != nil {
+			return fmt.Errorf("meta %q: %w", k, err)
 		}
 	}
+	return nil
 }
 
 // SetMeta writes a per-session metadata value to the sidecar store (herdr has
