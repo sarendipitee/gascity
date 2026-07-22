@@ -58,6 +58,7 @@ case "$1 $2" in
 "workspace create") printf '{"result":{"workspace":{"workspace_id":"w1"},"tab":{"tab_id":"t1"},"root_pane":{"pane_id":"stray"}}}' ;;
 "tab list") printf '{"result":{"tabs":[]}}' ;;
 "tab create") printf '{"result":{"tab":{"tab_id":"t1"},"root_pane":{"pane_id":"stray"}}}' ;;
+"agent read") printf '{"result":{"read":{"text":"⚠ 8 hooks need review before they can run.\\nPress t to trust all; enter to review hooks; esc to skip"}}}' ;;
 *) printf '{"result":{}}' ;;
 esac
 `
@@ -264,5 +265,47 @@ func TestStartRunsSessionSetupAfterLaunch(t *testing.T) {
 	// The readiness wait precedes setup, mirroring tmux's ready→setup→nudge.
 	if waitIdx < 0 || waitIdx >= setupIdx {
 		t.Errorf("expected an idle wait before session_setup; log:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestStartAcceptsStartupDialogsBeforeIdleWait(t *testing.T) {
+	work := t.TempDir()
+	f := newFakeHerdr(t, filepath.Join(work, "unused-probe"))
+	p := newFakeStartProvider(t, f)
+
+	if err := p.start(context.Background(), "gastown__worker", runtime.Config{
+		WorkDir:      work,
+		ProcessNames: []string{"codex"},
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	lines := f.logLines(t)
+	readIdx := logIndex(lines, "agent read")
+	downIdx := logIndex(lines, "pane send-keys p1 Down")
+	enterIdx := logIndex(lines, "pane send-keys p1 Enter")
+	if readIdx < 0 || downIdx <= readIdx || enterIdx <= downIdx {
+		t.Fatalf("startup dialog was not accepted after read; log:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestShouldAcceptStartupDialogs(t *testing.T) {
+	enabled := true
+	disabled := false
+	for name, tc := range map[string]struct {
+		cfg  runtime.Config
+		want bool
+	}{
+		"explicit enabled":   {cfg: runtime.Config{AcceptStartupDialogs: &enabled}, want: true},
+		"explicit disabled":  {cfg: runtime.Config{AcceptStartupDialogs: &disabled, ProcessNames: []string{"codex"}}, want: false},
+		"process names":      {cfg: runtime.Config{ProcessNames: []string{"codex"}}, want: true},
+		"permission warning": {cfg: runtime.Config{EmitsPermissionWarning: true}, want: true},
+		"default disabled":   {cfg: runtime.Config{}, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := runtime.ShouldAcceptStartupDialogs(tc.cfg); got != tc.want {
+				t.Fatalf("runtime.ShouldAcceptStartupDialogs() = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }
