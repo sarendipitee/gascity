@@ -156,12 +156,19 @@ func waitForDeliveredNudge(t *testing.T, cityPath string, fake *nudgeEventedFake
 	stop := time.Now().Add(5 * time.Second)
 	for time.Now().Before(stop) {
 		state := queueStateSnapshot(t, cityPath)
-		if len(state.Pending) == 0 && len(state.InFlight) == 0 && countFakeCalls(fake, "Nudge") > 0 {
+		if len(state.Pending) == 0 && len(state.InFlight) == 0 && countDeliveredFakeCalls(fake) > 0 {
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return false
+}
+
+// Worker-backed queued delivery reaches event-capable providers through
+// NudgeNow. Keep the assertion on the observable delivery effect rather than
+// the superseded Fake.Nudge implementation detail.
+func countDeliveredFakeCalls(fake *nudgeEventedFake) int {
+	return countFakeCalls(fake, "Nudge") + countFakeCalls(fake, "NudgeNow")
 }
 
 func countFakeCalls(fake *nudgeEventedFake, method string) int {
@@ -237,8 +244,8 @@ func TestNudgeEventDispatcherBusyAgentStopsAfterOneRetry(t *testing.T) {
 	if len(state.Pending) != 1 {
 		t.Fatalf("pending = %d, want 1 (busy agent must not receive delivery); state=%+v", len(state.Pending), state)
 	}
-	if n := countFakeCalls(fake, "Nudge"); n != 0 {
-		t.Fatalf("Nudge calls = %d, want 0 for a busy agent", n)
+	if n := countDeliveredFakeCalls(fake); n != 0 {
+		t.Fatalf("delivery calls = %d, want 0 for a busy agent", n)
 	}
 	if afterSecond != afterFirst {
 		t.Fatalf("IsRunning kept growing (%d -> %d): the event's attempt+retry must stop, not poll", afterFirst, afterSecond)
@@ -337,8 +344,8 @@ func TestNudgeEventDispatcherIgnoresNonIdleStatuses(t *testing.T) {
 	fake.emit(runtime.SessionEvent{Kind: runtime.SessionEventExited, Session: info.SessionName, Time: time.Now()})
 	time.Sleep(300 * time.Millisecond)
 
-	if n := countFakeCalls(fake, "Nudge"); n != 0 {
-		t.Fatalf("Nudge calls = %d, want 0 for non-idle statuses", n)
+	if n := countDeliveredFakeCalls(fake); n != 0 {
+		t.Fatalf("delivery calls = %d, want 0 for non-idle statuses", n)
 	}
 }
 

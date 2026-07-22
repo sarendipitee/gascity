@@ -1,7 +1,6 @@
 package herdr
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -27,19 +26,10 @@ import (
 type Provider struct {
 	c            *client
 	metaDir      string        // sidecar KV root (herdr has no per-session metadata store)
-<<<<<<< HEAD
-	setupTimeout time.Duration // per-command timeout for pre_start ([session] setup_timeout)
-	mu           sync.Mutex    // serializes workspace/tab find-or-create across concurrent Starts
-=======
 	setupTimeout time.Duration // per-command timeout for pre_start/session_setup ([session] setup_timeout)
 	mu           sync.Mutex    // serializes workspace/tab find-or-create across concurrent Starts
 	act          activityTracker
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 }
-
-// defaultSetupTimeout mirrors the tmux provider's [session] setup_timeout
-// default for callers that don't supply one (city-less/standalone construction).
-const defaultSetupTimeout = 10 * time.Second
 
 var (
 	_ runtime.Provider                = (*Provider)(nil)
@@ -55,17 +45,10 @@ const defaultSetupTimeout = 10 * time.Second
 // name; metaDir is a writable directory for sidecar session metadata (a temp
 // fallback is used when empty, e.g. a city-less standalone construction); cityRoot
 // is the city directory used as the shared server's launch cwd and as the
-<<<<<<< HEAD
-// effectiveWorkDir fallback for sessions whose WorkDir doesn't exist yet (empty in
-// city-less construction). setupTimeout bounds each pre_start command
-// ([session] setup_timeout); non-positive values fall back to
-// defaultSetupTimeout.
-=======
 // effectiveWorkDir fallback for sessions with no WorkDir configured (empty in
 // city-less construction); setupTimeout is the per-command timeout for
 // pre_start/session_setup commands ([session] setup_timeout; <=0 uses the 10s
 // default).
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 func New(herdrSession, metaDir, cityRoot string, setupTimeout time.Duration) *Provider {
 	if metaDir == "" {
 		metaDir = filepath.Join(os.TempDir(), "gc-herdr-meta", sanitize(herdrSession))
@@ -106,16 +89,6 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if p.IsRunning(name) {
 		return runtime.ErrSessionExists
 	}
-<<<<<<< HEAD
-	// Step 0: pre_start — workDir/worktree preparation, and the carrier for
-	// stage-2 skill/MCP materialization. Mirrors tmux doStartSession's first
-	// step; fatal on failure so an agent never launches into an unprepared
-	// workDir. Runs only once we know we're actually creating the agent (the
-	// ErrSessionExists check above), so an existing session never re-runs prep.
-	if err := p.runPreStart(ctx, cfg); err != nil {
-		return fmt.Errorf("herdr: running pre_start: %w", err)
-	}
-=======
 	// Prepare the working directory BEFORE anything launches, mirroring the
 	// other host-side providers: stage overlays/CopyFiles (tmux stageStartFiles,
 	// subprocess/acp StageSessionWorkDir), then run pre_start host-side (tmux
@@ -135,7 +108,6 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 	// Place the agent in its own tab under a per-rig (per-town) workspace, so
 	// agents are separate switchable spaces rather than tiled panes. The
 	// find-or-create is serialized so concurrent same-rig Starts share one
@@ -175,30 +147,6 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if strayPane != "" && strayPane != info.PaneID {
 		_ = p.c.closePane(ctx, strayPane)
 	}
-<<<<<<< HEAD
-	// Deliver the agent's first turn. Two independent sources, mirroring tmux:
-	// a named always-awake Claude session carries its behavioral prime in
-	// cfg.PromptSuffix (PromptMode=arg); a pool/sling slot carries its claim
-	// instruction in cfg.Nudge; a named session may carry BOTH. herdr launches
-	// via exec argv and — unlike tmux/acp/t3bridge — has no shell-arg slot to
-	// ride PromptSuffix onto, so without this it would drop the prime, boot a
-	// bare `claude` REPL, and (because the resolver already set
-	// startupPromptDeliveredEnv, suppressing the SessionStart hook's copy of the
-	// prime) leave the agent wholly unprimed and idle. startupDeliveryText
-	// returns prime-then-nudge when both are set; a pool slot's claim nudge is
-	// returned unchanged. Route it through the one hardened post-idle
-	// paste+submit path. See startupDeliveryText.
-	if startupText := startupDeliveryText(cfg); startupText != "" && info.PaneID != "" {
-=======
-	// Mirror the session's identity keys from cfg.Env into the metadata
-	// sidecar now, before the slow startup delivery below. tmux exposes
-	// identity instantly (env injected at session creation, readable via
-	// GetMeta); herdr's GetMeta reads the sidecar, which callers stamp only
-	// after Start returns — leaving the agent alive-but-anonymous for the
-	// whole delivery wait (up to startupNudgeIdleTimeout). Any reconcile
-	// poked into that window judged the live runtime as belonging to no
-	// session and rolled back the pending create (live-verified churn).
-	p.stampIdentityMeta(name, cfg.Env)
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
 	//
@@ -214,7 +162,6 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// so the working pool path is byte-for-byte unchanged. See startupDeliveryText.
 	startupText := startupDeliveryText(cfg)
 	if info.PaneID != "" && (startupText != "" || hasSessionSetup(cfg)) {
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 		// A freshly-spawned agent boots through a shell→TUI handoff before its
 		// input prompt is listening; a paste or submit delivered in that window is
 		// silently swallowed, leaving the agent idle forever instead of running its
@@ -236,10 +183,8 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if startupText != "" && info.PaneID != "" {
 		if err := p.c.deliverNudge(ctx, info.PaneID, name, startupText); err != nil {
 			// Best-effort: the submit didn't confirm (TUI race under boot load).
-			// Surface it rather than silently leaving a stranded startup turn; the
-			// warm-bind claim nudge (startPreparedStartCandidate's warm-reuse branch)
-			// re-delivers on the next reconcile tick — by then the slot is running with
-			// its trigger still unclaimed, which is precisely that hook's condition.
+			// Surface it rather than silently leaving a stranded startup turn;
+			// nudgeStalledPoolClaims is the reconcile-tick backstop of last resort.
 			fmt.Fprintf(os.Stderr, "herdr: startup delivery for %q not confirmed: %v\n", name, err) //nolint:errcheck // best-effort diagnostic
 		}
 	}
@@ -258,6 +203,11 @@ func (p *Provider) runPreStart(ctx context.Context, cfg runtime.Config) error {
 	setupEnv := make(map[string]string, len(cfg.Env))
 	for k, v := range cfg.Env {
 		setupEnv[k] = v
+	}
+	if workDir := strings.TrimSpace(setupEnv["GC_DIR"]); workDir != "" {
+		if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
+			setupEnv["GC_DIR"] = p.c.cityRoot
+		}
 	}
 	for i, cmd := range cfg.PreStart {
 		if err := runtime.RunSetupCommand(ctx, cmd, setupEnv, p.setupTimeout); err != nil {
@@ -353,92 +303,6 @@ func startupPrimeText(cfg runtime.Config) string {
 // best-effort. Sized generously to cover cold, concurrent boots during a
 // town-wide restart.
 const startupNudgeIdleTimeout = 60 * time.Second
-
-const (
-	// preStartOutputLimit bounds the captured output tail attached to a failed
-	// pre_start error (mirrors tmux's setupCommandOutputLimit).
-	preStartOutputLimit = 4096
-	// preStartWaitDelay force-closes the capture pipes shortly after the command
-	// exits, so a pre_start that daemonizes a child holding inherited stdio
-	// cannot hang the start (mirrors tmux's setupCommandWaitDelay).
-	preStartWaitDelay = 2 * time.Second
-)
-
-// runPreStart runs cfg.PreStart shell commands on the host before the agent is
-// created, mirroring the tmux provider (tmux/adapter.go runPreStart).
-//
-// This is load-bearing beyond directory/worktree prep: stage-2 skill/MCP
-// materialization is delivered *as* a PreStart entry, so a runtime that skips
-// PreStart silently drops materialization. That is precisely why herdr was held
-// out of isStage2EligibleSession (see cmd/gc/skill_integration.go) — without
-// this, an MCP-configured agent under herdr either hard-fails
-// ("effective MCP cannot be delivered ... with session provider herdr") or, if
-// naively allowlisted, starts with its MCP silently missing.
-//
-// Failures are fatal, as in tmux: an agent must never launch into an unprepared
-// workDir.
-func (p *Provider) runPreStart(ctx context.Context, cfg runtime.Config) error {
-	if len(cfg.PreStart) == 0 {
-		return nil
-	}
-	for i, cmd := range cfg.PreStart {
-		if err := p.runSetupCommand(ctx, cmd, cfg.Env); err != nil {
-			return fmt.Errorf("pre_start[%d]: %w", i, err)
-		}
-	}
-	return nil
-}
-
-// runSetupCommand executes one setup command under the provider's setupTimeout,
-// mirroring tmux's tmuxStartOps.runSetupCommand: `sh -c <cmd>`, cwd from GC_DIR
-// (the workDir a pre_start may itself be creating — so it is intentionally read
-// from env rather than cfg.WorkDir), process env plus cfg.Env.
-func (p *Provider) runSetupCommand(ctx context.Context, cmd string, env map[string]string) error {
-	timeout := p.setupTimeout
-	if timeout <= 0 {
-		timeout = defaultSetupTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", cmd)
-	// cwd from GC_DIR when it exists; otherwise fall back to the city root —
-	// the same not-yet-created-workDir fallback effectiveWorkDir applies to the
-	// agent itself. A pool session's worktree is often created concurrently with
-	// (or by) pre_start, so chdir'ing into it unconditionally fails fast with
-	// "chdir ... no such file" on resume-path starts that run before the
-	// worktree lands. The injected pre_start commands carry their target as an
-	// explicit --workdir flag and do not depend on cwd.
-	if workDir := strings.TrimSpace(env["GC_DIR"]); workDir != "" {
-		if _, err := os.Stat(workDir); err == nil {
-			c.Dir = workDir
-		} else if p.c.cityRoot != "" {
-			c.Dir = p.c.cityRoot
-		}
-	}
-	c.Env = os.Environ()
-	for k, v := range env {
-		c.Env = append(c.Env, k+"="+v)
-	}
-	var out bytes.Buffer
-	c.Stdout, c.Stderr = &out, &out
-	c.WaitDelay = preStartWaitDelay
-	if err := c.Run(); err != nil {
-		// ErrWaitDelay means the command itself exited successfully and only the
-		// force-closed pipes ended the wait: a setup command that daemonizes a
-		// child holding inherited stdio succeeded (mirrors tmux).
-		if errors.Is(err, exec.ErrWaitDelay) {
-			return nil
-		}
-		if tail := strings.TrimSpace(out.String()); tail != "" {
-			if len(tail) > preStartOutputLimit {
-				tail = tail[len(tail)-preStartOutputLimit:]
-			}
-			return fmt.Errorf("%w: %s", err, tail)
-		}
-		return err
-	}
-	return nil
-}
 
 // Stop closes the agent's pane and clears its metadata sidecar. Idempotent.
 func (p *Provider) Stop(name string) error {
@@ -656,7 +520,6 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 
 // ── metadata sidecar (herdr has no per-session KV) ───────────────────────────
 
-<<<<<<< HEAD
 // seedMetaFromEnv initializes the session's metadata sidecar from cfg.Env,
 // mirroring tmux's contract where the session environment (seeded from cfg.Env
 // at creation) doubles as the GetMeta store. Ownership/identity keys like
@@ -670,25 +533,6 @@ func (p *Provider) seedMetaFromEnv(name string, env map[string]string) error {
 		}
 	}
 	return nil
-=======
-// identityMetaKeys are the session-identity keys the reconciler probes via
-// GetMeta to bind a live runtime to its session bead (session id, instance
-// token, runtime epoch). Start mirrors them from cfg.Env into the sidecar so
-// the binding is readable from the moment the agent exists.
-var identityMetaKeys = []string{"GC_SESSION_ID", "GC_INSTANCE_TOKEN", "GC_RUNTIME_EPOCH"}
-
-// stampIdentityMeta copies the identity keys present in env into the sidecar,
-// best-effort: a failed write only means GetMeta stays empty until a caller
-// stamps the key itself — exactly the pre-stamp status quo.
-func (p *Provider) stampIdentityMeta(name string, env map[string]string) {
-	for _, key := range identityMetaKeys {
-		if v := env[key]; v != "" {
-			if err := p.SetMeta(name, key, v); err != nil {
-				fmt.Fprintf(os.Stderr, "herdr: stamping %s for %q: %v\n", key, name, err) //nolint:errcheck // best-effort diagnostic
-			}
-		}
-	}
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 }
 
 // SetMeta writes a per-session metadata value to the sidecar store (herdr has

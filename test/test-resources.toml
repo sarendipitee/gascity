@@ -10,13 +10,8 @@ version = 2
 [[audit_baseline]]
 scope = "all"
 resource = "subprocess"
-<<<<<<< HEAD
-baseline_calls = 529
-baseline_files = 162
-=======
 baseline_calls = 499
 baseline_files = 140
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 495
 reported_files = 135
 owner_bead = "ga-80po0c.2"
@@ -28,13 +23,8 @@ expires = "2026-10-01"
 [[audit_baseline]]
 scope = "all"
 resource = "fixed_sleep"
-<<<<<<< HEAD
-baseline_calls = 427
-baseline_files = 156
-=======
 baseline_calls = 473
 baseline_files = 160
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 447
 reported_files = 157
 owner_bead = "ga-80po0c.2"
@@ -48,13 +38,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "subprocess"
-<<<<<<< HEAD
-baseline_calls = 394
-baseline_files = 112
-=======
 baseline_calls = 382
 baseline_files = 101
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 380
 reported_files = 98
 owner_bead = "ga-80po0c.2"
@@ -66,13 +51,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "fixed_sleep"
-<<<<<<< HEAD
-baseline_calls = 288
-baseline_files = 111
-=======
 baseline_calls = 321
 baseline_files = 117
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 295
 reported_files = 114
 owner_bead = "ga-80po0c.2"
@@ -84,13 +64,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "cmd/gc+untagged"
 resource = "environment"
-<<<<<<< HEAD
-baseline_calls = 4326
-baseline_files = 203
-=======
 baseline_calls = 4108
 baseline_files = 182
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 reported_calls = 3960
 reported_files = 184
 owner_bead = "ga-80po0c.2.3"
@@ -102,8 +77,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "cmd/gc+untagged"
 resource = "cwd"
-baseline_calls = 285
-baseline_files = 43
+baseline_calls = 208
+baseline_files = 40
 reported_calls = 98
 reported_files = 13
 owner_bead = "ga-80po0c.2.3"
@@ -115,8 +90,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "cmd/gc+untagged"
 resource = "slow_process_gate"
-baseline_calls = 57
-baseline_files = 24
+baseline_calls = 77
+baseline_files = 26
 reported_calls = 78
 reported_files = 27
 owner_bead = "ga-80po0c.2.3"
@@ -128,8 +103,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "http_test_server"
-baseline_calls = 317
-baseline_files = 66
+baseline_calls = 255
+baseline_files = 56
 reported_calls = 255
 reported_files = 56
 owner_bead = "ga-80po0c.2.2"
@@ -195,17 +170,6 @@ expires = "2026-10-01"
 # declaration leave the Small-debt census; helper bodies and sibling tests do
 # not inherit a source exemption.
 [[medium]]
-package_dir = "internal/api"
-package_name = "api"
-owner = "TestEveryEmittedErrorCodeIsRegistered"
-resources = ["subprocess"]
-owner_bead = "ga-80po0c.2.1"
-invariant = "internal/api tracked-source error URN guard is a checked Medium owner"
-resource_owner = "only the git ls-files call lexically inside TestEveryEmittedErrorCodeIsRegistered leaves Small debt"
-migration_target = "P0.4b"
-expires = "2026-10-01"
-
-[[medium]]
 package_dir = "cmd/gc"
 package_name = "main"
 owner = "TestMain"
@@ -216,76 +180,15 @@ resource_owner = "only environment calls lexically inside TestMain leave Small d
 migration_target = "P0.4b"
 expires = "2026-10-01"
 
-[[medium]]
-package_dir = "scripts"
-package_name = "scripts_test"
-owner = "TestDockerSessionProtocol"
-resources = ["subprocess"]
-owner_bead = "ga-80po0c.23.1"
-invariant = "Docker session adapter protocol proof is a checked Medium owner"
-resource_owner = "the one adapter subprocess is confined to TestDockerSessionProtocol and Docker itself is a strict PATH-injected fake"
-migration_target = "W6"
-expires = "2026-10-01"
-
-[[medium]]
-package_dir = "scripts"
-package_name = "scripts_test"
-owner = "TestProviderOverridesAndSuiteContractsCrossMakeIsolation"
-resources = ["subprocess"]
-owner_bead = "ga-80po0c.2.1"
-invariant = "Make/provider and suite-contract proof is a checked Medium owner"
-resource_owner = "the six isolated Make invocations are confined to TestProviderOverridesAndSuiteContractsCrossMakeIsolation"
-migration_target = "P0.1"
-expires = "2026-10-01"
-
-# A reviewed-hermetic-body row is narrower than a Small test declaration. It
-# proves that the exact untagged test body and statically reachable
-# receiverless same-package helpers contain none of the cataloged resources.
-# Package-level setup still determines the effective runnable size.
-[[reviewed_hermetic_body]]
-package_dir = "cmd/gc"
-package_name = "main"
-owner = "TestDoSessionWait_RegistersReadyWaitForRigDependency"
-effective_size = "medium"
-medium_reason = "package TestMain mutates process state"
-
-[[reviewed_hermetic_body]]
-package_dir = "cmd/gc"
-package_name = "main"
-owner = "TestDoSessionWake_PokesManagedControllerAfterStateChange"
-effective_size = "medium"
-medium_reason = "package TestMain mutates process state"
-
-[[reviewed_hermetic_body]]
-package_dir = "cmd/gc"
-package_name = "main"
-owner = "TestPrepareWaitWakeState_ResolvesRigDependencyBeads"
-effective_size = "medium"
-medium_reason = "package TestMain mutates process state"
-
-[[reviewed_hermetic_body]]
-package_dir = "cmd/gc"
-package_name = "main"
-owner = "TestDoMailInbox_RendersMessagesFromReader"
-effective_size = "medium"
-medium_reason = "package TestMain mutates process state"
-
 # Small-debt rows apply the exact Medium filter while the source-debt rows
 # above retain the raw anti-growth census.
 [[small_debt]]
 scope = "untagged"
 resource = "subprocess"
-<<<<<<< HEAD
-baseline_calls = 391
-baseline_files = 110
-reported_calls = 394
-reported_files = 105
-=======
 baseline_calls = 382
 baseline_files = 101
 reported_calls = 382
 reported_files = 101
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small subprocess call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners remove or replace each process call site"
@@ -295,17 +198,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "fixed_sleep"
-<<<<<<< HEAD
-baseline_calls = 288
-baseline_files = 111
-reported_calls = 287
-reported_files = 113
-=======
 baseline_calls = 321
 baseline_files = 117
 reported_calls = 321
 reported_files = 117
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners replace elapsed wall time with lifecycle signals"
@@ -315,17 +211,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "cmd/gc+untagged"
 resource = "environment"
-<<<<<<< HEAD
-baseline_calls = 4320
-baseline_files = 203
-reported_calls = 4348
-reported_files = 200
-=======
 baseline_calls = 4102
 baseline_files = 182
 reported_calls = 4102
 reported_files = 182
->>>>>>> refs/rewritten/merge-mckean-feat-herdr-first-class-into-live
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small cmd/gc environment call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners restore or eliminate every process-environment mutation"
@@ -335,10 +224,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "cmd/gc+untagged"
 resource = "cwd"
-baseline_calls = 285
-baseline_files = 43
-reported_calls = 284
-reported_files = 43
+baseline_calls = 208
+baseline_files = 40
+reported_calls = 208
+reported_files = 40
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small cmd/gc cwd call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners restore or eliminate every cwd mutation"
@@ -348,10 +237,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "cmd/gc+untagged"
 resource = "slow_process_gate"
-baseline_calls = 57
-baseline_files = 24
-reported_calls = 75
-reported_files = 25
+baseline_calls = 77
+baseline_files = 26
+reported_calls = 77
+reported_files = 26
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small cmd/gc slow-process marker totals cannot grow; reductions must lower this baseline"
 resource_owner = "each non-Medium marked caller retains an explicit process-suite migration owner"
@@ -361,10 +250,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "http_test_server"
-baseline_calls = 317
-baseline_files = 66
-reported_calls = 300
-reported_files = 66
+baseline_calls = 255
+baseline_files = 56
+reported_calls = 255
+reported_files = 56
 owner_bead = "ga-80po0c.2.2"
 invariant = "untagged Small HTTP test server call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners move server-backed tests to exact Medium ownership or replace the listener"
