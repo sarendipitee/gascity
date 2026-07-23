@@ -230,7 +230,22 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 // fold (the fragile process-table walk), reintroducing the singleton
 // restart-loop for any city that also routes some sessions to ACP.
 func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
-	return runtime.ObserveLiveness(p.route(name), name, processNames)
+	primary := runtime.ObserveLiveness(p.route(name), name, processNames)
+	if primary.Running {
+		return primary
+	}
+	// Fall through: check the other backend in case routing is stale
+	// (e.g. after a controller restart clears the in-memory route table),
+	// matching IsRunning's recovery so a live ACP singleton on a
+	// herdr-default city is not misread as dead.
+	p.mu.RLock()
+	isACP := p.routes[name]
+	p.mu.RUnlock()
+	other := p.acpSP
+	if isACP {
+		other = p.defaultSP
+	}
+	return runtime.ObserveLiveness(other, name, processNames)
 }
 
 // Nudge delegates to the routed backend.
