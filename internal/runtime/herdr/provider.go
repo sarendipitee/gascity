@@ -113,14 +113,19 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// find-or-create is serialized so concurrent same-rig Starts share one
 	// workspace instead of racing to create duplicates.
 	wsLabel, tabLabel := placementFor(name, cfg.Env)
+	kind, argv, err := herdrAgentLaunch(cfg)
+	if err != nil {
+		return fmt.Errorf("herdr: start %q: %w", name, err)
+	}
 	p.mu.Lock()
-	tabID, strayPane, err := p.c.ensurePlacement(ctx, wsLabel, tabLabel)
+	_, paneID, err := p.c.ensurePlacement(ctx, wsLabel, tabLabel, workDir, cfg.Env)
 	p.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("herdr: place %q: %w", name, err)
 	}
-	info, err := p.c.startAgent(ctx, name, tabID, workDir, cfg.Env, shellArgv(cfg.Command))
+	info, err := p.c.startAgent(ctx, name, kind, paneID, argv)
 	if err != nil {
+		_ = p.c.closePane(ctx, paneID)
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
 	// Seed the metadata sidecar from cfg.Env NOW, before the (long) startup
@@ -141,11 +146,6 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// the whole meta dir, so teardown is covered.
 	if err := p.seedMetaFromEnv(name, cfg.Env); err != nil {
 		return fmt.Errorf("herdr: seed session metadata for %q: %w", name, err)
-	}
-	// herdr auto-spawns a stray shell pane when it creates a workspace/tab; close
-	// it so the tab holds only the agent.
-	if strayPane != "" && strayPane != info.PaneID {
-		_ = p.c.closePane(ctx, strayPane)
 	}
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
@@ -646,11 +646,16 @@ func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
 }
 
 // shellArgv wraps a shell command string as argv for `herdr agent start -- …`.
-func shellArgv(command string) []string {
-	if strings.TrimSpace(command) == "" {
-		return []string{"/bin/sh"}
+func herdrAgentLaunch(cfg runtime.Config) (string, []string, error) {
+	kind := strings.TrimSpace(cfg.Env["GC_PROVIDER"])
+	if kind == "" {
+		return "", nil, fmt.Errorf("GC_PROVIDER is required to select a herdr agent kind")
 	}
-	return []string{"/bin/sh", "-c", command}
+	argv := shellquote.Split(cfg.Command)
+	if len(argv) == 0 {
+		return "", nil, fmt.Errorf("agent command is empty")
+	}
+	return kind, argv, nil
 }
 
 // workspaceTabFor maps a gascity runtime session name to its herdr placement: a
