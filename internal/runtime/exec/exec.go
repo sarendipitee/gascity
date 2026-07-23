@@ -258,7 +258,10 @@ func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config
 }
 
 func (p *Provider) dismissStartupDialogs(ctx context.Context, name string, cfg runtime.Config) error {
-	if !runtime.ShouldAcceptStartupDialogs(cfg) {
+	if cfg.AcceptStartupDialogs != nil && !*cfg.AcceptStartupDialogs {
+		return nil
+	}
+	if cfg.AcceptStartupDialogs == nil && !cfg.EmitsPermissionWarning && len(cfg.ProcessNames) == 0 {
 		return nil
 	}
 
