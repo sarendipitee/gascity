@@ -848,12 +848,9 @@ func acceptCodexHookReviewDialogFromStream(
 }
 
 func containsCodexHookReviewDialog(content string) bool {
-	return (strings.Contains(content, "Hooks need review") ||
-		strings.Contains(content, "hooks need review")) &&
-		(strings.Contains(content, "Trust all and continue") ||
-			strings.Contains(content, "trust all")) &&
-		(strings.Contains(content, "Continue without trusting") ||
-			strings.Contains(content, "enter to review hooks"))
+	return strings.Contains(content, "Hooks need review") &&
+		strings.Contains(content, "Trust all and continue") &&
+		strings.Contains(content, "Continue without trusting")
 }
 
 func containsPostCodexHookReviewStartupDialog(content string) bool {
