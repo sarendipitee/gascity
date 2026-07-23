@@ -28,6 +28,6 @@ func TestHerdrConformance(t *testing.T) {
 		n := atomic.AddInt64(&counter, 1)
 		p := New(fmt.Sprintf("gctest-conf-%d", n), t.TempDir(), t.TempDir(), 0)
 		t.Cleanup(func() { _ = p.TeardownServer() })
-		return p, runtime.Config{WorkDir: t.TempDir()}, fmt.Sprintf("conf-%d", n)
+		return p, runtime.Config{WorkDir: t.TempDir(), Command: "omp", Env: map[string]string{"GC_PROVIDER": "omp"}}, fmt.Sprintf("conf-%d", n)
 	})
 }
