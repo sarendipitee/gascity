@@ -37,3 +37,19 @@ func TestProvider_ForwardsObserveLivenessToRoutedBackend(t *testing.T) {
 		t.Errorf("acp route ObserveLiveness = %+v; want %+v", got, acp.obs)
 	}
 }
+
+// TestProvider_ObserveLivenessFallsThroughOnStaleRoute proves the stale-route
+// recovery that mirrors IsRunning: when the in-memory route table has no entry
+// for a session (e.g. after a controller restart clears it), a session that is
+// actually live on the ACP backend must not be misread as dead just because the
+// default backend — where the missing route sends it — reports not-running.
+func TestProvider_ObserveLivenessFallsThroughOnStaleRoute(t *testing.T) {
+	def := &livenessObserverStub{Fake: runtime.NewFake(), obs: runtime.Liveness{Running: false}}
+	acp := &livenessObserverStub{Fake: runtime.NewFake(), obs: runtime.Liveness{Running: true, Alive: true}}
+	p := New(def, acp)
+	// No RouteACP entry: routing is stale, so route() sends "acpsess" to def.
+
+	if got := p.ObserveLiveness("acpsess", []string{"claude"}); got != acp.obs {
+		t.Errorf("stale-route ObserveLiveness = %+v; want %+v (fallthrough to ACP backend lost)", got, acp.obs)
+	}
+}
