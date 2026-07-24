@@ -93,7 +93,7 @@ func (m *MemStore) Create(b Bead) (Bead, error) {
 	if b.Type == "" {
 		b.Type = "task"
 	}
-	b.CreatedAt = time.Now()
+	b.CreatedAt = time.Now().Round(0)
 	b.UpdatedAt = b.CreatedAt
 	b.Revision = 1   // first version; every subsequent mutation bumps it
 	b.ClaimFence = 0 // no ownership history yet; the first claim bumps it to 1

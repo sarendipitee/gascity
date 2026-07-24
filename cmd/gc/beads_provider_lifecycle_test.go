@@ -2897,6 +2897,186 @@ func TestCurrentDoltPortIgnoresReachablePortFileWhenManagedStateIsStopped(t *tes
 	}
 }
 
+func TestCurrentOwnedManagedDoltPortMirrorPreservesMatchingOwnedProviderState(t *testing.T) {
+	cityDir := setupBdContractCityForTest(t)
+	beadsDir := filepath.Join(cityDir, ".beads")
+	dataDir := filepath.Join(beadsDir, "dolt")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	const port = 3307
+	providerState := doltRuntimeState{
+		Running: true,
+		PID:     os.Getpid(),
+		Port:    port,
+		DataDir: dataDir,
+	}
+	if err := writeDoltRuntimeStateFile(providerManagedDoltStatePath(cityDir), providerState); err != nil {
+		t.Fatal(err)
+	}
+	stalePublishedState := providerState
+	stalePublishedState.Port = port + 1
+	if err := writeDoltRuntimeStateFile(managedDoltStatePath(cityDir), stalePublishedState); err != nil {
+		t.Fatal(err)
+	}
+	portFile := filepath.Join(beadsDir, "dolt-server.port")
+	if err := os.WriteFile(portFile, []byte(fmt.Sprintf("%d\n", port)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	probeCalls := 0
+	aliveCalls := 0
+	got := currentOwnedManagedDoltPortMirror(cityDir, func(pid int) bool {
+		aliveCalls++
+		if pid != os.Getpid() {
+			t.Fatalf("liveness PID = %d, want %d", pid, os.Getpid())
+		}
+		return true
+	}, func(state doltRuntimeState, layout managedDoltRuntimeLayout) bool {
+		probeCalls++
+		if state.Port != port || state.PID != os.Getpid() {
+			t.Fatalf("ownership state = %+v, want pid %d port %d", state, os.Getpid(), port)
+		}
+		if !samePath(layout.DataDir, dataDir) {
+			t.Fatalf("ownership layout data dir = %q, want %q", layout.DataDir, dataDir)
+		}
+		return true
+	})
+	if aliveCalls != 1 {
+		t.Fatalf("process-liveness probe calls = %d, want 1", aliveCalls)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("owned-process probe calls = %d, want 1", probeCalls)
+	}
+	if got != strconv.Itoa(port) {
+		t.Fatalf("currentOwnedManagedDoltPortMirror() = %q, want existing owned mirror %d", got, port)
+	}
+	data, err := os.ReadFile(portFile)
+	if err != nil {
+		t.Fatalf("read preserved port mirror: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != strconv.Itoa(port) {
+		t.Fatalf("preserved port mirror = %q, want %d", got, port)
+	}
+}
+
+func TestCurrentOwnedManagedDoltPortMirrorRejectsUnverifiedState(t *testing.T) {
+	tests := []struct {
+		name              string
+		mirrorPort        int
+		providerPort      int
+		publishedPort     int
+		wrongProviderData bool
+		processAlive      bool
+		processOwned      bool
+		wantAliveCalls    int
+		wantProbeCalls    int
+	}{
+		{
+			name:           "process is not owned",
+			mirrorPort:     3307,
+			providerPort:   3307,
+			processAlive:   true,
+			processOwned:   false,
+			wantAliveCalls: 1,
+			wantProbeCalls: 1,
+		},
+		{
+			name:           "process is not alive",
+			mirrorPort:     3307,
+			providerPort:   3307,
+			processAlive:   false,
+			processOwned:   true,
+			wantAliveCalls: 1,
+			wantProbeCalls: 0,
+		},
+		{
+			name:           "mirror and state ports differ",
+			mirrorPort:     3307,
+			providerPort:   3308,
+			processOwned:   true,
+			wantProbeCalls: 0,
+		},
+		{
+			name:              "state data directory differs",
+			mirrorPort:        3307,
+			providerPort:      3307,
+			wrongProviderData: true,
+			processAlive:      true,
+			processOwned:      true,
+			wantProbeCalls:    0,
+		},
+		{
+			name:           "provider and published states both differ from mirror",
+			mirrorPort:     3309,
+			providerPort:   3307,
+			publishedPort:  3308,
+			processAlive:   true,
+			processOwned:   true,
+			wantProbeCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cityDir := setupBdContractCityForTest(t)
+			beadsDir := filepath.Join(cityDir, ".beads")
+			dataDir := filepath.Join(beadsDir, "dolt")
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			providerDataDir := dataDir
+			if tt.wrongProviderData {
+				providerDataDir = filepath.Join(cityDir, "other-dolt-data")
+			}
+			if tt.providerPort != 0 {
+				if err := writeDoltRuntimeStateFile(providerManagedDoltStatePath(cityDir), doltRuntimeState{
+					Running: true,
+					PID:     os.Getpid(),
+					Port:    tt.providerPort,
+					DataDir: providerDataDir,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.publishedPort != 0 {
+				if err := writeDoltRuntimeStateFile(managedDoltStatePath(cityDir), doltRuntimeState{
+					Running: true,
+					PID:     os.Getpid(),
+					Port:    tt.publishedPort,
+					DataDir: dataDir,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(beadsDir, "dolt-server.port"), []byte(fmt.Sprintf("%d\n", tt.mirrorPort)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			probeCalls := 0
+			aliveCalls := 0
+			got := currentOwnedManagedDoltPortMirror(cityDir, func(int) bool {
+				aliveCalls++
+				return tt.processAlive
+			}, func(doltRuntimeState, managedDoltRuntimeLayout) bool {
+				probeCalls++
+				return tt.processOwned
+			})
+			if got != "" {
+				t.Fatalf("currentOwnedManagedDoltPortMirror() = %q, want empty", got)
+			}
+			if probeCalls != tt.wantProbeCalls {
+				t.Fatalf("owned-process probe calls = %d, want %d", probeCalls, tt.wantProbeCalls)
+			}
+			if aliveCalls != tt.wantAliveCalls {
+				t.Fatalf("process-liveness probe calls = %d, want %d", aliveCalls, tt.wantAliveCalls)
+			}
+		})
+	}
+}
+
 // TestInitBeadsForDir_file verifies that unmarked file cities stay in legacy shared mode.
 func TestInitBeadsForDir_file(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")

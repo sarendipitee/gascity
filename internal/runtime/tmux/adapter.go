@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/execgrace"
 	"github.com/gastownhall/gascity/internal/overlay"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/runtime/proctable"
@@ -85,7 +86,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		return err
 	}
 
-	err = doStartSession(ctx, &tmuxStartOps{tm: p.tm, runtimeDir: p.cfg.RuntimeDir}, name, cfg, p.cfg.SetupTimeout)
+	err = doStartSession(ctx, &tmuxStartOps{tm: p.tm, runtimeDir: p.cfg.RuntimeDir, setupMaxTimeout: p.cfg.SetupMaxTimeout}, name, cfg, p.cfg.SetupTimeout)
 	if err == nil {
 		p.cache.Invalidate()
 		return nil
@@ -217,7 +218,7 @@ func (p *Provider) cleanupFailedStart(name string, cfg runtime.Config) {
 // RunLive re-applies session_live commands to a running session.
 // Called by the reconciler when only session_live config has changed.
 func (p *Provider) RunLive(name string, cfg runtime.Config) error {
-	runSessionLive(context.Background(), &tmuxStartOps{tm: p.tm}, name, cfg, os.Stderr, p.cfg.SetupTimeout)
+	runSessionLive(context.Background(), &tmuxStartOps{tm: p.tm, setupMaxTimeout: p.cfg.SetupMaxTimeout}, name, cfg, os.Stderr, p.cfg.SetupTimeout)
 	return nil
 }
 
@@ -231,7 +232,7 @@ func (p *Provider) RunLive(name string, cfg runtime.Config) error {
 // re-stage files (those are provision-half and unchanged on a launch-only change),
 // and on failure it leaves the warm box in place rather than tearing it down.
 func (p *Provider) Relaunch(ctx context.Context, name string, cfg runtime.Config) error {
-	if err := doRelaunchSession(ctx, &tmuxStartOps{tm: p.tm}, name, cfg, p.cfg.SetupTimeout); err != nil {
+	if err := doRelaunchSession(ctx, &tmuxStartOps{tm: p.tm, setupMaxTimeout: p.cfg.SetupMaxTimeout}, name, cfg, p.cfg.SetupTimeout); err != nil {
 		return err
 	}
 	p.cache.Invalidate()
@@ -816,6 +817,11 @@ type startOps interface {
 type tmuxStartOps struct {
 	tm         *Tmux
 	runtimeDir string
+	// setupMaxTimeout enables the activity-aware setup budget
+	// ([session] setup_max_timeout, Config.SetupMaxTimeout): when > 0,
+	// runSetupCommand replaces its fixed wall-clock deadline with
+	// "no output for `timeout`" (idle) plus this absolute ceiling.
+	setupMaxTimeout time.Duration
 }
 
 const (
@@ -824,6 +830,12 @@ const (
 	maxReadyProbeTimeout     = 60 * time.Second
 	readyProbeSlack          = 5 * time.Second
 	startupPaneCaptureLines  = 80
+	setupCommandOutputLimit  = 4096
+	setupCommandWaitDelay    = 2 * time.Second
+	// setupCancelGrace is the rollback-trap budget when the activity-aware
+	// setup budget is enabled: after the group interrupt, the setup script
+	// gets this long to restore any staged state before the forced kill.
+	setupCancelGrace = 10 * time.Second
 )
 
 func (o *tmuxStartOps) createSession(name, workDir, command string, env map[string]string) error {
@@ -858,16 +870,6 @@ func (o *tmuxStartOps) waitForCommand(ctx context.Context, name string, timeout 
 
 func (o *tmuxStartOps) acceptStartupDialogs(ctx context.Context, name string) error {
 	return o.tm.AcceptStartupDialogs(ctx, name)
-}
-
-func shouldAcceptStartupDialogs(cfg runtime.Config) bool {
-	if cfg.AcceptStartupDialogs != nil {
-		return *cfg.AcceptStartupDialogs
-	}
-	if len(cfg.ProcessNames) == 0 && !cfg.EmitsPermissionWarning {
-		return false
-	}
-	return true
 }
 
 func (o *tmuxStartOps) waitForReady(ctx context.Context, name string, rc *RuntimeConfig, timeout time.Duration) error {
@@ -933,21 +935,118 @@ func (o *tmuxStartOps) disableMouseAndActivity(name string) error {
 	return nil
 }
 
-// runSetupCommand executes one setup command host-side via the shared
-// runtime.RunSetupCommand (timeout, GC_DIR cwd, env merge, bounded output
-// tails folded into failures), adding the tmux-specific GC_TMUX_SOCKET so
-// session_setup scripts can use "tmux -L $GC_TMUX_SOCKET" to reach the
-// correct server.
 func (o *tmuxStartOps) runSetupCommand(ctx context.Context, cmd string, env map[string]string, timeout time.Duration) error {
-	if o.tm.cfg.SocketName != "" {
-		merged := make(map[string]string)
-		for k, v := range env {
-			merged[k] = v
-		}
-		merged["GC_TMUX_SOCKET"] = o.tm.cfg.SocketName
-		env = merged
+	// Deadline shape: with setupMaxTimeout unset (the default) the command
+	// gets the historical fixed wall-clock deadline. With it set, the budget
+	// is activity-aware instead — timeout bounds output SILENCE and
+	// setupMaxTimeout bounds total runtime — so a slow-but-streaming setup
+	// command (e.g. a large worktree checkout) is no longer killed while
+	// visibly making progress, and a hung one still dies.
+	idle, grace := time.Duration(0), setupCommandWaitDelay
+	if o.setupMaxTimeout > 0 {
+		idle, grace = timeout, setupCancelGrace
 	}
-	return runtime.RunSetupCommand(ctx, cmd, env, timeout)
+	mon := execgrace.NewMonitor(ctx, idle, o.setupMaxTimeout)
+	defer mon.Stop()
+	runCtx := mon.Context()
+	if !mon.Enabled() {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	c := exec.CommandContext(runCtx, "sh", "-c", cmd)
+	if workDir := strings.TrimSpace(env["GC_DIR"]); workDir != "" {
+		c.Dir = workDir
+	}
+	c.Env = os.Environ()
+	for k, v := range env {
+		c.Env = append(c.Env, k+"="+v)
+	}
+	// Expose the tmux socket name so session_setup scripts can use
+	// "tmux -L $GC_TMUX_SOCKET" to reach the correct server.
+	if o.tm.cfg.SocketName != "" {
+		c.Env = append(c.Env, "GC_TMUX_SOCKET="+o.tm.cfg.SocketName)
+	}
+	stdout := newCommandOutputTail(setupCommandOutputLimit)
+	stderr := newCommandOutputTail(setupCommandOutputLimit)
+	c.Stdout = mon.Writer(stdout)
+	c.Stderr = mon.Writer(stderr)
+	// Cooperative cancellation (execgrace.Apply): deadline expiry interrupts
+	// the command's process group first so shell rollback traps — e.g.
+	// worktree-setup.sh restoring content it staged aside — run before the
+	// forced kill. Go's default context-cancel is SIGKILL, which is
+	// untrappable and stranded such staged state. The grace doubles as the
+	// WaitDelay that force-closes the capture pipes after the command exits
+	// or is canceled, even if background descendants still hold them open.
+	execgrace.Apply(c, grace)
+	if err := c.Run(); err != nil {
+		// ErrWaitDelay means the command itself exited successfully and
+		// only the force-closed pipes ended the wait: a setup command that
+		// daemonizes a child holding inherited stdio and exits 0 succeeded.
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return nil
+		}
+		// context.Cause surfaces which budget fired (execgrace.ErrIdle,
+		// execgrace.ErrCeiling, or the fixed deadline's DeadlineExceeded).
+		if ctxErr := context.Cause(runCtx); ctxErr != nil && runCtx.Err() != nil {
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		return setupCommandFailure(err, stdout, stderr)
+	}
+	return nil
+}
+
+type commandOutputTail struct {
+	limit   int
+	written int
+	buf     []byte
+}
+
+func newCommandOutputTail(limit int) *commandOutputTail {
+	return &commandOutputTail{limit: limit}
+}
+
+func (b *commandOutputTail) Write(p []byte) (int, error) {
+	b.written += len(p)
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+		return len(p), nil
+	}
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.limit {
+		copy(b.buf, b.buf[len(b.buf)-b.limit:])
+		b.buf = b.buf[:b.limit]
+	}
+	return len(p), nil
+}
+
+func (b *commandOutputTail) Detail(label string) string {
+	text := strings.TrimSpace(string(b.buf))
+	if text == "" {
+		return ""
+	}
+	if b.written > len(b.buf) {
+		text = "... " + text
+	}
+	return label + ": " + text
+}
+
+func setupCommandFailure(err error, stdout, stderr *commandOutputTail) error {
+	stderrDetail := stderr.Detail("stderr")
+	stdoutDetail := stdout.Detail("stdout")
+	switch {
+	case stderrDetail != "" && stdoutDetail != "":
+		return fmt.Errorf("%w; %s; %s", err, stderrDetail, stdoutDetail)
+	case stderrDetail != "":
+		return fmt.Errorf("%w; %s", err, stderrDetail)
+	case stdoutDetail != "":
+		return fmt.Errorf("%w; %s", err, stdoutDetail)
+	default:
+		return err
+	}
 }
 
 func startupReadyProbeTimeout(cfg runtime.Config) time.Duration {
@@ -1157,7 +1256,7 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 	// Step 3: Accept startup dialogs (workspace trust + bypass permissions).
 	// Always attempted when process names are set, since any Claude-like
 	// agent may show a trust dialog regardless of EmitsPermissionWarning.
-	if shouldAcceptStartupDialogs(cfg) {
+	if runtime.ShouldAcceptStartupDialogs(cfg) {
 		_ = ops.acceptStartupDialogs(ctx, name) // best-effort
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1184,7 +1283,7 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 	// Some CLIs surface trust or permissions dialogs only after their initial
 	// ready screen. Re-run dialog acceptance after readiness so late dialogs do
 	// not strand the session in an unusable startup state.
-	if shouldAcceptStartupDialogs(cfg) {
+	if runtime.ShouldAcceptStartupDialogs(cfg) {
 		_ = ops.acceptStartupDialogs(ctx, name) // best-effort
 		if err := ctx.Err(); err != nil {
 			return ignoreDeadlineIfSessionAlive(ops, name, err)

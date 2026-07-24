@@ -1408,6 +1408,11 @@ func (s *NativeDoltStore) SetMetadata(id, key, value string) error {
 	return s.SetMetadataBatch(id, map[string]string{key: value})
 }
 
+const (
+	nativeMetadataWriteAttempts     = 3
+	nativeMetadataWriteRetryBackoff = 25 * time.Millisecond
+)
+
 // SetMetadataBatch sets multiple metadata keys on a bead.
 func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) error {
 	storage, release, err := s.acquireStorage()
@@ -1415,8 +1420,23 @@ func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) err
 		return err
 	}
 	defer release()
-	ctx, cancel := nativeDoltOperationContext(context.TODO())
-	defer cancel()
+
+	for attempt := 1; attempt <= nativeMetadataWriteAttempts; attempt++ {
+		ctx, cancel := nativeDoltOperationContext(context.TODO())
+		err = s.setMetadataBatchOnce(ctx, storage, id, kvs)
+		cancel()
+		if err == nil || !isNativeDoltSerializationConflict(err) || attempt == nativeMetadataWriteAttempts {
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * nativeMetadataWriteRetryBackoff)
+	}
+	return err
+}
+
+// setMetadataBatchOnce performs one complete metadata read-merge-write attempt.
+// A retry must call this whole operation again so metadata committed by the
+// competing transaction is included rather than overwritten from a stale read.
+func (s *NativeDoltStore) setMetadataBatchOnce(ctx context.Context, storage beadslib.Storage, id string, kvs map[string]string) error {
 	issue, err := storage.GetIssue(ctx, id)
 	if err != nil {
 		return nativeStoreError(id, err)
@@ -1439,6 +1459,20 @@ func (s *NativeDoltStore) SetMetadataBatch(id string, kvs map[string]string) err
 		return err
 	}
 	return nativeStoreError(id, storage.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, s.actor))
+}
+
+// isNativeDoltSerializationConflict reports only Dolt/MySQL transaction
+// serialization conflicts, which are known not to have committed and are safe
+// to retry. Ambiguous connection failures intentionally remain fail-fast.
+func isNativeDoltSerializationConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "error 1213") ||
+		(strings.Contains(msg, "sqlstate") && strings.Contains(msg, "40001")) ||
+		strings.Contains(msg, "(40001)") ||
+		strings.Contains(msg, "this transaction conflicts with a committed transaction")
 }
 
 // Tx executes fn inside a single native Dolt transaction so every write in the

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -982,6 +983,132 @@ func TestNativeDoltStoreSetMetadataBatchRejectsInvalidExistingMetadata(t *testin
 	}
 	if updateCalled {
 		t.Fatal("UpdateIssue was called after invalid metadata")
+	}
+}
+
+func TestNativeDoltStoreSetMetadataBatchRetriesSerializationConflictFromFreshState(t *testing.T) {
+	getCalls := 0
+	updateCalls := 0
+	var writtenMetadata json.RawMessage
+	storage := &nativeDoltStorageSpy{
+		getIssue: func(context.Context, string) (*beadslib.Issue, error) {
+			getCalls++
+			metadata := json.RawMessage(`{"existing":"before-conflict"}`)
+			if getCalls > 1 {
+				metadata = json.RawMessage(`{"concurrent":"preserved"}`)
+			}
+			return &beadslib.Issue{
+				ID:        "gc-conflict",
+				Title:     "metadata conflict",
+				Status:    beadslib.StatusOpen,
+				IssueType: beadslib.TypeTask,
+				Priority:  2,
+				Metadata:  metadata,
+			}, nil
+		},
+		updateIssue: func(_ context.Context, _ string, updates map[string]interface{}, _ string) error {
+			updateCalls++
+			if updateCalls == 1 {
+				return errors.New("dolt commit: Error 1213 (40001): serialization failure: this transaction conflicts with a committed transaction, try restarting transaction")
+			}
+			raw, ok := updates["metadata"].(json.RawMessage)
+			if !ok {
+				t.Fatalf("metadata update type = %T, want json.RawMessage", updates["metadata"])
+			}
+			writtenMetadata = slices.Clone(raw)
+			return nil
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	if err := store.SetMetadataBatch("gc-conflict", map[string]string{"requested": "written"}); err != nil {
+		t.Fatalf("SetMetadataBatch: %v", err)
+	}
+	if getCalls != 2 {
+		t.Fatalf("GetIssue calls = %d, want 2 so retry re-reads current metadata", getCalls)
+	}
+	if updateCalls != 2 {
+		t.Fatalf("UpdateIssue calls = %d, want 2", updateCalls)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(writtenMetadata, &got); err != nil {
+		t.Fatalf("unmarshal written metadata: %v", err)
+	}
+	want := map[string]string{"concurrent": "preserved", "requested": "written"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("written metadata = %#v, want %#v", got, want)
+	}
+}
+
+func TestNativeDoltStoreSetMetadataBatchDoesNotRetryPermanentWriteError(t *testing.T) {
+	wantErr := errors.New("metadata write denied")
+	getCalls := 0
+	updateCalls := 0
+	storage := &nativeDoltStorageSpy{
+		getIssue: func(context.Context, string) (*beadslib.Issue, error) {
+			getCalls++
+			return &beadslib.Issue{ID: "gc-permanent", Metadata: json.RawMessage(`{"existing":"kept"}`)}, nil
+		},
+		updateIssue: func(context.Context, string, map[string]interface{}, string) error {
+			updateCalls++
+			return wantErr
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	err := store.SetMetadataBatch("gc-permanent", map[string]string{"requested": "written"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SetMetadataBatch error = %v, want %v", err, wantErr)
+	}
+	if getCalls != 1 || updateCalls != 1 {
+		t.Fatalf("calls = GetIssue:%d UpdateIssue:%d, want 1 each", getCalls, updateCalls)
+	}
+}
+
+func TestNativeDoltStoreSetMetadataBatchStopsAfterThreeSerializationConflicts(t *testing.T) {
+	wantErr := errors.New("commit failed (SQLSTATE 40001): serialization failure")
+	getCalls := 0
+	updateCalls := 0
+	storage := &nativeDoltStorageSpy{
+		getIssue: func(context.Context, string) (*beadslib.Issue, error) {
+			getCalls++
+			return &beadslib.Issue{ID: "gc-persistent-conflict"}, nil
+		},
+		updateIssue: func(context.Context, string, map[string]interface{}, string) error {
+			updateCalls++
+			return wantErr
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	err := store.SetMetadataBatch("gc-persistent-conflict", map[string]string{"requested": "written"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SetMetadataBatch error = %v, want %v", err, wantErr)
+	}
+	if getCalls != 3 || updateCalls != 3 {
+		t.Fatalf("calls = GetIssue:%d UpdateIssue:%d, want 3 each", getCalls, updateCalls)
+	}
+}
+
+func TestNativeDoltSerializationConflictClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "mysql error and SQLSTATE", err: errors.New("Error 1213 (40001): serialization failure"), want: true},
+		{name: "SQLSTATE", err: errors.New("commit failed (SQLSTATE 40001)"), want: true},
+		{name: "Dolt conflict wording", err: errors.New("this transaction conflicts with a committed transaction"), want: true},
+		{name: "unrelated serialization wording", err: errors.New("serialization failed while encoding metadata"), want: false},
+		{name: "permanent error", err: errors.New("permission denied"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNativeDoltSerializationConflict(tt.err); got != tt.want {
+				t.Fatalf("isNativeDoltSerializationConflict(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 
