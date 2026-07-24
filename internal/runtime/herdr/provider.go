@@ -50,8 +50,9 @@ const herdrPaneIDMetaKey = "GC_HERDR_PANE_ID"
 // effectiveWorkDir fallback for sessions with no WorkDir configured (empty in
 // city-less construction); setupTimeout is the per-command timeout for
 // pre_start/session_setup commands ([session] setup_timeout; <=0 uses the 10s
-// default).
-func New(herdrSession, metaDir, cityRoot string, setupTimeout time.Duration) *Provider {
+// default). setupMaxTimeout is accepted to match the shared session factory;
+// Herdr retains its established fixed setup timeout behavior.
+func New(herdrSession, metaDir, cityRoot string, setupTimeout, _ time.Duration) *Provider {
 	if metaDir == "" {
 		metaDir = filepath.Join(os.TempDir(), "gc-herdr-meta", sanitize(herdrSession))
 	}
