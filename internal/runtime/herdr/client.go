@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 // client runs `herdr` CLI verbs against a named herdr session and decodes the
@@ -99,7 +101,7 @@ type agentInfo struct {
 // [-- <agent args…>]`. Herdr 0.7.5 launches supported coding agents into an
 // existing shell pane; placement creation already gives us that pane with the
 // requested cwd and environment.
-func (c *client) startAgent(ctx context.Context, name, kind, paneID string, argv []string) (agentInfo, error) {
+func (c *client) startAgent(ctx context.Context, name, kind, paneID string, argv []string) error {
 	args := []string{"agent", "start", name, "--kind", kind, "--pane", paneID}
 	if len(argv) > 1 {
 		args = append(args, "--")
@@ -107,15 +109,24 @@ func (c *client) startAgent(ctx context.Context, name, kind, paneID string, argv
 	}
 	res, err := c.run(ctx, args...)
 	if err != nil {
-		return agentInfo{}, err
+		return err
 	}
 	var wrap struct {
 		Agent agentInfo `json:"agent"`
 	}
 	if err := json.Unmarshal(res, &wrap); err != nil {
-		return agentInfo{}, fmt.Errorf("herdr agent start: decode: %w", err)
+		return fmt.Errorf("herdr agent start: decode: %w", err)
 	}
-	return wrap.Agent, nil
+	return nil
+}
+
+// runPane starts an arbitrary command in an existing shell pane. Herdr joins
+// command arguments into shell input, so pass one fully quoted command string;
+// separate "sh", "-c", command arguments lose the -c boundary.
+func (c *client) runPane(ctx context.Context, paneID, command string) error {
+	line := "sh -c " + shellquote.Quote(command)
+	_, err := c.run(ctx, "pane", "run", paneID, line)
+	return err
 }
 
 // listAgents → `herdr agent list`.
@@ -156,6 +167,24 @@ func (c *client) read(ctx context.Context, name, source string, lines int) (stri
 		return "", fmt.Errorf("herdr agent read: decode: %w", err)
 	}
 	return wrap.Read.Text, nil
+}
+
+// readPane reads a pane that is not registered as a Herdr agent. Unlike the
+// agent read command, pane read emits screen text directly rather than JSON.
+func (c *client) readPane(ctx context.Context, paneID, source string, lines int) (string, error) {
+	args := []string{"--session", c.session, "pane", "read", paneID, "--source", source}
+	if lines > 0 {
+		args = append(args, "--lines", strconv.Itoa(lines))
+	}
+	out, err := exec.CommandContext(ctx, c.bin, args...).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("herdr pane read %q: %s", paneID, ee.Stderr)
+		}
+		return "", fmt.Errorf("herdr pane read %q: %w", paneID, err)
+	}
+	return string(out), nil
 }
 
 // proc is one process in a pane's foreground tree.
