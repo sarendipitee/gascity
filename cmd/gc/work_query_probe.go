@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/agent"
-	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -169,7 +168,7 @@ func prefixedWorkQueryForProbeWithEnv(
 	}
 	env["GC_AGENT"] = agentCfg.QualifiedName()
 	env["GC_SESSION_NAME"] = sessionName
-	env["GC_TEMPLATE"] = agentutil.RoutedToIdentity(agentCfg)
+	env["GC_TEMPLATE"] = agentCfg.QualifiedName()
 	return prefixShellEnv(env, command)
 }
 

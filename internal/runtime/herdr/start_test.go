@@ -21,9 +21,8 @@ import (
 // needed — mirroring how the tmux package tests doStartSession, not Start.
 
 // fakeHerdr is a stand-in herdr CLI. Each invocation appends its argv (minus
-// the --session pair) to log; `agent start` additionally records whether
-// probe existed at launch time, which is how tests observe pre_start-vs-launch
-// ordering on disk.
+// the launch command additionally records whether probe existed at launch
+// time, which is how tests observe pre_start-vs-launch ordering on disk.
 type fakeHerdr struct {
 	bin   string
 	log   string
@@ -46,7 +45,7 @@ shift 2 # drop --session <name>
 printf '%s\n' "$*" >> '` + f.log + `'
 case "$1 $2" in
 "agent list") printf '{"result":{"agents":[]}}' ;;
-"agent start")
+"agent start"|"pane run")
 	if [ -e '` + f.probe + `' ]; then
 		printf 'probe-at-agent-start: present\n' >> '` + f.log + `'
 	else
@@ -94,7 +93,7 @@ func logIndex(lines []string, substr string) int {
 // herdr CLI instead of a real one.
 func newFakeStartProvider(t *testing.T, f *fakeHerdr) *Provider {
 	t.Helper()
-	p := New("teststart", t.TempDir(), "/city/root", 0)
+	p := New("teststart", t.TempDir(), "/city/root", 0, 0)
 	p.c.bin = f.bin
 	return p
 }
@@ -113,6 +112,7 @@ func TestStartRunsPreStartBeforeAgentLaunch(t *testing.T) {
 	p := newFakeStartProvider(t, f)
 
 	cfg := runtime.Config{
+		Command: "omp",
 		WorkDir: work,
 		PreStart: []string{
 			"mkdir -p " + sq(work), // the worktree-setup role
@@ -127,18 +127,18 @@ func TestStartRunsPreStartBeforeAgentLaunch(t *testing.T) {
 	}
 
 	lines := f.logLines(t)
-	startIdx := logIndex(lines, "agent start")
+	startIdx := logIndex(lines, "pane run")
 	if startIdx < 0 {
 		t.Fatalf("agent was never started; log:\n%s", strings.Join(lines, "\n"))
 	}
-	// The probe (created by pre_start) must already exist when `agent start`
-	// runs: pre_start strictly precedes the launch.
+	// The probe (created by pre_start) must already exist when the pane launches:
+	// pre_start strictly precedes the launch.
 	if probeIdx := logIndex(lines, "probe-at-agent-start: present"); probeIdx != startIdx+1 {
 		t.Errorf("pre_start effects not visible at agent launch; log:\n%s", strings.Join(lines, "\n"))
 	}
 	// The prepared workdir — not the city root — is the launch cwd.
-	if !strings.Contains(lines[startIdx], "--cwd "+work) {
-		t.Errorf("agent start line missing --cwd %s: %q", work, lines[startIdx])
+	if createIdx := logIndex(lines, "workspace create"); createIdx < 0 || !strings.Contains(lines[createIdx], "--cwd "+work) {
+		t.Errorf("workspace create missing --cwd %s; log:\n%s", work, strings.Join(lines, "\n"))
 	}
 }
 
@@ -184,6 +184,7 @@ func TestStartStagesWorkDirBeforePreStart(t *testing.T) {
 	p := newFakeStartProvider(t, f)
 
 	cfg := runtime.Config{
+		Command:   "omp",
 		WorkDir:   work,
 		CopyFiles: []runtime.CopyEntry{{Src: src}},
 		PreStart:  []string{"test -f " + sq(staged)},
@@ -196,12 +197,12 @@ func TestStartStagesWorkDirBeforePreStart(t *testing.T) {
 		t.Fatalf("staged file = %q, %v; want payload", b, err)
 	}
 	lines := f.logLines(t)
-	startIdx := logIndex(lines, "agent start")
+	startIdx := logIndex(lines, "pane run")
 	if startIdx < 0 {
 		t.Fatal("agent was never started")
 	}
-	if !strings.Contains(lines[startIdx], "--cwd "+work) {
-		t.Errorf("agent start line missing --cwd %s: %q", work, lines[startIdx])
+	if createIdx := logIndex(lines, "workspace create"); createIdx < 0 || !strings.Contains(lines[createIdx], "--cwd "+work) {
+		t.Errorf("workspace create missing --cwd %s; log:\n%s", work, strings.Join(lines, "\n"))
 	}
 }
 
@@ -236,6 +237,7 @@ func TestStartRunsSessionSetupAfterLaunch(t *testing.T) {
 	sessionEnvOut := filepath.Join(t.TempDir(), "gc-session-value")
 
 	cfg := runtime.Config{
+		Command: "omp",
 		WorkDir: work,
 		SessionSetup: []string{
 			`printf 'session_setup-ran\n' >> ` + sq(f.log) + `; printf '%s' "$GC_SESSION" > ` + sq(sessionEnvOut),
@@ -251,7 +253,7 @@ func TestStartRunsSessionSetupAfterLaunch(t *testing.T) {
 		t.Errorf("GC_SESSION seen by session_setup = %q, %v; want gastown__worker", b, err)
 	}
 	lines := f.logLines(t)
-	startIdx := logIndex(lines, "agent start")
+	startIdx := logIndex(lines, "pane run")
 	waitIdx := logIndex(lines, "agent wait")
 	setupIdx := logIndex(lines, "session_setup-ran")
 	scriptIdx := logIndex(lines, "session_setup_script-ran")

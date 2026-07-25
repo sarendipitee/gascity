@@ -15,7 +15,6 @@ import (
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/git"
-	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/sling"
 )
 
@@ -82,12 +81,9 @@ func reapClosedBeadWorktrees(
 	cityPath string,
 	cfg *config.City,
 	rigBeadStores map[string]beads.Store,
-	liveSessionDirs []string,
-	dryRun bool,
 	rec events.Recorder,
 	stderr io.Writer,
-) reapReport {
-	report := reapReport{DryRun: dryRun}
+) int {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -95,7 +91,7 @@ func reapClosedBeadWorktrees(
 		rec = events.Discard
 	}
 	if cfg == nil || len(rigBeadStores) == 0 {
-		return report
+		return 0
 	}
 
 	// Build a guard set of session home names so agent template directories
@@ -107,27 +103,19 @@ func reapClosedBeadWorktrees(
 		}
 	}
 
-	// Authoritative liveness signal, gathered once for the whole pass. When the
-	// scan is indeterminate the reaper protects every candidate (fail closed).
-	live := collectLiveWorktreeStateFn()
-
 	wtRoot := filepath.Join(cityPath, ".gc", "worktrees")
+	reaped := 0
 
 	for rigName, store := range rigBeadStores {
 		if store == nil {
 			continue
 		}
-		rigRoot := rigRootByName(cfg, rigName)
-		if rigRoot == "" {
-			// No configured filesystem path for this rig — cannot resolve the
-			// owning repository, so we cannot safely enumerate or remove.
-			continue
-		}
 		rigWorktreeDir := filepath.Join(wtRoot, rigName)
-
-		worktrees, err := git.New(rigRoot).WorktreeList()
+		entries, err := os.ReadDir(rigWorktreeDir)
 		if err != nil {
-			fmt.Fprintf(stderr, "reapClosedBeadWorktrees: listing worktrees for rig %s (%s): %v\n", rigName, rigRoot, err) //nolint:errcheck
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "reapClosedBeadWorktrees: reading %s: %v\n", rigWorktreeDir, err) //nolint:errcheck
+			}
 			continue
 		}
 
@@ -146,21 +134,15 @@ func reapClosedBeadWorktrees(
 			if !pathutil.PathWithin(rigWorktreeDir, worktreePath) || pathutil.SamePath(rigWorktreeDir, worktreePath) {
 				continue
 			}
-			// Defense in depth: never act on a path that is not strictly under
-			// the city worktree root.
-			if !isStrictlyUnderDir(wtRoot, worktreePath) {
-				continue
-			}
-
-			base := filepath.Base(worktreePath)
+			name := entry.Name()
 
 			// Session home guard: never touch agent template directories.
-			if sessionHomes[base] {
+			if sessionHomes[name] {
 				continue
 			}
 
-			// Extract a bead ID candidate from the worktree's leaf name.
-			beadID := extractBeadIDFromWorktreeName(cfg, base)
+			// Extract a bead ID candidate from the directory name.
+			beadID := extractBeadIDFromWorktreeName(cfg, name)
 			if beadID == "" {
 				continue
 			}
@@ -266,37 +248,35 @@ func reapClosedBeadWorktrees(
 				}
 			}
 
-			branch, _ := git.New(worktreePath).CurrentBranch()
-
-			if reason != "" {
+			if hasUncommitted || hasUnpushed || hasStashes {
+				reason := fmt.Sprintf("uncommitted=%v unpushed=%v stashes=%v", hasUncommitted, hasUnpushed, hasStashes)
 				fmt.Fprintf(stderr, //nolint:errcheck
-					"reapClosedBeadWorktrees: protecting %s (bead %s closed but %s)\n",
+					"reapClosedBeadWorktrees: skipping %s (bead %s closed but unsafe: %s)\n",
 					worktreePath, beadID, reason,
 				)
-				recordReapSkipped(rec, beadID, worktreePath, rigName, reason)
-				report.Protected = append(report.Protected, reapDecision{
-					BeadID: beadID, Path: worktreePath, Rig: rigName, Branch: branch, Reason: reason,
-				})
+				if raw, err := json.Marshal(events.BeadWorktreeReapSkippedPayload{
+					BeadID: beadID,
+					Path:   worktreePath,
+					Rig:    rigName,
+					Reason: reason,
+				}); err == nil {
+					rec.Record(events.Event{
+						Type:    events.BeadWorktreeReapSkipped,
+						Actor:   "gc",
+						Subject: beadID,
+						Payload: raw,
+					})
+				}
 				continue
 			}
 
-			if dryRun {
-				const whatIf = "dry-run: would reap (closed bead, clean tree, no live process)"
-				fmt.Fprintf(stderr, //nolint:errcheck
-					"reapClosedBeadWorktrees: %s: %s for closed bead %s\n",
-					whatIf, worktreePath, beadID,
-				)
-				recordReapSkipped(rec, beadID, worktreePath, rigName, whatIf)
-				report.Reaped = append(report.Reaped, reapDecision{
-					BeadID: beadID, Path: worktreePath, Rig: rigName, Branch: branch,
-				})
-				continue
-			}
+			// Capture branch before removal — the worktree dir will be gone after.
+			branch, _ := wg.CurrentBranch()
 
-			// Remove the worktree from the OWNING rig repository. git worktree
-			// remove must be run from the main repo root, not from within the
-			// worktree being removed.
-			if err := git.New(rigRoot).WorktreeRemove(worktreePath, false); err != nil {
+			// Remove the worktree. git worktree remove must be run from the
+			// main repo root, not from within the worktree being removed.
+			mainRepo := git.New(cityPath)
+			if err := mainRepo.WorktreeRemove(worktreePath, false); err != nil {
 				fmt.Fprintf(stderr, "reapClosedBeadWorktrees: removing %s: %v\n", worktreePath, err) //nolint:errcheck
 				continue
 			}
@@ -317,9 +297,7 @@ func reapClosedBeadWorktrees(
 					Payload: raw,
 				})
 			}
-			report.Reaped = append(report.Reaped, reapDecision{
-				BeadID: beadID, Path: worktreePath, Rig: rigName, Branch: branch,
-			})
+			reaped++
 		}
 	}
 	return report
