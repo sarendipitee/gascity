@@ -3,6 +3,8 @@ package herdr
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,10 +22,10 @@ import (
 
 // Provider implements runtime.Provider (and ServerLifecycleProvider) backed by
 // herdr. Model: one shared herdr session (server) per city; within it, one
-// workspace per rig (or per town) and one tab per agent, so each gascity session
-// is its own switchable "space" rather than a tiled pane. Agents are addressable
-// by name, 1:1 with gascity session names. Opt-in via the "herdr" runtime
-// selector; tmux default. See herdr-provider-design.md.
+// workspace per rig (or per town) and one tab per agent, so each Gas City
+// session is its own switchable space. Herdr's API limits agent names to 32
+// lowercase ASCII identifier characters, so provider calls use a deterministic
+// mapped identifier while public provider methods retain the full session name.
 type Provider struct {
 	c            *client
 	metaDir      string        // sidecar KV root (herdr has no per-session metadata store)
@@ -81,6 +83,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err := p.ConfigureServer(); err != nil {
 		return fmt.Errorf("herdr: configure server: %w", err)
 	}
+	herdrName := herdrAgentName(name)
 	if p.IsRunning(name) {
 		return runtime.ErrSessionExists
 	}
@@ -97,14 +100,20 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	// find-or-create is serialized so concurrent same-rig Starts share one
 	// workspace instead of racing to create duplicates.
 	wsLabel, tabLabel := placementFor(name, cfg.Env)
+	workDir := effectiveWorkDir(cfg, p.c.cityRoot)
+	kind, argv, err := herdrAgentLaunch(cfg)
+	if err != nil {
+		return fmt.Errorf("herdr: start %q: %w", name, err)
+	}
 	p.mu.Lock()
-	tabID, strayPane, err := p.c.ensurePlacement(ctx, wsLabel, tabLabel)
+	_, paneID, err := p.c.ensurePlacement(ctx, wsLabel, tabLabel, workDir, cfg.Env)
 	p.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("herdr: place %q: %w", name, err)
 	}
-	info, err := p.c.startAgent(ctx, name, tabID, effectiveWorkDir(cfg, p.c.cityRoot), cfg.Env, shellArgv(cfg.Command))
+	info, err := p.c.startAgent(ctx, herdrName, kind, paneID, argv)
 	if err != nil {
+		_ = p.c.closePane(ctx, paneID)
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
 	// Seed the metadata sidecar from cfg.Env NOW, before the (long) startup
@@ -126,10 +135,11 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err := p.seedMetaFromEnv(name, cfg.Env); err != nil {
 		return fmt.Errorf("herdr: seed session metadata for %q: %w", name, err)
 	}
-	// herdr auto-spawns a stray shell pane when it creates a workspace/tab; close
-	// it so the tab holds only the agent.
-	if strayPane != "" && strayPane != info.PaneID {
-		_ = p.c.closePane(ctx, strayPane)
+	if err := p.SetMeta(name, herdrAgentNameMetaKey, herdrName); err != nil {
+		return fmt.Errorf("herdr: seed agent name for %q: %w", name, err)
+	}
+	if err := p.SetMeta(name, gasCitySessionNameMetaKey, name); err != nil {
+		return fmt.Errorf("herdr: seed session name for %q: %w", name, err)
 	}
 	// Deliver the agent's first turn. Two independent sources, mirroring tmux:
 	// a named always-awake Claude session carries its behavioral prime in
@@ -155,7 +165,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		// worse than the prior unconditional send), and the reconciler tolerates a
 		// slow Start (pendingCreateNeverStartedTimeout = 10m).
 		_ = p.WaitForIdle(ctx, name, startupNudgeIdleTimeout)
-		if err := p.c.deliverNudge(ctx, info.PaneID, name, startupText); err != nil {
+		if err := p.c.deliverNudge(ctx, info.PaneID, herdrName, startupText); err != nil {
 			// Best-effort: the submit didn't confirm (TUI race under boot load).
 			// Surface it rather than silently leaving a stranded startup turn;
 			// nudgeStalledPoolClaims is the reconcile-tick backstop of last resort.
@@ -353,12 +363,13 @@ func (p *Provider) Interrupt(name string) error {
 
 // IsRunning reports whether an agent with this name exists in the session.
 func (p *Provider) IsRunning(name string) bool {
+	herdrName := herdrAgentName(name)
 	agents, err := p.c.listAgents(context.Background())
 	if err != nil {
 		return false
 	}
 	for _, a := range agents {
-		if a.Name == name {
+		if a.Name == herdrName {
 			return true
 		}
 	}
@@ -370,7 +381,7 @@ func (p *Provider) IsAttached(_ string) bool { return false }
 
 // Attach runs `herdr agent attach`, blocking until the user detaches.
 func (p *Provider) Attach(name string) error {
-	cmd := exec.Command(p.c.bin, "--session", p.c.session, "agent", "attach", name)
+	cmd := exec.Command(p.c.bin, "--session", p.c.session, "agent", "attach", herdrAgentName(name))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run() // blocks until the user detaches
 }
@@ -471,7 +482,7 @@ func (p *Provider) ObserveLiveness(name string, _ []string) runtime.Liveness {
 	if strings.TrimSpace(name) == "" {
 		return runtime.Liveness{}
 	}
-	info, present, err := p.c.getAgent(context.Background(), name)
+	info, present, err := p.c.getAgent(context.Background(), herdrAgentName(name))
 	return livenessFromAgent(info, present, err)
 }
 
@@ -511,13 +522,13 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	if err != nil || pid == "" {
 		return runtime.ErrSessionNotFound
 	}
-	return p.c.deliverNudge(ctx, pid, name, runtime.FlattenText(content))
+	return p.c.deliverNudge(ctx, pid, herdrAgentName(name), runtime.FlattenText(content))
 }
 
 // Peek reads the current rendered screen ("visible") — the liveness/fingerprint
 // snapshot. recent*/scrollback is empty until lines scroll off.
 func (p *Provider) Peek(name string, lines int) (string, error) {
-	return p.c.read(context.Background(), name, "visible", lines)
+	return p.c.read(context.Background(), herdrAgentName(name), "visible", lines)
 }
 
 // ListRunning returns the names of running agents whose names start with prefix.
@@ -528,8 +539,9 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	}
 	var out []string
 	for _, a := range agents {
-		if strings.HasPrefix(a.Name, prefix) {
-			out = append(out, a.Name)
+		name, ok := p.gasCityName(a.Name)
+		if ok && strings.HasPrefix(name, prefix) {
+			out = append(out, name)
 		}
 	}
 	return out, nil
@@ -576,7 +588,7 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 	if _, err := os.Stat(src); err != nil {
 		return nil // best-effort: missing src
 	}
-	a, ok, err := p.c.getAgent(context.Background(), name)
+	a, ok, err := p.c.getAgent(context.Background(), herdrAgentName(name))
 	if err != nil || !ok || a.Cwd == "" {
 		return nil
 	}
@@ -643,11 +655,78 @@ func (p *Provider) clearMeta(name string) error {
 	return os.RemoveAll(filepath.Join(p.metaDir, sanitize(name)))
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+const (
+	herdrAgentNameMetaKey     = "_herdr_agent_name"
+	gasCitySessionNameMetaKey = "_gas_city_session_name"
+)
 
-// paneID resolves a gascity session name to its herdr pane id (or "" if absent).
+// herdrAgentName maps a Gas City session name to an identifier accepted by
+// Herdr 0.7.5. The hash suffix preserves uniqueness after truncation; names
+// already accepted by Herdr remain unchanged for compatibility.
+func herdrAgentName(name string) string {
+	if len(name) <= 32 && isHerdrAgentName(name) {
+		return name
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	base := strings.Trim(b.String(), "-_")
+	if base == "" || base[0] < 'a' || base[0] > 'z' {
+		base = "gc-" + base
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
+	if len(base) > 32-len(suffix) {
+		base = base[:32-len(suffix)]
+	}
+	return base + suffix
+}
+
+func isHerdrAgentName(name string) bool {
+	if name == "" || len(name) > 32 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// gasCityName maps an active Herdr agent back to the public session name stored
+// in its sidecar metadata.
+func (p *Provider) gasCityName(agentName string) (string, bool) {
+	entries, err := os.ReadDir(p.metaDir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(p.metaDir, entry.Name())
+		mapped, err := os.ReadFile(filepath.Join(dir, sanitize(herdrAgentNameMetaKey)))
+		if err != nil || string(mapped) != agentName {
+			continue
+		}
+		name, err := os.ReadFile(filepath.Join(dir, sanitize(gasCitySessionNameMetaKey)))
+		if err == nil && string(name) != "" {
+			return string(name), true
+		}
+	}
+	return "", false
+}
+
+// paneID resolves a Gas City session name to its Herdr pane id (or "" if absent).
 func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
-	a, ok, err := p.c.getAgent(ctx, name)
+	a, ok, err := p.c.getAgent(ctx, herdrAgentName(name))
 	if err != nil {
 		return "", err
 	}
@@ -658,11 +737,16 @@ func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
 }
 
 // shellArgv wraps a shell command string as argv for `herdr agent start -- …`.
-func shellArgv(command string) []string {
-	if strings.TrimSpace(command) == "" {
-		return []string{"/bin/sh"}
+func herdrAgentLaunch(cfg runtime.Config) (string, []string, error) {
+	kind := strings.TrimSpace(cfg.Env["GC_PROVIDER"])
+	if kind == "" {
+		return "", nil, fmt.Errorf("GC_PROVIDER is required to select a herdr agent kind")
 	}
-	return []string{"/bin/sh", "-c", command}
+	argv := shellquote.Split(cfg.Command)
+	if len(argv) == 0 {
+		return "", nil, fmt.Errorf("agent command is empty")
+	}
+	return kind, argv, nil
 }
 
 // workspaceTabFor maps a gascity runtime session name to its herdr placement: a

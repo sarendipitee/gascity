@@ -31,7 +31,7 @@ func (p *Provider) WaitForIdle(ctx context.Context, name string, timeout time.Du
 	if ms < 1 {
 		ms = 1
 	}
-	_, _ = p.c.run(ctx, "agent", "wait", name, "--status", "idle", "--timeout", strconv.Itoa(ms))
+	_, _ = p.c.run(ctx, "agent", "wait", herdrAgentName(name), "--status", "idle", "--timeout", strconv.Itoa(ms))
 	return ctx.Err()
 }
 
