@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/gastownhall/gascity/internal/api"
@@ -184,7 +183,7 @@ func cmdHandoff(args []string, target string, auto bool, hookFormat string, stdo
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return waitForControllerRestart(sigCtx, dops, sp, current.sessionName, "gc handoff",
+	return waitForControllerRestart(sigCtx, dops, current.sessionName, "gc handoff",
 		controllerRestartPollInterval, controllerRestartTimeout(cfg), stderr)
 }
 
@@ -259,7 +258,7 @@ func doHandoffWithOutcome(store, sessStore beads.Store, rec events.Recorder, dop
 		return handoffOutcome{code: 1}
 	}
 
-	restartable, pinned, err := sessionRestartableByController(sessStore, sessionName)
+	restartable, err := sessionRestartableByController(sessStore, sessionName)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc handoff: checking session type: %v\n", err) //nolint:errcheck // best-effort stderr
 		return handoffOutcome{code: 1}
@@ -277,23 +276,9 @@ func doHandoffWithOutcome(store, sessStore beads.Store, rec events.Recorder, dop
 		fmt.Fprintf(stderr, "gc handoff: setting restart flag: %v\n", err) //nolint:errcheck // best-effort stderr
 		return handoffOutcome{code: 1}
 	}
-	// Pinned named sessions are kill-protected by the reconciler unless an
-	// explicit controller reset (continuation_reset_pending) is persisted
-	// through the worker boundary: without it, the reconciler's collateral-skip
-	// clears the runtime flag set above and leaves the session running
-	// indefinitely. Persisting is therefore mandatory for pinned sessions; for
-	// everything else the runtime flag is primary and the bead write stays
-	// best-effort backup.
-	if pinned {
-		if persistRestart == nil {
-			fmt.Fprintf(stderr, "gc handoff: pinned session %q has no restart persistence available; not requesting restart\n", sessionName) //nolint:errcheck // best-effort stderr
-			return handoffOutcome{code: 1}
-		}
-		if err := persistRestart(); err != nil {
-			fmt.Fprintf(stderr, "gc handoff: could not persist restart marker for pinned session %q; not requesting restart: %v\n", sessionName, err) //nolint:errcheck // best-effort stderr
-			return handoffOutcome{code: 1}
-		}
-	} else if persistRestart != nil {
+	// Also persist the request through the worker boundary so it survives
+	// tmux session death. Non-fatal: the runtime flag above is primary.
+	if persistRestart != nil {
 		if err := persistRestart(); err != nil {
 			fmt.Fprintf(stderr, "gc handoff: setting bead restart flag: %v\n", err) //nolint:errcheck // best-effort stderr
 		}
@@ -374,33 +359,25 @@ func createHandoffMail(store, sessStore beads.Store, rec events.Recorder, sender
 	return msg, true
 }
 
-// sessionRestartableByController reports whether the controller is willing to
-// restart the named session (restartable) and whether it is a pinned,
-// kill-protected named session (pinned). pinned mirrors the reconciler's own
-// pinnedConfiguredNamedSessionKillProtected predicate (isNamedSessionInfo &&
-// pin_awake == "true") so callers can predict whether the reconciler will
-// refuse a collateral kill absent an explicit controller reset. Both facts
-// come off the single bead read so callers needing both (gc handoff) do not
-// pay for a second store round-trip.
-func sessionRestartableByController(sessStore beads.Store, sessionName string) (restartable, pinned bool, err error) {
+func sessionRestartableByController(sessStore beads.Store, sessionName string) (bool, error) {
 	if sessStore == nil || sessionName == "" {
-		return true, false, nil
+		return true, nil
 	}
 	id, err := resolveSessionID(sessStore, sessionName)
 	if err != nil {
 		if errors.Is(err, session.ErrSessionNotFound) {
-			return true, false, nil
+			return true, nil
 		}
-		return false, false, fmt.Errorf("resolving session %q: %w", sessionName, err)
+		return false, fmt.Errorf("resolving session %q: %w", sessionName, err)
 	}
 	b, err := sessStore.Get(id)
 	if err != nil {
-		return false, false, fmt.Errorf("loading session %q: %w", id, err)
+		return false, fmt.Errorf("loading session %q: %w", id, err)
 	}
 	if !isNamedSessionBead(b) {
-		return true, false, nil
+		return true, nil
 	}
-	return namedSessionMode(b) == "always", strings.TrimSpace(b.Metadata["pin_awake"]) == "true", nil
+	return namedSessionMode(b) == "always", nil
 }
 
 func clearRestartRequest(sessStore beads.Store, dops drainOps, sessionName string) error {
@@ -443,7 +420,7 @@ func doHandoffRemote(store, sessStore beads.Store, rec events.Recorder, sp runti
 		return 1
 	}
 
-	restartable, _, err := sessionRestartableByController(sessStore, sessionName)
+	restartable, err := sessionRestartableByController(sessStore, sessionName)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc handoff: checking session type: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1

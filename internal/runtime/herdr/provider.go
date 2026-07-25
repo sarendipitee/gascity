@@ -41,6 +41,8 @@ var (
 // the [session] setup_timeout config default and tmux's DefaultConfig().
 const defaultSetupTimeout = 10 * time.Second
 
+const herdrPaneIDMetaKey = "GC_HERDR_PANE_ID"
+
 // New builds a herdr Provider. herdrSession is the shared per-city herdr session
 // name; metaDir is a writable directory for sidecar session metadata (a temp
 // fallback is used when empty, e.g. a city-less standalone construction); cityRoot
@@ -48,8 +50,9 @@ const defaultSetupTimeout = 10 * time.Second
 // effectiveWorkDir fallback for sessions with no WorkDir configured (empty in
 // city-less construction); setupTimeout is the per-command timeout for
 // pre_start/session_setup commands ([session] setup_timeout; <=0 uses the 10s
-// default).
-func New(herdrSession, metaDir, cityRoot string, setupTimeout time.Duration) *Provider {
+// default). setupMaxTimeout is accepted to match the shared session factory;
+// Herdr retains its established fixed setup timeout behavior.
+func New(herdrSession, metaDir, cityRoot string, setupTimeout, _ time.Duration) *Provider {
 	if metaDir == "" {
 		metaDir = filepath.Join(os.TempDir(), "gc-herdr-meta", sanitize(herdrSession))
 	}
@@ -113,7 +116,7 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// find-or-create is serialized so concurrent same-rig Starts share one
 	// workspace instead of racing to create duplicates.
 	wsLabel, tabLabel := placementFor(name, cfg.Env)
-	kind, argv, err := herdrAgentLaunch(cfg)
+	launch, err := herdrLaunchFor(cfg)
 	if err != nil {
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
@@ -123,10 +126,20 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		return fmt.Errorf("herdr: place %q: %w", name, err)
 	}
-	info, err := p.c.startAgent(ctx, name, kind, paneID, argv)
+	if launch.kind != "" {
+		err = p.c.startAgent(ctx, name, launch.kind, paneID, launch.argv)
+	} else {
+		err = p.c.runPane(ctx, paneID, launch.command)
+	}
 	if err != nil {
 		_ = p.c.closePane(ctx, paneID)
 		return fmt.Errorf("herdr: start %q: %w", name, err)
+	}
+	if launch.kind == "" {
+		if err := p.SetMeta(name, herdrPaneIDMetaKey, paneID); err != nil {
+			_ = p.c.closePane(ctx, paneID)
+			return fmt.Errorf("herdr: persist shell pane for %q: %w", name, err)
+		}
 	}
 	// Seed the metadata sidecar from cfg.Env NOW, before the (long) startup
 	// delivery below. tmux gets this for free — its GetMeta reads the tmux
@@ -161,7 +174,7 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// the one hardened post-idle paste+submit path; cfg.Nudge takes precedence
 	// so the working pool path is byte-for-byte unchanged. See startupDeliveryText.
 	startupText := startupDeliveryText(cfg)
-	if info.PaneID != "" && (startupText != "" || hasSessionSetup(cfg)) {
+	if paneID != "" && (startupText != "" || hasSessionSetup(cfg)) {
 		// A freshly-spawned agent boots through a shell→TUI handoff before its
 		// input prompt is listening; a paste or submit delivered in that window is
 		// silently swallowed, leaving the agent idle forever instead of running its
@@ -180,8 +193,8 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// session_setup runs host-side ("in gc's process via sh -c", per the Config
 	// contract), so herdr can honor it the same way tmux does. Non-fatal.
 	p.runSessionSetup(ctx, name, cfg, os.Stderr)
-	if startupText != "" && info.PaneID != "" {
-		if err := p.c.deliverNudge(ctx, info.PaneID, name, startupText); err != nil {
+	if startupText != "" && paneID != "" {
+		if err := p.c.deliverNudge(ctx, paneID, name, startupText); err != nil {
 			// Best-effort: the submit didn't confirm (TUI race under boot load).
 			// Surface it rather than silently leaving a stranded startup turn;
 			// nudgeStalledPoolClaims is the reconcile-tick backstop of last resort.
@@ -312,6 +325,7 @@ func (p *Provider) Stop(name string) error {
 		return nil // idempotent
 	}
 	_ = p.c.closePane(ctx, pid)
+	p.forgetShellPane(name)
 	_ = p.clearMeta(name)
 	return nil
 }
@@ -326,8 +340,11 @@ func (p *Provider) Interrupt(name string) error {
 	return p.c.sendKeys(ctx, pid, "ctrl+c") // herdr has no signal API; ctrl+c is the soft interrupt
 }
 
-// IsRunning reports whether an agent with this name exists in the session.
+// IsRunning reports whether an agent or shell-backed pane with this name exists.
 func (p *Provider) IsRunning(name string) bool {
+	if p.shellPaneID(name) != "" {
+		return true
+	}
 	agents, err := p.c.listAgents(context.Background())
 	if err != nil {
 		return false
@@ -442,9 +459,12 @@ func processTreeAlive(shellPID int, fg []proc, processNames []string, sessionID 
 // keeps a live orchestrator classified alive. ProcessAlive is retained
 // unchanged for the non-observer call sites (doctor) and the caffeinate-wrapper
 // case; processNames is unused here because herdr's status supersedes it.
-func (p *Provider) ObserveLiveness(name string, _ []string) runtime.Liveness {
+func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.Liveness {
 	if strings.TrimSpace(name) == "" {
 		return runtime.Liveness{}
+	}
+	if p.shellPaneID(name) != "" {
+		return runtime.Liveness{Running: true, Alive: p.ProcessAlive(name, processNames)}
 	}
 	info, present, err := p.c.getAgent(context.Background(), name)
 	return livenessFromAgent(info, present, err)
@@ -492,19 +512,41 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 // Peek reads the current rendered screen ("visible") — the liveness/fingerprint
 // snapshot. recent*/scrollback is empty until lines scroll off.
 func (p *Provider) Peek(name string, lines int) (string, error) {
+	if paneID := p.shellPaneID(name); paneID != "" {
+		return p.c.readPane(context.Background(), paneID, "visible", lines)
+	}
 	return p.c.read(context.Background(), name, "visible", lines)
 }
 
-// ListRunning returns the names of running agents whose names start with prefix.
+// ListRunning returns the names of running agents and shell-backed sessions
+// whose names start with prefix.
 func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	agents, err := p.c.listAgents(context.Background())
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]struct{}, len(agents))
 	var out []string
 	for _, a := range agents {
 		if strings.HasPrefix(a.Name, prefix) {
+			seen[a.Name] = struct{}{}
 			out = append(out, a.Name)
+		}
+	}
+	entries, err := os.ReadDir(p.metaDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		paneID, _ := p.GetMeta(name, herdrPaneIDMetaKey)
+		if paneID != "" && strings.HasPrefix(name, prefix) {
+			if _, ok := seen[name]; !ok {
+				out = append(out, name)
+			}
 		}
 	}
 	return out, nil
@@ -633,8 +675,11 @@ func (p *Provider) clearMeta(name string) error {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// paneID resolves a gascity session name to its herdr pane id (or "" if absent).
+// paneID resolves a Gas City session name to its Herdr pane id (or "" if absent).
 func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
+	if paneID := p.shellPaneID(name); paneID != "" {
+		return paneID, nil
+	}
 	a, ok, err := p.c.getAgent(ctx, name)
 	if err != nil {
 		return "", err
@@ -645,17 +690,48 @@ func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
 	return a.PaneID, nil
 }
 
-// shellArgv wraps a shell command string as argv for `herdr agent start -- …`.
-func herdrAgentLaunch(cfg runtime.Config) (string, []string, error) {
+func (p *Provider) shellPaneID(name string) string {
+	paneID, _ := p.GetMeta(name, herdrPaneIDMetaKey)
+	return strings.TrimSpace(paneID)
+}
+
+func (p *Provider) forgetShellPane(name string) {
+	_ = p.RemoveMeta(name, herdrPaneIDMetaKey)
+}
+
+type herdrLaunch struct {
+	kind    string
+	argv    []string
+	command string
+}
+
+// herdrLaunchFor selects Herdr's registered-agent launch only for supported
+// interactive providers. Other commands are valid Gas City sessions too
+// (control dispatchers, witnesses, and user-defined shell services), so they
+// run directly in the prepared pane instead of being rejected by agent start.
+func herdrLaunchFor(cfg runtime.Config) (herdrLaunch, error) {
+	command := strings.TrimSpace(cfg.Command)
+	if command == "" {
+		return herdrLaunch{}, fmt.Errorf("agent command is empty")
+	}
 	kind := strings.TrimSpace(cfg.Env["GC_PROVIDER"])
-	if kind == "" {
-		return "", nil, fmt.Errorf("GC_PROVIDER is required to select a herdr agent kind")
+	if !supportedHerdrAgentKind(kind) {
+		return herdrLaunch{command: command}, nil
 	}
-	argv := shellquote.Split(cfg.Command)
+	argv := shellquote.Split(command)
 	if len(argv) == 0 {
-		return "", nil, fmt.Errorf("agent command is empty")
+		return herdrLaunch{}, fmt.Errorf("agent command is empty")
 	}
-	return kind, argv, nil
+	return herdrLaunch{kind: kind, argv: argv}, nil
+}
+
+func supportedHerdrAgentKind(kind string) bool {
+	switch kind {
+	case "pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline", "omp", "mastracode", "opencode", "copilot", "kimi", "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli", "maki":
+		return true
+	default:
+		return false
+	}
 }
 
 // workspaceTabFor maps a gascity runtime session name to its herdr placement: a
