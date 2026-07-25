@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,22 +89,16 @@ type agentInfo struct {
 	Cwd         string `json:"cwd"`
 }
 
-// startAgent → `herdr agent start <name> --no-focus [--tab <tabID>] [--cwd <cwd>]
-// [--env k=v …] -- <argv…>`. A non-empty tabID places the agent in that tab;
-// without it herdr splits the focused tab into a new pane.
-func (c *client) startAgent(ctx context.Context, name, tabID, cwd string, env map[string]string, argv []string) (agentInfo, error) {
-	args := []string{"agent", "start", name, "--no-focus"}
-	if tabID != "" {
-		args = append(args, "--tab", tabID)
+// startAgent → `herdr agent start <name> --kind <kind> --pane <paneID>
+// [-- <agent args…>]`. Herdr 0.7.5 launches supported coding agents into an
+// existing shell pane; placement creation already gives us that pane with the
+// requested cwd and environment.
+func (c *client) startAgent(ctx context.Context, name, kind, paneID string, argv []string) (agentInfo, error) {
+	args := []string{"agent", "start", name, "--kind", kind, "--pane", paneID}
+	if len(argv) > 1 {
+		args = append(args, "--")
+		args = append(args, argv[1:]...)
 	}
-	if cwd != "" {
-		args = append(args, "--cwd", cwd)
-	}
-	for k, v := range env {
-		args = append(args, "--env", k+"="+v)
-	}
-	args = append(args, "--")
-	args = append(args, argv...)
 	res, err := c.run(ctx, args...)
 	if err != nil {
 		return agentInfo{}, err
@@ -325,10 +320,12 @@ func (c *client) findWorkspace(ctx context.Context, label string) (string, error
 }
 
 // workspaceCreate makes a workspace labeled label and returns its id plus the
-// default tab and stray shell pane herdr auto-spawns inside it (the caller
-// repurposes the tab and closes the stray pane).
-func (c *client) workspaceCreate(ctx context.Context, label string) (wsID, tabID, strayPane string, err error) {
-	res, err := c.run(ctx, "workspace", "create", "--label", label, "--no-focus")
+// default tab and shell pane that herdr creates inside it. The pane is the
+// launch target for `herdr agent start --pane`.
+func (c *client) workspaceCreate(ctx context.Context, label, cwd string, env map[string]string) (wsID, tabID, paneID string, err error) {
+	args := []string{"workspace", "create", "--label", label, "--no-focus"}
+	args = appendPlacementEnv(args, cwd, env)
+	res, err := c.run(ctx, args...)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -369,10 +366,12 @@ func (c *client) findTab(ctx context.Context, wsID, label string) (string, error
 	return "", nil
 }
 
-// tabCreate makes a tab labeled label in wsID and returns its id plus the stray
-// shell pane herdr auto-spawns (the caller closes it after the agent starts).
-func (c *client) tabCreate(ctx context.Context, wsID, label string) (tabID, strayPane string, err error) {
-	res, err := c.run(ctx, "tab", "create", "--workspace", wsID, "--label", label, "--no-focus")
+// tabCreate makes a tab labeled label in wsID and returns its id plus the shell
+// pane that herdr creates inside it.
+func (c *client) tabCreate(ctx context.Context, wsID, label, cwd string, env map[string]string) (tabID, paneID string, err error) {
+	args := []string{"tab", "create", "--workspace", wsID, "--label", label, "--no-focus"}
+	args = appendPlacementEnv(args, cwd, env)
+	res, err := c.run(ctx, args...)
 	if err != nil {
 		return "", "", err
 	}
@@ -396,35 +395,46 @@ func (c *client) tabRename(ctx context.Context, tabID, label string) error {
 	return err
 }
 
-// ensurePlacement resolves where an agent's pane should live: it finds or creates
-// the per-rig/town workspace wsLabel, then finds or creates the per-agent tab
-// tabLabel inside it. It returns the tab id and, when herdr auto-spawned a stray
-// shell pane (new workspace or new tab), that pane's id so Start can close it —
-// leaving the tab holding only the agent. A reused existing tab returns "".
-func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel string) (tabID, strayPane string, err error) {
+// ensurePlacement resolves where an agent's pane should live: it finds or
+// creates the per-rig/town workspace, then creates the per-agent tab when
+// absent. It returns the tab and its shell pane, prepared with cwd and env.
+func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd string, env map[string]string) (tabID, paneID string, err error) {
 	wsID, err := c.findWorkspace(ctx, wsLabel)
 	if err != nil {
 		return "", "", err
 	}
 	if wsID == "" {
-		// New workspace: repurpose the default tab herdr spawns for this agent.
-		_, tabID, strayPane, err = c.workspaceCreate(ctx, wsLabel)
+		_, tabID, paneID, err = c.workspaceCreate(ctx, wsLabel, cwd, env)
 		if err != nil {
 			return "", "", err
 		}
-		_ = c.tabRename(ctx, tabID, tabLabel) // cosmetic; ignore failure
-		return tabID, strayPane, nil
+		_ = c.tabRename(ctx, tabID, tabLabel)
+		return tabID, paneID, nil
 	}
-	if tabID, err = c.findTab(ctx, wsID, tabLabel); err != nil {
+	tabID, err = c.findTab(ctx, wsID, tabLabel)
+	if err != nil {
 		return "", "", err
 	}
 	if tabID != "" {
-		return tabID, "", nil // reuse existing tab; no stray pane to close
+		return "", "", fmt.Errorf("herdr tab %q already exists without a registered agent", tabLabel)
 	}
-	return c.tabCreate(ctx, wsID, tabLabel)
+	return c.tabCreate(ctx, wsID, tabLabel, cwd, env)
 }
 
-// ── shared session-server lifecycle ──────────────────────────────────────────
+func appendPlacementEnv(args []string, cwd string, env map[string]string) []string {
+	if cwd != "" {
+		args = append(args, "--cwd", cwd)
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "--env", key+"="+env[key])
+	}
+	return args
+}
 
 // socketPath is the unix socket for this client's herdr session.
 func (c *client) socketPath() string {
