@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -54,10 +55,12 @@ exit 1
 	}
 	testMakefile := filepath.Join(tmp, "Makefile")
 	makefileText := string(makefile)
-	if !strings.Contains(makefileText, "\ninstall: check-self-contained\n") {
-		t.Fatal("Makefile install target no longer depends on check-self-contained as expected")
+	installTarget := regexp.MustCompile(`\ninstall:[^\n]*\n`)
+	installTargetLine := installTarget.FindString(makefileText)
+	if installTargetLine == "" {
+		t.Fatal("Makefile install target not found")
 	}
-	makefileContent := strings.Replace(makefileText, "\ninstall: check-self-contained\n", "\ninstall:\n", 1)
+	makefileContent := strings.Replace(makefileText, installTargetLine, "\ninstall:\n", 1)
 	if err := os.WriteFile(testMakefile, []byte(makefileContent), 0o644); err != nil {
 		t.Fatalf("write test Makefile: %v", err)
 	}

@@ -1125,7 +1125,10 @@ func TestImport_RootPackRemoteImportMissingCacheHeadFails(t *testing.T) {
 	source := "https://github.com/example/gastown.git"
 	commit := "abc123def456"
 	cacheDir := filepath.Join(home, ".gc", "cache", "repos", RepoCacheKey(source, commit))
-	mustMkdirAll(t, filepath.Join(cacheDir, ".git"), 0o755)
+	mustMkdirAll(t, cacheDir, 0o755)
+	if _, err := runRepoCacheGit(cacheDir, "init", "-q"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
 	writeTestFile(t, cacheDir, "pack.toml", `
 [pack]
 name = "gastown"

@@ -197,6 +197,23 @@ func TestLastMaintenanceReturnsLatestAcrossTypes(t *testing.T) {
 	}
 }
 
+func TestLastMaintenanceUsesLatestAppendedEvent(t *testing.T) {
+	ep := events.NewFake()
+	newer := time.Date(2026, 4, 9, 3, 0, 0, 0, time.UTC)
+	older := time.Date(2026, 4, 8, 3, 0, 0, 0, time.UTC)
+
+	ep.Record(events.Event{Type: events.StoreMaintenanceFailed, Ts: newer})
+	ep.Record(events.Event{Type: events.StoreMaintenanceDone, Ts: older})
+
+	ts, status := LastMaintenance(ep)
+	if !ts.Equal(older) {
+		t.Fatalf("ts = %v, want latest-appended timestamp %v", ts, older)
+	}
+	if status != "success" {
+		t.Fatalf("status = %q, want success", status)
+	}
+}
+
 func TestLastMaintenanceOnlyDoneEvents(t *testing.T) {
 	ep := events.NewFake()
 	t1 := time.Date(2026, 4, 1, 3, 0, 0, 0, time.UTC)
