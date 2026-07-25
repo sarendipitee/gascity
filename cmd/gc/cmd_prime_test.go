@@ -684,6 +684,8 @@ prompt_template = "prompts/worker.md"
 		Metadata: map[string]string{
 			"session_name":       "gastown--worker",
 			"continuation_epoch": "3",
+			"state":              string(session.StateActive),
+			"template":           "worker",
 		},
 	})
 	if err != nil {
@@ -695,13 +697,14 @@ prompt_template = "prompts/worker.md"
 		paneEpoch        string
 		sessionID        string // defaults to the seeded session bead
 		wantPromptInHook bool
+		wantBeacon       bool
 	}{
-		{name: "pane epoch behind bead redelivers", paneEpoch: "2", wantPromptInHook: true},
-		{name: "pane epoch matches bead suppresses", paneEpoch: "3", wantPromptInHook: false},
-		{name: "pane epoch ahead of bead suppresses", paneEpoch: "4", wantPromptInHook: false},
-		{name: "missing pane epoch suppresses", paneEpoch: "", wantPromptInHook: false},
-		{name: "unparsable pane epoch suppresses", paneEpoch: "junk", wantPromptInHook: false},
-		{name: "missing session bead suppresses", paneEpoch: "2", sessionID: "sess-missing", wantPromptInHook: false},
+		{name: "pane epoch behind bead redelivers", paneEpoch: "2", wantPromptInHook: true, wantBeacon: true},
+		{name: "pane epoch matches bead suppresses", paneEpoch: "3", wantPromptInHook: false, wantBeacon: true},
+		{name: "pane epoch ahead of bead suppresses", paneEpoch: "4", wantPromptInHook: false, wantBeacon: true},
+		{name: "missing pane epoch suppresses", paneEpoch: "", wantPromptInHook: false, wantBeacon: true},
+		{name: "unparsable pane epoch suppresses", paneEpoch: "junk", wantPromptInHook: false, wantBeacon: true},
+		{name: "missing session bead suppresses", paneEpoch: "2", sessionID: "sess-missing", wantPromptInHook: false, wantBeacon: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withPrimeHookStdin(t)
@@ -730,8 +733,8 @@ prompt_template = "prompts/worker.md"
 			if got := strings.Contains(out, promptContent); got != tc.wantPromptInHook {
 				t.Fatalf("stdout = %q, prompt present = %v, want %v", out, got, tc.wantPromptInHook)
 			}
-			if !strings.Contains(out, "[gastown] worker") {
-				t.Fatalf("stdout = %q, want hook beacon", out)
+			if got := strings.Contains(out, "[gastown] worker"); got != tc.wantBeacon {
+				t.Fatalf("stdout = %q, beacon present = %v, want %v", out, got, tc.wantBeacon)
 			}
 		})
 	}
