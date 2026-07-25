@@ -2089,7 +2089,10 @@ func TestSendMailNotifyWithWorkerStartsPollerBySessionIDForAliasedTarget(t *test
 	dir := t.TempDir()
 	store := openNudgeBeadStore(dir)
 	fake := runtime.NewFake()
-	mgr := newSessionManagerWithConfig(dir, store, fake, nil)
+	// Hide Fake's event-stream capability: this test covers the sidecar-poller
+	// path for providers that do not retire pollers.
+	provider := struct{ runtime.Provider }{Provider: fake}
+	mgr := newSessionManagerWithConfig(dir, store, provider, nil)
 	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{Template: "mayor", Title: "Mayor", Command: "codex", WorkDir: dir, Provider: "codex", Env: nil, Resume: session.ProviderResume{}, Hints: runtime.Config{WorkDir: dir}, ExtraMeta: map[string]string{"session_origin": "manual"}})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -2120,7 +2123,7 @@ func TestSendMailNotifyWithWorkerStartsPollerBySessionIDForAliasedTarget(t *test
 	}
 	t.Cleanup(func() { startNudgePoller = prev })
 
-	if err := sendMailNotifyWithWorker(target, store, fake, "human"); err != nil {
+	if err := sendMailNotifyWithWorker(target, store, provider, "human"); err != nil {
 		t.Fatalf("sendMailNotifyWithWorker: %v", err)
 	}
 	if !called {

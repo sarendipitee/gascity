@@ -6207,6 +6207,9 @@ func TestDoPrimeWithUnknownAgent(t *testing.T) {
 	toml := `[workspace]
 name = "test-city"
 
+[beads]
+provider = "file"
+
 [[agent]]
 name = "mayor"
 prompt_template = "prompts/mayor.md"
