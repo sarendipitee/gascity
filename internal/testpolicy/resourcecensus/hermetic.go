@@ -618,7 +618,7 @@ func matchedResourcesForCall(call *ast.CallExpr, key packageKey, bindings bindin
 	if matched {
 		resources = append(resources, ResourceNetListenConfig)
 	}
-	if err := appendImported(ResourceNetListenUnixgram, "net", "ListenUnixgram"); err != nil {
+	if err := appendImported(ResourceNetListenPacket, "net", "ListenUnixgram"); err != nil {
 		return nil, err
 	}
 	if err := appendImported(ResourceSyscallListen, "syscall", "Listen"); err != nil {
