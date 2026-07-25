@@ -312,7 +312,11 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			// (nil provider → today's spawn) — a hook must not start
 			// failing because the provider config is momentarily broken.
 			spctx := sessionProviderContextForCity(cfg, cityPath, os.Getenv("GC_SESSION"))
-			hookSP, _ := newSessionProviderFromContext(spctx, nil)
+			hookSP, providerErr := newSessionProviderFromContext(spctx, nil)
+			if providerErr != nil {
+				fmt.Fprintf(stderr, "gc prime: resolving session provider for nudge polling: %v\n", providerErr) //nolint:errcheck
+				return 0
+			}
 			maybeStartNudgePoller(withNudgeTargetFence(openNudgeBeadStore(cityPath).Store, nudgeTarget{
 				cityPath:          cityPath,
 				cityName:          cityName,
