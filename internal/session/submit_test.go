@@ -496,11 +496,11 @@ func TestSubmitFollowUpSkipsPollerForEventCapableProvider(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := sessionEventedFake{Fake: runtime.NewFake()}
 	cityPath := t.TempDir()
-	mgr := NewManagerWithCityPath(store, sp, cityPath)
+	mgr := NewManagerWithOptions(store, sp, WithCityPath(cityPath))
 
-	info, err := mgr.Create(context.Background(), "helper", "", "codex", t.TempDir(), "codex", nil, ProviderResume{}, runtime.Config{})
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{Template: "helper", Title: "", Command: "codex", WorkDir: t.TempDir(), Provider: "codex", Env: nil, Resume: ProviderResume{}, Hints: runtime.Config{}, ExtraMeta: map[string]string{"session_origin": "manual"}})
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("CreateSession: %v", err)
 	}
 
 	var pollerCalls int

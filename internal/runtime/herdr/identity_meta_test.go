@@ -7,7 +7,7 @@ import "testing"
 // ownership keys must be readable as soon as the agent exists and the rest of
 // the environment follows tmux's GetMeta contract.
 func TestSeedMetaFromEnv(t *testing.T) {
-	p := New("gctest-identity-meta", t.TempDir(), t.TempDir(), 0)
+	p := New("gctest-identity-meta", t.TempDir(), t.TempDir(), 0, 0)
 	if err := p.seedMetaFromEnv("canary", map[string]string{
 		"GC_SESSION_ID":     "gm-abc123",
 		"GC_INSTANCE_TOKEN": "tok-1",

@@ -272,7 +272,7 @@ func TestCmdStopForceDelegatesImmediateControllerStop(t *testing.T) {
 	var stdout, stderr lockedBuffer
 	stopDone := make(chan int, 1)
 	go func() {
-		stopDone <- cmdStop([]string{dir}, &stdout, &stderr, 5*time.Second, true)
+		stopDone <- cmdStop([]string{dir}, &stdout, &stderr, 2*time.Second, true)
 	}()
 
 	select {
@@ -282,7 +282,7 @@ func TestCmdStopForceDelegatesImmediateControllerStop(t *testing.T) {
 		if stopped != sess {
 			t.Fatalf("stopped = %q, want %q", stopped, sess)
 		}
-	case <-time.After(hangBudget):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delegated force stop")
 	}
 
@@ -291,7 +291,7 @@ func TestCmdStopForceDelegatesImmediateControllerStop(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("cmdStop = %d, want 0; stdout=%q stderr=%q controller stderr=%q", code, stdout.String(), stderr.String(), controllerStderr.String())
 		}
-	case <-time.After(hangBudget):
+	case <-time.After(5 * time.Second):
 		t.Fatal("cmdStop did not finish after delegated force stop")
 	}
 }
@@ -1098,8 +1098,16 @@ func TestCmdStopMarginExhaustion(t *testing.T) {
 
 func waitForControllerAvailable(t *testing.T, dir string) {
 	t.Helper()
-	awaitCond(t, func() bool { return controllerAcceptsPing(dir, 100*time.Millisecond) },
-		"controller socket accepting pings")
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if controllerAcceptsPing(dir, 100*time.Millisecond) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for controller socket to become available")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func controllerAcceptsPing(dir string, timeout time.Duration) bool {
