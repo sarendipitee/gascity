@@ -72,3 +72,35 @@ func TestProviderLive(t *testing.T) {
 		t.Error("IsRunning = true after Stop")
 	}
 }
+
+func TestProviderLiveLongIdentifier(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live herdr test in -short mode")
+	}
+	if _, err := exec.LookPath("herdr"); err != nil {
+		t.Skip("herdr not installed")
+	}
+
+	const name = "gc__design-implementation-reviewer-ci-h4pq3d"
+	p := New("gctest-long-identifier", t.TempDir(), t.TempDir(), 0, 0)
+	_ = p.Stop(name)
+	t.Cleanup(func() { _ = p.Stop(name); _ = p.TeardownServer() })
+
+	cfg := runtime.Config{
+		WorkDir: t.TempDir(),
+		Command: "omp",
+		Env: map[string]string{
+			"GC_PROVIDER":   "omp",
+			"GC_SESSION_ID": "gctest-long-identifier-session",
+		},
+	}
+	if err := p.Start(context.Background(), name, cfg); err != nil {
+		t.Fatalf("Start(%q): %v", name, err)
+	}
+	if !p.IsRunning(name) {
+		t.Fatalf("IsRunning(%q) = false after Start", name)
+	}
+	if names, err := p.ListRunning("gc__design"); err != nil || len(names) != 1 || names[0] != name {
+		t.Errorf("ListRunning = %v, %v; want [%q], nil", names, err, name)
+	}
+}
