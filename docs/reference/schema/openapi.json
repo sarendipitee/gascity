@@ -377,6 +377,9 @@
               "null"
             ]
           },
+          "Rig": {
+            "type": "string"
+          },
           "ScaleCheck": {
             "type": [
               "string",
@@ -500,6 +503,7 @@
         },
         "required": [
           "Dir",
+          "Rig",
           "Name",
           "WorkDir",
           "TmuxAlias",

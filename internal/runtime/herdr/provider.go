@@ -2,6 +2,8 @@ package herdr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +41,10 @@ var (
 // defaultSetupTimeout is the per-command timeout for pre_start/session_setup
 // commands when the caller passes 0 (tests, city-less construction). Mirrors
 // the [session] setup_timeout config default and tmux's DefaultConfig().
-const defaultSetupTimeout = 10 * time.Second
+const (
+	defaultSetupTimeout   = 10 * time.Second
+	herdrAgentNameMetaKey = "GC_HERDR_AGENT_NAME"
+)
 
 const herdrPaneIDMetaKey = "GC_HERDR_PANE_ID"
 
@@ -127,7 +132,7 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 		return fmt.Errorf("herdr: place %q: %w", name, err)
 	}
 	if launch.kind != "" {
-		err = p.c.startAgent(ctx, name, launch.kind, paneID, launch.argv)
+		err = p.c.startAgent(ctx, herdrAgentName(name), launch.kind, paneID, launch.argv)
 	} else {
 		err = p.c.runPane(ctx, paneID, launch.command)
 	}
@@ -161,6 +166,10 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 		return fmt.Errorf("herdr: seed session metadata for %q: %w", name, err)
 	}
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
+	if err := p.SetMeta(name, herdrAgentNameMetaKey, herdrAgentName(name)); err != nil {
+		_ = p.c.closePane(ctx, paneID)
+		return fmt.Errorf("herdr: persist agent name for %q: %w", name, err)
+	}
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
 	//
 	// The first turn has two mutually-exclusive sources: a pool/sling slot
@@ -194,7 +203,7 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// contract), so herdr can honor it the same way tmux does. Non-fatal.
 	p.runSessionSetup(ctx, name, cfg, os.Stderr)
 	if startupText != "" && paneID != "" {
-		if err := p.c.deliverNudge(ctx, paneID, name, startupText); err != nil {
+		if err := p.c.deliverNudge(ctx, paneID, herdrAgentName(name), startupText); err != nil {
 			// Best-effort: the submit didn't confirm (TUI race under boot load).
 			// Surface it rather than silently leaving a stranded startup turn;
 			// nudgeStalledPoolClaims is the reconcile-tick backstop of last resort.
@@ -350,7 +359,7 @@ func (p *Provider) IsRunning(name string) bool {
 		return false
 	}
 	for _, a := range agents {
-		if a.Name == name {
+		if a.Name == herdrAgentName(name) {
 			return true
 		}
 	}
@@ -362,7 +371,7 @@ func (p *Provider) IsAttached(_ string) bool { return false }
 
 // Attach runs `herdr agent attach`, blocking until the user detaches.
 func (p *Provider) Attach(name string) error {
-	cmd := exec.Command(p.c.bin, "--session", p.c.session, "agent", "attach", name)
+	cmd := exec.Command(p.c.bin, "--session", p.c.session, "agent", "attach", herdrAgentName(name))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run() // blocks until the user detaches
 }
@@ -466,7 +475,7 @@ func (p *Provider) ObserveLiveness(name string, processNames []string) runtime.L
 	if p.shellPaneID(name) != "" {
 		return runtime.Liveness{Running: true, Alive: p.ProcessAlive(name, processNames)}
 	}
-	info, present, err := p.c.getAgent(context.Background(), name)
+	info, present, err := p.c.getAgent(context.Background(), herdrAgentName(name))
 	return livenessFromAgent(info, present, err)
 }
 
@@ -506,7 +515,7 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	if err != nil || pid == "" {
 		return runtime.ErrSessionNotFound
 	}
-	return p.c.deliverNudge(ctx, pid, name, runtime.FlattenText(content))
+	return p.c.deliverNudge(ctx, pid, herdrAgentName(name), runtime.FlattenText(content))
 }
 
 // Peek reads the current rendered screen ("visible") — the liveness/fingerprint
@@ -515,7 +524,7 @@ func (p *Provider) Peek(name string, lines int) (string, error) {
 	if paneID := p.shellPaneID(name); paneID != "" {
 		return p.c.readPane(context.Background(), paneID, "visible", lines)
 	}
-	return p.c.read(context.Background(), name, "visible", lines)
+	return p.c.read(context.Background(), herdrAgentName(name), "visible", lines)
 }
 
 // ListRunning returns the names of running agents and shell-backed sessions
@@ -528,9 +537,13 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	seen := make(map[string]struct{}, len(agents))
 	var out []string
 	for _, a := range agents {
-		if strings.HasPrefix(a.Name, prefix) {
-			seen[a.Name] = struct{}{}
-			out = append(out, a.Name)
+		name, ok := p.gasCityName(a.Name)
+		if !ok {
+			name = a.Name
+		}
+		if strings.HasPrefix(name, prefix) {
+			seen[name] = struct{}{}
+			out = append(out, name)
 		}
 	}
 	entries, err := os.ReadDir(p.metaDir)
@@ -606,7 +619,7 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 	if _, err := os.Stat(src); err != nil {
 		return nil // best-effort: missing src
 	}
-	a, ok, err := p.c.getAgent(context.Background(), name)
+	a, ok, err := p.c.getAgent(context.Background(), herdrAgentName(name))
 	if err != nil || !ok || a.Cwd == "" {
 		return nil
 	}
@@ -680,7 +693,7 @@ func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
 	if paneID := p.shellPaneID(name); paneID != "" {
 		return paneID, nil
 	}
-	a, ok, err := p.c.getAgent(ctx, name)
+	a, ok, err := p.c.getAgent(ctx, herdrAgentName(name))
 	if err != nil {
 		return "", err
 	}
@@ -697,6 +710,66 @@ func (p *Provider) shellPaneID(name string) string {
 
 func (p *Provider) forgetShellPane(name string) {
 	_ = p.RemoveMeta(name, herdrPaneIDMetaKey)
+}
+
+// herdrAgentName maps a Gas City session name to an identifier accepted by
+// Herdr. A hash suffix keeps normalized long names unique; names already valid
+// for Herdr remain unchanged.
+func herdrAgentName(name string) string {
+	if len(name) <= 32 && isHerdrAgentName(name) {
+		return name
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	base := strings.Trim(b.String(), "-_")
+	if base == "" || base[0] < 'a' || base[0] > 'z' {
+		base = "gc-" + base
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
+	if len(base) > 32-len(suffix) {
+		base = base[:32-len(suffix)]
+	}
+	return base + suffix
+}
+
+func isHerdrAgentName(name string) bool {
+	if name == "" || len(name) > 32 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// gasCityName resolves a stored Herdr identifier to its public Gas City session
+// name. Old agents without mapping metadata retain their visible Herdr name.
+func (p *Provider) gasCityName(agentName string) (string, bool) {
+	entries, err := os.ReadDir(p.metaDir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		mapped, err := p.GetMeta(name, herdrAgentNameMetaKey)
+		if err == nil && mapped == agentName {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 type herdrLaunch struct {
