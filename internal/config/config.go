@@ -819,7 +819,9 @@ type Import struct {
 	// entries store the resolved source plus optional version.
 	Source string `toml:"source" jsonschema:"required"`
 	// Version is an optional semver constraint for git-backed imports (e.g.,
-	// "^1.2"). Empty for local paths. "sha:<hex>" pins a specific commit.
+	// "^1.2"). Empty for local paths. "sha:<hex>" pins a specific commit;
+	// "ref:<name>" follows a branch, tag, or ref and records the resolved
+	// commit in packs.lock.
 	Version string `toml:"version,omitempty"`
 	// Export is a compatibility-only loader knob retained for older
 	// configs. It is intentionally omitted from generated public schemas.
@@ -1549,6 +1551,16 @@ type SessionConfig struct {
 	// SetupTimeout is the per-command/script timeout for session setup and
 	// pre_start commands. Duration string (e.g., "10s", "30s"). Defaults to "10s".
 	SetupTimeout string `toml:"setup_timeout,omitempty" jsonschema:"default=10s"`
+	// SetupMaxTimeout enables an activity-aware budget for session setup and
+	// pre_start commands. When set (e.g. "10m"), a setup command is no longer
+	// killed after setup_timeout of wall clock; instead setup_timeout bounds
+	// how long it may run without producing output (idle budget) and
+	// setup_max_timeout bounds its total runtime regardless of output (the
+	// runaway ceiling). A slow but healthy command — a large worktree checkout
+	// streaming progress — survives, while a hung one still dies after
+	// setup_timeout of silence. Duration string. Empty (the default) keeps
+	// the fixed setup_timeout deadline.
+	SetupMaxTimeout string `toml:"setup_max_timeout,omitempty"`
 	// NudgeReadyTimeout is how long to wait for the agent to be ready before
 	// sending nudge text. Duration string. Defaults to "10s".
 	NudgeReadyTimeout string `toml:"nudge_ready_timeout,omitempty" jsonschema:"default=10s"`
@@ -1629,6 +1641,13 @@ func durationFloorOr(raw string, def, floor time.Duration) time.Duration {
 // Defaults to 10s if empty or unparseable.
 func (s *SessionConfig) SetupTimeoutDuration() time.Duration {
 	return durationOr(s.SetupTimeout, 10*time.Second)
+}
+
+// SetupMaxTimeoutDuration returns the activity-aware setup ceiling as a
+// time.Duration. Zero — the feature disabled, keeping the fixed
+// setup_timeout deadline — if empty or unparseable.
+func (s *SessionConfig) SetupMaxTimeoutDuration() time.Duration {
+	return durationOr(s.SetupMaxTimeout, 0)
 }
 
 // NudgeReadyTimeoutDuration returns the nudge ready timeout as a time.Duration.
@@ -2424,6 +2443,17 @@ type DaemonConfig struct {
 	GraphWorkflows bool `toml:"graph_workflows,omitempty"`
 	// PatrolInterval is the health patrol interval. Duration string (e.g., "30s", "5m", "1h"). Defaults to "30s".
 	PatrolInterval string `toml:"patrol_interval,omitempty" jsonschema:"default=30s"`
+	// SessionPatrolInterval stretches the patrol-driven session-management
+	// phases (death detection, corpse sweeps, bead-driven session reconcile)
+	// to this interval while the session provider streams session events
+	// (runtime.SessionEventProvider): events poke targeted reconciles in
+	// real time, so the patrol re-scan is demoted to a safety net. Ignored
+	// — session phases run on every patrol tick, today's behavior — when
+	// empty (the default), when the provider has no event stream (tmux),
+	// while the stream is not established, or when the value is not longer
+	// than patrol_interval. Event pokes, slings, and config reloads always
+	// run the session phases regardless. Duration string (e.g., "5m", "30m").
+	SessionPatrolInterval string `toml:"session_patrol_interval,omitempty"`
 	// MaxRestarts is the maximum number of agent restarts within RestartWindow before
 	// the agent is quarantined. 0 means unlimited (no crash loop detection). Defaults to 5.
 	MaxRestarts *int `toml:"max_restarts,omitempty" jsonschema:"default=5"`
@@ -2535,6 +2565,29 @@ type DaemonConfig struct {
 	// home directories (agent template directories) are never touched.
 	// Defaults to false. Set to true to enable automated worktree cleanup.
 	AutoReapClosedBeadWorktrees *bool `toml:"auto_reap_closed_bead_worktrees,omitempty" jsonschema:"default=false"`
+	// AutoReapClosedBeadWorktreesDryRun makes the reconciler patrol run the
+	// full worktree-reap classification each tick — discovery, closed-bead
+	// match, liveness gate, and git-safety probes — but emit
+	// bead.worktree.reap_skipped events describing what it WOULD reap and
+	// what it protected, without removing anything. This is the safe
+	// staged-rollout surface: an operator enables dry-run first, confirms via
+	// `gc events` that no live worktree appears in the would-reap set, then
+	// enables AutoReapClosedBeadWorktrees for real removal. Dry-run has no
+	// effect when AutoReapClosedBeadWorktrees is already true (real removal
+	// supersedes it). Defaults to false.
+	AutoReapClosedBeadWorktreesDryRun *bool `toml:"auto_reap_closed_bead_worktrees_dry_run,omitempty" jsonschema:"default=false"`
+	// AutoReapClosedBeadWorktreesMinAgeMinutes is the minimum worktree age,
+	// in minutes, before a closed-bead worktree becomes eligible for reap
+	// classification at all (borrow-veto scan and beyond). This quarantines
+	// a worktree against the race between its creation and its owning
+	// bead's gc.work_dir/work_dir metadata being stamped by the next
+	// reconcile pass — without it, a just-created worktree could look
+	// unclaimed to the borrow-veto scan before the metadata that would
+	// protect it has been written. Nil (unset) defaults to
+	// DefaultAutoReapClosedBeadWorktreesMinAgeMinutes. Zero disables the
+	// quarantine entirely (every closed-bead worktree is immediately
+	// eligible for the rest of the gate chain, regardless of age).
+	AutoReapClosedBeadWorktreesMinAgeMinutes *int `toml:"auto_reap_closed_bead_worktrees_min_age_minutes,omitempty" jsonschema:"default=10"`
 	// StartReadyTimeout is how long `gc start` and `gc register` wait for
 	// the supervisor to report the city as Running. Cities with many
 	// registered or adopted sessions take longer to start because the
@@ -2588,6 +2641,34 @@ func (d *DaemonConfig) AutoReapClosedBeadWorktreesEnabled() bool {
 	return *d.AutoReapClosedBeadWorktrees
 }
 
+// AutoReapClosedBeadWorktreesDryRunEnabled reports whether the patrol should
+// run the worktree-reap classification and emit would-reap/protected events
+// without removing anything. Defaults to false when the field is unset (nil).
+// Real removal (AutoReapClosedBeadWorktreesEnabled) supersedes dry-run: when
+// both are set, the reaper deletes for real, so callers should treat dry-run
+// as active only when this is true AND real reaping is off.
+func (d *DaemonConfig) AutoReapClosedBeadWorktreesDryRunEnabled() bool {
+	if d.AutoReapClosedBeadWorktreesDryRun == nil {
+		return false
+	}
+	return *d.AutoReapClosedBeadWorktreesDryRun
+}
+
+// DefaultAutoReapClosedBeadWorktreesMinAgeMinutes is the quarantine window
+// applied when AutoReapClosedBeadWorktreesMinAgeMinutes is unset.
+const DefaultAutoReapClosedBeadWorktreesMinAgeMinutes = 10
+
+// AutoReapClosedBeadWorktreesMinAge returns the minimum worktree age before a
+// closed-bead worktree is eligible for reap classification. Defaults to
+// DefaultAutoReapClosedBeadWorktreesMinAgeMinutes when unset; an explicit
+// zero disables the quarantine.
+func (d *DaemonConfig) AutoReapClosedBeadWorktreesMinAge() time.Duration {
+	if d.AutoReapClosedBeadWorktreesMinAgeMinutes == nil {
+		return time.Duration(DefaultAutoReapClosedBeadWorktreesMinAgeMinutes) * time.Minute
+	}
+	return time.Duration(*d.AutoReapClosedBeadWorktreesMinAgeMinutes) * time.Minute
+}
+
 // AutoPruneWorkerDirEnabled reports whether the reconciler should remove a
 // pool-managed session's worker_dir after the session bead is closed. The
 // default is true: pool worktrees are transient by design and accumulate
@@ -2604,6 +2685,20 @@ func (d *DaemonConfig) AutoPruneWorkerDirEnabled() bool {
 // Defaults to 30s if empty or unparseable.
 func (d *DaemonConfig) PatrolIntervalDuration() time.Duration {
 	return durationOr(d.PatrolInterval, 30*time.Second)
+}
+
+// SessionPatrolIntervalDuration returns the stretched session-phase patrol
+// interval as a time.Duration. Returns 0 (stretching disabled — session
+// phases run on every patrol tick) on empty, unparseable, or negative input.
+func (d *DaemonConfig) SessionPatrolIntervalDuration() time.Duration {
+	if d.SessionPatrolInterval == "" {
+		return 0
+	}
+	dur, err := time.ParseDuration(d.SessionPatrolInterval)
+	if err != nil || dur < 0 {
+		return 0
+	}
+	return dur
 }
 
 // TickDebounceDuration returns the tick-debounce window as a
@@ -3597,6 +3692,20 @@ func implicitAgentIdentities(cfg *City) map[agentKey]bool {
 		}
 	}
 	return result
+}
+
+// namesForImplicitAgents returns set of agent names that will be created by
+// InjectImplicitAgents. Used by compose to check wildcard patches.
+func namesForImplicitAgents(cfg *City) map[string]bool {
+	ids := implicitAgentIdentities(cfg)
+	if len(ids) == 0 {
+		return nil
+	}
+	names := make(map[string]bool)
+	for key := range ids {
+		names[key.name] = true
+	}
+	return names
 }
 
 // ApplyAgentDefaults applies [agent_defaults] values to all agents that

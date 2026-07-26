@@ -819,6 +819,14 @@ func shutdownBeadsProvider(cityPath string) error {
 // exec providers get the scope's bead directory in the subprocess env and
 // providers that run bd init elsewhere (for example gc-beads-k8s inside the
 // pod) must set it in their own wrapper before invoking bd init.
+// doltliteScopeStoreExists reports whether dir already contains an embedded
+// DoltLite database. Initialization uses this existence check rather than
+// matching provider error text, so fresh-store failures remain visible.
+func doltliteScopeStoreExists(dir string) bool {
+	matches, err := filepath.Glob(filepath.Join(dir, ".beads", "doltlite", "*.db"))
+	return err == nil && len(matches) > 0
+}
+
 func initBeadsForDir(cityPath, dir, prefix, doltDatabase string) error {
 	return initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase, runProviderOpWithEnv)
 }
@@ -842,6 +850,9 @@ func initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase string, exe
 			args = append(args, doltDatabase)
 		}
 		script := strings.TrimPrefix(provider, "exec:")
+		if execProviderUsesCanonicalBdScopeFiles(provider) && cityUsesDoltliteBeadsBackend(cityPath) && doltliteScopeStoreExists(dir) {
+			return nil
+		}
 		if execProviderUsesCanonicalBdScopeFiles(provider) && cityUsesDoltliteBeadsBackend(cityPath) {
 			env, err := providerLifecycleProcessEnvWithError(cityPath, provider)
 			if err != nil {
@@ -1325,7 +1336,48 @@ func currentDoltPort(cityPath string) string {
 		writeDoltPortFile(cityPath, port, "", io.Discard)
 		return port
 	}
+	if port := currentOwnedManagedDoltPortMirror(cityPath, pidAlive, managedDoltRuntimeProcessOwned); port != "" {
+		return port
+	}
 	removeDoltPortFile(cityPath)
+	return ""
+}
+
+// currentOwnedManagedDoltPortMirror preserves an existing raw-bd compatibility
+// mirror while its matching managed process is still owned but temporarily not
+// reachable. It never creates or rewrites a mirror from an unreachable state.
+func currentOwnedManagedDoltPortMirror(
+	cityPath string,
+	processAlive func(int) bool,
+	processOwned func(doltRuntimeState, managedDoltRuntimeLayout) bool,
+) string {
+	owned, err := managedDoltLifecycleOwned(cityPath)
+	if err != nil || !owned || processAlive == nil || processOwned == nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(cityPath, ".beads", "dolt-server.port"))
+	if err != nil {
+		return ""
+	}
+	portText := strings.TrimSpace(string(data))
+	port, err := strconv.Atoi(portText)
+	if err != nil || !validDoltPort(port) {
+		return ""
+	}
+
+	for _, statePath := range []string{
+		providerManagedDoltStatePath(cityPath),
+		managedDoltStatePath(cityPath),
+	} {
+		state, err := readDoltRuntimeStateFile(statePath)
+		if err != nil || state.Port != port {
+			continue
+		}
+		layout, ok := validDoltRuntimeStateIdentity(state, cityPath)
+		if ok && processAlive(state.PID) && processOwned(state, layout) {
+			return strconv.Itoa(port)
+		}
+	}
 	return ""
 }
 
@@ -1357,25 +1409,34 @@ func currentManagedDoltPort(cityPath string) string {
 }
 
 func validDoltRuntimeState(state doltRuntimeState, cityPath string) bool {
-	if !state.Running || state.Port <= 0 || state.PID <= 0 {
-		return false
-	}
-	expectedDataDir := filepath.Join(cityPath, ".beads", "dolt")
-	if !samePath(strings.TrimSpace(state.DataDir), expectedDataDir) {
-		return false
-	}
-	if !pidAlive(state.PID) {
+	layout, ok := validDoltRuntimeStateIdentity(state, cityPath)
+	if !ok || !pidAlive(state.PID) {
 		return false
 	}
 	if !doltPortReachable(strconv.Itoa(state.Port)) {
 		return false
 	}
-	holderPID := findPortHolderPID(strconv.Itoa(state.Port))
-	if holderPID > 0 && holderPID != state.PID {
-		return false
+	return managedDoltRuntimeProcessOwned(state, layout)
+}
+
+func validDoltRuntimeStateIdentity(state doltRuntimeState, cityPath string) (managedDoltRuntimeLayout, bool) {
+	if !state.Running || state.Port <= 0 || state.PID <= 0 {
+		return managedDoltRuntimeLayout{}, false
+	}
+	expectedDataDir := filepath.Join(cityPath, ".beads", "dolt")
+	if !samePath(strings.TrimSpace(state.DataDir), expectedDataDir) {
+		return managedDoltRuntimeLayout{}, false
 	}
 	layout, err := resolveManagedDoltRuntimeLayout(cityPath)
 	if err != nil {
+		return managedDoltRuntimeLayout{}, false
+	}
+	return layout, true
+}
+
+func managedDoltRuntimeProcessOwned(state doltRuntimeState, layout managedDoltRuntimeLayout) bool {
+	holderPID := findPortHolderPID(strconv.Itoa(state.Port))
+	if holderPID > 0 && holderPID != state.PID {
 		return false
 	}
 	owned, deleted := inspectManagedDoltOwnership(state.PID, layout)
@@ -1461,7 +1522,6 @@ func removeScopeLocalDoltServerArtifacts(dir string) error {
 		"dolt-server.pid",
 		"dolt-server.lock",
 		"dolt-server.log",
-		"dolt-server.port",
 	} {
 		if err := os.Remove(filepath.Join(dir, ".beads", name)); err != nil && !os.IsNotExist(err) {
 			return err

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -206,10 +207,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			writePrimePromptWithFormat(stdout, "", "", "", hookMode, hookFormat, false, "")
 			return 0
 		}
-		var stepReminder string
-		if hookMode {
-			stepReminder = wispStepInjectionContent("")
-		}
+		stepReminder := wispStepInjectionContent("", agentName)
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 		return 0
 	}
@@ -226,14 +224,15 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			fmt.Fprintf(stderr, "gc prime: loading city config: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		var stepReminder string
-		if hookMode {
-			stepReminder = wispStepInjectionContent(cityPath)
-		}
+		stepReminder := wispStepInjectionContent(cityPath, agentName)
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 		return 0
 	}
 	resolveRigPaths(cityPath, cfg.Rigs)
+
+	if suppressHookPrompt && startupPromptDeliveredMarkerStale(cityPath) {
+		suppressHookPrompt = false
+	}
 
 	if citySuspended(cfg) {
 		// Suspended is a legitimate quiet state, not a strict failure —
@@ -308,6 +307,16 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			if sessionName == "" {
 				sessionName = cliSessionName(cityPath, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
 			}
+			// Resolve the session provider so the spawn respects the
+			// event-capable suppression. Fail open on resolution errors
+			// (nil provider → today's spawn) — a hook must not start
+			// failing because the provider config is momentarily broken.
+			spctx := sessionProviderContextForCity(cfg, cityPath, os.Getenv("GC_SESSION"))
+			hookSP, providerErr := newSessionProviderFromContext(spctx, nil)
+			if providerErr != nil {
+				fmt.Fprintf(stderr, "gc prime: resolving session provider for nudge polling: %v\n", providerErr) //nolint:errcheck
+				return 0
+			}
 			maybeStartNudgePoller(withNudgeTargetFence(openNudgeBeadStore(cityPath).Store, nudgeTarget{
 				cityPath:          cityPath,
 				cityName:          cityName,
@@ -317,7 +326,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 				sessionID:         os.Getenv("GC_SESSION_ID"),
 				continuationEpoch: os.Getenv("GC_CONTINUATION_EPOCH"),
 				sessionName:       sessionName,
-			}))
+			}), hookSP)
 		}
 		var ctx PromptContext
 		if a.PromptTemplate != "" || hookMode || sessionTemplateContext {
@@ -337,10 +346,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
 				packDirs, fragments, nil)
 			if prompt != "" {
-				var stepReminder string
-				if hookMode {
-					stepReminder = wispStepInjectionContent(cityPath)
-				}
+				stepReminder := wispStepInjectionContent(cityPath, agentName)
 				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, prompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 				return 0
 			}
@@ -364,10 +370,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			}
 			if promptFile != "" {
 				if content, fErr := os.ReadFile(promptFile); fErr == nil {
-					var stepReminder string
-					if hookMode {
-						stepReminder = wispStepInjectionContent(cityPath)
-					}
+					stepReminder := wispStepInjectionContent(cityPath, agentName)
 					writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt, stepReminder)
 					return 0
 				}
@@ -379,10 +382,7 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 	// when the agent has no prompt_template and doesn't match a builtin
 	// worker prompt — a supported config shape, so the default prompt is
 	// the correct output even under --strict.
-	var stepReminder string
-	if hookMode {
-		stepReminder = wispStepInjectionContent(cityPath)
-	}
+	stepReminder := wispStepInjectionContent(cityPath, agentName)
 	writePrimePromptWithFormat(stdout, cityName, agentName, defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt, stepReminder)
 	return 0
 }
@@ -551,6 +551,41 @@ func primeHookHasLiveManagedSession(cityPath string) bool {
 	}
 }
 
+// startupPromptDeliveredMarkerStale reports whether the pane-stamped
+// GC_STARTUP_PROMPT_DELIVERED marker predates the session's current
+// continuation epoch. The marker (and GC_CONTINUATION_EPOCH) is written once
+// into the pane/session environment at pane creation; an in-pane agent
+// restart after a continuation-epoch bump (drain handoff, config-drift reset,
+// crash-loop recovery) re-fires the SessionStart hook with the stale marker
+// still set, which would suppress the prime prompt for a fresh conversation
+// that never received it. A newer epoch on the session bead means the marker
+// belongs to a previous incarnation, so the prompt must be delivered.
+// Fail-safe: any missing value, parse failure, or store error preserves the
+// existing suppression.
+func startupPromptDeliveredMarkerStale(cityPath string) bool {
+	sessionID := strings.TrimSpace(os.Getenv("GC_SESSION_ID"))
+	if sessionID == "" {
+		return false
+	}
+	paneEpoch, err := strconv.Atoi(strings.TrimSpace(os.Getenv("GC_CONTINUATION_EPOCH")))
+	if err != nil {
+		return false
+	}
+	store, err := openStoreAtForCity(cityPath, cityPath)
+	if err != nil {
+		return false
+	}
+	markers, err := sessionpkg.NewStore(beads.SessionStore{Store: store}).PersistedMarkers(sessionID)
+	if err != nil {
+		return false
+	}
+	beadEpoch, err := strconv.Atoi(strings.TrimSpace(markers.ContinuationEpoch))
+	if err != nil {
+		return false
+	}
+	return beadEpoch > paneEpoch
+}
+
 func writePrimePromptWithFormat(stdout io.Writer, cityName, agentName, prompt string, hookMode bool, hookFormat string, suppressPrompt bool, hookContextSuffix string) {
 	if hookMode && suppressPrompt {
 		// Managed sessions receive the rendered startup prompt through the
@@ -559,11 +594,13 @@ func writePrimePromptWithFormat(stdout io.Writer, cityName, agentName, prompt st
 	}
 	if hookMode {
 		prompt = prependHookBeacon(cityName, agentName, prompt)
-		// The step reminder is hook-only context, not the startup prompt, so it
-		// survives suppression — managed SessionStart hooks still carry it. Folded
-		// into the single write below to keep exactly one provider hook context.
-		prompt += hookContextSuffix
+		// Fold the step reminder into the single provider write below to keep
+		// exactly one hook context document.
 	}
+	// The assigned formula step is runtime context for both direct prime and
+	// provider hooks. It survives hook prompt suppression because it is not part
+	// of the startup prompt itself.
+	prompt += hookContextSuffix
 	if hookMode && hookFormat != "" {
 		_ = writeProviderHookContextForEvent(stdout, hookFormat, "SessionStart", prompt)
 		return

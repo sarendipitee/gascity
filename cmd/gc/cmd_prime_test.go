@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 func TestBuildPrimeContextFallsBackToConfiguredRigRoot(t *testing.T) {
@@ -400,6 +401,122 @@ prompt_template = "prompts/polecat.template.md"
 	}
 }
 
+func TestDoPrimeWithHookFormat_DirectIncludesActiveFormulaStep(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	promptDir := filepath.Join(cityDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "worker.md"), []byte("worker prompt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.md"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	mol := mustCreateInProgressStore(t, store, beads.Bead{Title: "Formula: mol-worker", Type: "molecule", Assignee: "worker"})
+	step := mustCreateInProgressStore(t, store, beads.Bead{
+		Title: "Step 1: implement widget", Description: "Write the widget code", Type: "step", Assignee: "worker", ParentID: mol.ID,
+	})
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_ALIAS", "")
+	t.Setenv("GC_AGENT", "worker")
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat(nil, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{step.Title, step.ID, step.Description} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want active formula step substring %q", stdout.String(), want)
+		}
+	}
+	if count := strings.Count(stdout.String(), "<system-reminder>"); count != 1 {
+		t.Fatalf("stdout contains %d system reminders, want exactly 1: %q", count, stdout.String())
+	}
+}
+
+func TestDoPrimeWithHookFormat_ExplicitAgentIncludesActiveFormulaStep(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	mol := mustCreateInProgressStore(t, store, beads.Bead{Title: "Formula: mol-worker", Type: "molecule", Assignee: "worker"})
+	step := mustCreateInProgressStore(t, store, beads.Bead{Title: "Step 1: explicit invocation", Description: "Injected through argv", Type: "step", Assignee: "worker", ParentID: mol.ID})
+	t.Setenv("GC_CITY", cityDir)
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat([]string{"worker"}, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{step.Title, step.ID, step.Description} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want active formula step substring %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestDoPrimeWithHookFormat_DirectWithoutActiveFormulaStepDoesNotInject(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	promptDir := filepath.Join(cityDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "worker.md"), []byte("worker prompt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.md"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_ALIAS", "worker")
+	t.Setenv("GC_AGENT", "worker")
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithHookFormat(nil, &stdout, &stderr, false, "", false); code != 0 {
+		t.Fatalf("doPrimeWithHookFormat() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "<system-reminder>") {
+		t.Fatalf("stdout = %q, want no formula step reminder", stdout.String())
+	}
+}
+
 func TestDoPrimeWithHook_StartupPromptDeliveryEnvControlsPromptSuppression(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
@@ -509,6 +626,103 @@ prompt_template = "prompts/worker.md"
 			t.Setenv("GC_HOOK_SOURCE", tc.envHookSource)
 			t.Setenv("GC_HOOK_EVENT_NAME", tc.envHookEvent)
 			t.Setenv(startupPromptDeliveredEnv, tc.delivered)
+
+			var stdout, stderr bytes.Buffer
+			code := doPrimeWithMode(nil, &stdout, &stderr, true, false)
+			if code != 0 {
+				t.Fatalf("doPrimeWithMode() = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			out := stdout.String()
+			if got := strings.Contains(out, promptContent); got != tc.wantPromptInHook {
+				t.Fatalf("stdout = %q, prompt present = %v, want %v", out, got, tc.wantPromptInHook)
+			}
+			if got := strings.Contains(out, "[gastown] worker"); got != tc.wantBeacon {
+				t.Fatalf("stdout = %q, beacon present = %v, want %v", out, got, tc.wantBeacon)
+			}
+		})
+	}
+}
+
+// Tests that replace the startNudgePoller package seam must stay serial; do
+// not add t.Parallel here.
+func TestDoPrimeWithHook_StaleContinuationEpochRedeliversPrompt(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	prevPoller := startNudgePoller
+	startNudgePoller = func(_, _, _ string) error { return nil }
+	t.Cleanup(func() { startNudgePoller = prevPoller })
+
+	cityDir := t.TempDir()
+	promptDir := filepath.Join(cityDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir): %v", err)
+	}
+	const promptContent = "launch-only startup prompt\n"
+	if err := os.WriteFile(filepath.Join(promptDir, "worker.md"), []byte(promptContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "gastown"
+
+[[agent]]
+name = "worker"
+prompt_template = "prompts/worker.md"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+
+	store, err := openStoreAtForCity(cityDir, cityDir)
+	if err != nil {
+		t.Fatalf("openStoreAtForCity: %v", err)
+	}
+	seededSessionID, err := session.NewStore(beads.SessionStore{Store: store}).CreateSession(session.CreateSpec{
+		Title:     "worker",
+		AgentName: "worker",
+		Metadata: map[string]string{
+			"session_name":       "gastown--worker",
+			"continuation_epoch": "3",
+			"state":              string(session.StateActive),
+			"template":           "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name             string
+		paneEpoch        string
+		sessionID        string // defaults to the seeded session bead
+		wantPromptInHook bool
+		wantBeacon       bool
+	}{
+		{name: "pane epoch behind bead redelivers", paneEpoch: "2", wantPromptInHook: true, wantBeacon: true},
+		{name: "pane epoch matches bead suppresses", paneEpoch: "3", wantPromptInHook: false, wantBeacon: true},
+		{name: "pane epoch ahead of bead suppresses", paneEpoch: "4", wantPromptInHook: false, wantBeacon: true},
+		{name: "missing pane epoch suppresses", paneEpoch: "", wantPromptInHook: false, wantBeacon: true},
+		{name: "unparsable pane epoch suppresses", paneEpoch: "junk", wantPromptInHook: false, wantBeacon: true},
+		{name: "missing session bead suppresses", paneEpoch: "2", sessionID: "sess-missing", wantPromptInHook: false, wantBeacon: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withPrimeHookStdin(t)
+			t.Setenv("GC_CITY", cityDir)
+			t.Setenv("GC_AGENT", "worker")
+			t.Setenv("GC_ALIAS", "worker")
+			t.Setenv("GC_TEMPLATE", "worker")
+			t.Setenv("GC_SESSION_NAME", "gastown--worker")
+			sessionID := tc.sessionID
+			if sessionID == "" {
+				sessionID = seededSessionID
+			}
+			t.Setenv("GC_SESSION_ID", sessionID)
+			t.Setenv("GC_CONTINUATION_EPOCH", tc.paneEpoch)
+			t.Setenv(managedSessionHookEnv, "1")
+			t.Setenv("GC_HOOK_SOURCE", "startup")
+			t.Setenv("GC_HOOK_EVENT_NAME", "SessionStart")
+			t.Setenv(startupPromptDeliveredEnv, "1")
 
 			var stdout, stderr bytes.Buffer
 			code := doPrimeWithMode(nil, &stdout, &stderr, true, false)
@@ -693,6 +907,9 @@ prompt_template = "prompts/worker.md"
 				if !strings.Contains(context, want) {
 					t.Fatalf("additionalContext = %q, want step reminder substring %q", context, want)
 				}
+			}
+			if count := strings.Count(context, "<system-reminder>"); count != 1 {
+				t.Fatalf("additionalContext contains %d system reminders, want exactly 1: %q", count, context)
 			}
 			if !strings.Contains(context, "[gastown] worker") {
 				t.Fatalf("additionalContext = %q, want hook beacon", context)

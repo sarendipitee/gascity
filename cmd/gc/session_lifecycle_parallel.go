@@ -312,6 +312,12 @@ type startExecutionOptions struct {
 	// deferred under storeQueryPartial today.
 	deferSessionClosesOnBoot bool
 	readyAssignedFlags       []bool
+	// warmClaimProbe, when set, enables the warm-bind claim nudge: it reports
+	// whether a pool slot's newly-bound trigger bead is still unclaimed, read from
+	// the store named by the session's gc.trigger_bead_store_ref. Built by the
+	// reconciler where the cached rig stores are in scope and consumed in
+	// startPreparedStartCandidate's warm-reuse branch. Nil disables the nudge.
+	warmClaimProbe warmClaimTriggerProbe
 }
 
 type startExecutionOption func(*startExecutionOptions)
@@ -379,6 +385,14 @@ func resolveStartStabilityWaiter(waiter startStabilityWaiter) startStabilityWait
 		return waitForStartStability
 	}
 	return waiter
+}
+
+// withWarmClaimProbe installs the warm-bind claim-nudge probe for this reconcile
+// pass. Nil (or the option omitted) leaves the warm-bind claim nudge disabled.
+func withWarmClaimProbe(probe warmClaimTriggerProbe) startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.warmClaimProbe = probe
+	}
 }
 
 // withDeferSessionClosesOnBoot defers the per-session orphan/failed-create
@@ -1360,7 +1374,7 @@ func executePreparedStartWaveForCity(
 				<-sem
 				done <- i
 			}()
-			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, startOpts.sessionStaleKeyDetectionWaiter)
+			results[i] = runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, startOpts.sessionStaleKeyDetectionWaiter, startOpts.warmClaimProbe)
 		}()
 	}
 	for range prepared {
@@ -1379,6 +1393,7 @@ func runPreparedStartCandidate(
 	startupTimeout time.Duration,
 	stabilityWaiter startStabilityWaiter,
 	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+	warmClaim warmClaimTriggerProbe,
 ) (result startResult) {
 	started := time.Now()
 	result = startResult{
@@ -1407,7 +1422,7 @@ func runPreparedStartCandidate(
 	defer cancel()
 	var phases startPhaseTimings
 	startCallBegin := time.Now()
-	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, sessionStaleKeyDetectionWaiter)
+	startedFresh, err := startPreparedStartCandidate(startCtx, item, cityPath, store, sp, cfg, &phases, sessionStaleKeyDetectionWaiter, warmClaim)
 	startCtxErr := startCtx.Err()
 	// Split start_call into provider.Start and the ErrStateSync recovery
 	// branch (gc-9ha). The recovery branch hits the worker observation
@@ -1574,6 +1589,7 @@ func enqueuePreparedStartWaveForCity(
 	asyncFollowUp func(),
 	stabilityWaiter startStabilityWaiter,
 	sessionStaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+	warmClaim warmClaimTriggerProbe,
 ) []startResult {
 	if len(prepared) == 0 {
 		return nil
@@ -1598,7 +1614,7 @@ func enqueuePreparedStartWaveForCity(
 			if release != nil {
 				defer release()
 			}
-			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, sessionStaleKeyDetectionWaiter)
+			result := runPreparedStartCandidate(ctx, item, cityPath, sp, store, cfg, startupTimeout, stabilityWaiter, sessionStaleKeyDetectionWaiter, warmClaim)
 			commitAsyncStartResultWithContext(ctx, result, sp, store, clk, rec, wave, stdout, stderr, trace)
 			if asyncFollowUp != nil {
 				asyncFollowUp()
@@ -1747,17 +1763,18 @@ func asyncStartPreparedCommandStaleInfo(prepared preparedStart, current sessionp
 	return preparedCommand != "" && currentCommand != "" && preparedCommand != currentCommand
 }
 
-// clearPendingStartInFlightLease clears last_woke_at for the session handle so a
-// stale in-flight start lease does not survive a rollback or abandoned start.
-// Fire-and-forget: setMeta logs on failure and the next reconciler tick
-// re-attempts. The transactional rollback siblings now clear last_woke_at inside
-// their own store.Tx (rollbackPendingCreateClears), so this helper no longer
-// returns a fold batch.
-func clearPendingStartInFlightLease(handle string, sessFront *sessionpkg.Store, stderr io.Writer) {
+// clearPendingStartInFlightLease clears last_woke_at for the session handle.
+// Returns the {"last_woke_at":""} batch when the clear persisted, nil otherwise,
+// so the rollback callers can fold it onto the typed snapshot (Step 6d
+// write-returns-Info). Most callers discard the return.
+func clearPendingStartInFlightLease(handle string, sessFront *sessionpkg.Store, stderr io.Writer) map[string]string {
 	if strings.TrimSpace(handle) == "" || sessFront == nil {
-		return
+		return nil
 	}
-	setMeta(sessFront, handle, "last_woke_at", "", stderr) //nolint:errcheck
+	if setMeta(sessFront, handle, "last_woke_at", "", stderr) == nil {
+		return map[string]string{"last_woke_at": ""}
+	}
+	return nil
 }
 
 func stopStaleAsyncStartRuntime(result startResult, sp runtime.Provider, stderr io.Writer) {
@@ -1820,6 +1837,7 @@ func startPreparedStartCandidate(
 	cfg *config.City,
 	phases *startPhaseTimings,
 	staleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter,
+	warmClaim warmClaimTriggerProbe,
 ) (bool, error) {
 	name := item.candidate.name()
 	if sp != nil {
@@ -1828,6 +1846,23 @@ func startPreparedStartCandidate(
 			if alive {
 				if shouldRollbackPendingCreateInfo(item.candidate.info) && !runningSessionMatchesPendingCreateInfo(item.candidate.info, name, sp) {
 					return false, fmt.Errorf("%w: session %q", runtime.ErrSessionExists, name)
+				}
+				// Warm reuse: the slot is already up, so cold Start's startup nudge
+				// never fires. If on-demand work was bound to it since it last Started
+				// (bindPoolSessionTriggerBead) and is still unclaimed, deliver the
+				// claim nudge once — the event-based symmetric counterpart to that
+				// cold-Start nudge. Best-effort; never fails the (successful) warm start.
+				// The warm-bind lane reads bind-edge metadata keys that session.Info
+				// does not project, so it re-reads the raw bead at this edge (same
+				// pattern as the idle-claim nudge lane).
+				//
+				// store is nil in unit contexts (and the cold-start path below
+				// guards it too); the warm-bind claim nudge is best-effort, so
+				// skip it rather than dereference a nil store.
+				if store != nil {
+					if raw, rawErr := store.Get(item.candidate.info.ID); rawErr == nil {
+						deliverWarmBindClaimNudge(ctx, sp, store, &raw, item.cfg.Nudge, warmClaim)
+					}
 				}
 				return false, nil
 			}
@@ -2472,93 +2507,6 @@ func runningSessionMatchesPendingCreateInfo(info sessionpkg.Info, sessionName st
 	return expectedToken != "" && liveToken == expectedToken
 }
 
-// rollbackPendingCreateClears folds the failed-create terminal close and the
-// pre/post-close metadata clears (last_woke_at, plus session_name when the
-// session name was explicit) into one store.Tx: one logical rollback transition,
-// not N independent writes (ga-igcny0.1.1). It is the shared transaction body for
-// both pending-create rollback siblings so they can never diverge on the
-// transaction boundary; each wraps it and decides which mirrored batch to fold
-// onto the typed snapshot.
-//
-// On an atomic backing (the production Dolt/DoltLite store) every write commits
-// or rolls back together, so write order is invisible. The order below is what
-// keeps each invariant correct on a store whose Tx executes callbacks
-// sequentially WITHOUT rollback:
-//
-//   - last_woke_at (the in-flight-lease marker) clears BEFORE the close, so it
-//     lands even if the close then fails and the next reconciler tick can retry
-//     (TestCommitStartResult_RollbackPendingErrorClearsInFlightLeaseWhenCloseFails).
-//   - pending_create_claim clears inside closeFailedCreateBeadInTx, before its
-//     close, for the same retry/ping-pong reason
-//     (TestCloseBeadClearsPendingCreateClaimEvenWhenCloseFails).
-//   - session_name (the runtime identity) clears only AFTER the close has
-//     succeeded, so a failed close never strands an OPEN bead with its runtime
-//     name cleared; a closed bead's stale name is inert (closed beads are
-//     skipped for name reuse).
-//
-// When a non-atomic Tx persists the close but then fails the post-close write,
-// the txErr branch re-reads the bead and runs retired-session cleanup if it is
-// already closed, so a partial close cannot strand the session's waits/extmsg
-// bindings — the next reconciler tick would otherwise short-circuit on the
-// already-closed guard above and return before that cleanup ran.
-//
-// It returns the applied clears and true on success, or (nil, false) when the
-// bead was already closed (an idempotent no-op) or the transaction failed.
-func rollbackPendingCreateClears(info sessionpkg.Info, sessFront *sessionpkg.Store, now time.Time, commitMsg string, stderr io.Writer) (map[string]string, bool) {
-	store := sessFront.Store()
-	// Idempotence: mirrors closeBead's already-closed guard. Folding the
-	// failed-create close into the same Tx as the metadata clears bypasses the
-	// guard closeBead/closeFailedCreateBead would otherwise apply — so it must
-	// be checked explicitly here, gating the clears too, or a retried rollback
-	// against a terminal bead would keep clearing last_woke_at/session_name on
-	// every tick (ga-igcny0.1.1).
-	if snapshot, err := store.Get(info.ID); err == nil && snapshot.Status == "closed" {
-		return nil, false
-	}
-
-	preCloseClears := map[string]string{"last_woke_at": ""}
-	var postCloseClears map[string]string
-	if strings.TrimSpace(info.SessionNameExplicit) == "true" {
-		postCloseClears = map[string]string{"session_name": ""}
-	}
-	txErr := store.Tx(commitMsg, func(tx beads.Tx) error {
-		if err := tx.SetMetadataBatch(info.ID, preCloseClears); err != nil {
-			return err
-		}
-		if err := closeFailedCreateBeadInTx(tx, info.ID, now); err != nil {
-			return err
-		}
-		if len(postCloseClears) == 0 {
-			return nil
-		}
-		return tx.SetMetadataBatch(info.ID, postCloseClears)
-	})
-	if txErr != nil {
-		fmt.Fprintf(stderr, "session beads: %s: %v\n", commitMsg, txErr) //nolint:errcheck
-		// On a non-atomic Store.Tx backend (FileStore, or BdStore whose apply()
-		// splits the callback into separate bd writes) the pre-close clear and
-		// the failed-create Close can persist before the post-close session_name
-		// clear fails, leaving the bead genuinely closed. The next reconciler
-		// rollback tick would then short-circuit on the already-closed guard
-		// above and return before retired-session cleanup, stranding the closed
-		// session's waits and extmsg bindings. Run that cleanup here when the
-		// close did land. On the atomic production store a failed Tx rolls the
-		// close back, so the bead reads not-closed and this is skipped — the
-		// existing whole-rollback retry path stays unchanged.
-		if snapshot, err := store.Get(info.ID); err == nil && snapshot.Status == "closed" {
-			cancelStateAssignedToRetiredSessionBead(store.Store, info.ID, now, stderr)
-		}
-		return nil, false
-	}
-	cancelStateAssignedToRetiredSessionBead(store.Store, info.ID, now, stderr)
-	// Mirror the union of both clears onto the typed snapshot.
-	batch := map[string]string{"last_woke_at": ""}
-	for k, v := range postCloseClears {
-		batch[k] = v
-	}
-	return batch, true
-}
-
 // rollbackPendingCreate returns the metadata batch it mirrored onto the raw bead
 // (last_woke_at="" + conditional session_name="") so the reconciler can fold it
 // onto the typed snapshot (Step 6d write-returns-Info). NOTE: closeBead is
@@ -2570,10 +2518,13 @@ func rollbackPendingCreate(info sessionpkg.Info, sessFront *sessionpkg.Store, no
 	if strings.TrimSpace(info.ID) == "" || sessFront == nil {
 		return nil
 	}
-	batch, ok := rollbackPendingCreateClears(info, sessFront, now, "gc: rollback pending-create session "+info.ID, stderr)
-	if !ok {
-		return nil
+	batch := clearPendingStartInFlightLease(info.ID, sessFront, stderr)
+	if strings.TrimSpace(info.SessionNameExplicit) == "true" {
+		if setMeta(sessFront, info.ID, "session_name", "", stderr) == nil {
+			batch = mergeMetadataPatch(batch, map[string]string{"session_name": ""})
+		}
 	}
+	closeBead(sessFront.Store().Store, info.ID, string(sessionpkg.StateFailedCreate), now, stderr)
 	return batch
 }
 
@@ -2581,22 +2532,22 @@ func rollbackPendingCreate(info sessionpkg.Info, sessFront *sessionpkg.Store, no
 // failed-create ClosePatch metadata + claim clears mirrored onto the raw bead
 // when the store-only close succeeds. Returns the full mirrored batch (again with
 // NO Closed change — closeFailedCreateBead is store-only, so *session.Status stays
-// open) for the snapshot fold. It shares rollbackPendingCreateClears' single Tx,
-// so the pre-close clears and the failed-create close roll back together on
-// failure (ga-igcny0.1.1) instead of leaving an open creating bead with its
-// runtime name already cleared.
+// open) for the snapshot fold.
 func rollbackPendingCreateClearingClaim(info sessionpkg.Info, sessFront *sessionpkg.Store, now time.Time, stderr io.Writer) map[string]string {
 	if strings.TrimSpace(info.ID) == "" || sessFront == nil {
 		return nil
 	}
-	batch, ok := rollbackPendingCreateClears(info, sessFront, now, "gc: rollback pending-create session clearing claim "+info.ID, stderr)
-	if !ok {
-		return nil
+	batch := clearPendingStartInFlightLease(info.ID, sessFront, stderr)
+	if strings.TrimSpace(info.SessionNameExplicit) == "true" {
+		if setMeta(sessFront, info.ID, "session_name", "", stderr) == nil {
+			batch = mergeMetadataPatch(batch, map[string]string{"session_name": ""})
+		}
 	}
-	// The store received the failed-create ClosePatch and claim clears via
-	// closeFailedCreateBeadInTx; mirror them onto the snapshot too (still NO
-	// Closed change — the close is store-only).
-	batch = mergeMetadataPatch(batch, sessionpkg.ClosePatch(now.UTC(), string(sessionpkg.StateFailedCreate)))
+	if !closeFailedCreateBead(sessFront, info.ID, now, stderr) {
+		return batch
+	}
+	closePatch := sessionpkg.ClosePatch(now.UTC(), string(sessionpkg.StateFailedCreate))
+	batch = mergeMetadataPatch(batch, closePatch)
 	batch = mergeMetadataPatch(batch, map[string]string{"pending_create_claim": "", "pending_create_started_at": ""})
 	return batch
 }
@@ -2830,7 +2781,7 @@ func executePlannedStartsTraced(
 				return wakeCount
 			}
 			if startOpts.async {
-				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, stabilityWaiter, sessionStaleKeyDetectionWaiter)
+				results = enqueuePreparedStartWaveForCity(ctx, asyncPrepared, cityPath, sp, store, cfg, clk, rec, startupTimeout, wave, stdout, stderr, trace, startOpts.asyncFollowUp, stabilityWaiter, sessionStaleKeyDetectionWaiter, startOpts.warmClaimProbe)
 				if len(results) > 0 && asyncStartBatchNeedsFollowUp(batchCandidates, cfg) {
 					asyncFollowUpRequired = true
 				}
@@ -2846,6 +2797,7 @@ func executePlannedStartsTraced(
 					batchSize,
 					withStartStabilityWaiter(stabilityWaiter),
 					withSessionStaleKeyDetectionWaiter(sessionStaleKeyDetectionWaiter),
+					withWarmClaimProbe(startOpts.warmClaimProbe),
 				)
 			}
 			for _, result := range results {

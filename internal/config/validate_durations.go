@@ -72,6 +72,7 @@ func ValidateDurations(cfg *City, source string) []string {
 
 	// Session config durations.
 	check("[session]", "setup_timeout", cfg.Session.SetupTimeout)
+	check("[session]", "setup_max_timeout", cfg.Session.SetupMaxTimeout)
 	check("[session]", "nudge_ready_timeout", cfg.Session.NudgeReadyTimeout)
 	check("[session]", "nudge_retry_interval", cfg.Session.NudgeRetryInterval)
 	check("[session]", "nudge_poll_interval", cfg.Session.NudgePollInterval)
@@ -81,6 +82,7 @@ func ValidateDurations(cfg *City, source string) []string {
 
 	// Daemon config durations.
 	check("[daemon]", "patrol_interval", cfg.Daemon.PatrolInterval)
+	check("[daemon]", "session_patrol_interval", cfg.Daemon.SessionPatrolInterval)
 	check("[daemon]", "restart_window", cfg.Daemon.RestartWindow)
 	check("[daemon]", "session_circuit_breaker_window", cfg.Daemon.SessionCircuitBreakerWindow)
 	check("[daemon]", "session_circuit_breaker_reset_after", cfg.Daemon.SessionCircuitBreakerResetAfter)

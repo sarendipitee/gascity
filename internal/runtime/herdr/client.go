@@ -23,10 +23,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 // client runs `herdr` CLI verbs against a named herdr session and decodes the
@@ -35,6 +38,7 @@ type client struct {
 	session  string     // herdr named session (shared per city)
 	bin      string     // herdr binary (default "herdr")
 	cityRoot string     // city root: the shared server's launch cwd, and the effectiveWorkDir fallback when a session's WorkDir doesn't exist yet (empty in city-less/standalone construction)
+	sockPath string     // test override for socketPath (unit tests point it at a fake server)
 	serverMu sync.Mutex // serializes startServer: serverAlive → removeStaleSocket → launch → readiness
 }
 
@@ -86,35 +90,43 @@ type agentInfo struct {
 	TerminalID  string `json:"terminal_id"`
 	AgentStatus string `json:"agent_status"`
 	Cwd         string `json:"cwd"`
+	// Revision is the pane's output revision counter. The activity tracker
+	// diffs it for sessions herdr cannot classify (agent_status "unknown").
+	// Verified live on 0.7.3: it moves only while a client renders the pane;
+	// a headless server holds it at 0.
+	Revision uint64 `json:"revision"`
 }
 
-// startAgent → `herdr agent start <name> --no-focus [--tab <tabID>] [--cwd <cwd>]
-// [--env k=v …] -- <argv…>`. A non-empty tabID places the agent in that tab;
-// without it herdr splits the focused tab into a new pane.
-func (c *client) startAgent(ctx context.Context, name, tabID, cwd string, env map[string]string, argv []string) (agentInfo, error) {
-	args := []string{"agent", "start", name, "--no-focus"}
-	if tabID != "" {
-		args = append(args, "--tab", tabID)
+// startAgent → `herdr agent start <name> --kind <kind> --pane <paneID>
+// [-- <agent args…>]`. Herdr 0.7.5 launches supported coding agents into an
+// existing shell pane; placement creation already gives us that pane with the
+// requested cwd and environment.
+func (c *client) startAgent(ctx context.Context, name, kind, paneID string, argv []string) error {
+	args := []string{"agent", "start", name, "--kind", kind, "--pane", paneID}
+	if len(argv) > 1 {
+		args = append(args, "--")
+		args = append(args, argv[1:]...)
 	}
-	if cwd != "" {
-		args = append(args, "--cwd", cwd)
-	}
-	for k, v := range env {
-		args = append(args, "--env", k+"="+v)
-	}
-	args = append(args, "--")
-	args = append(args, argv...)
 	res, err := c.run(ctx, args...)
 	if err != nil {
-		return agentInfo{}, err
+		return err
 	}
 	var wrap struct {
 		Agent agentInfo `json:"agent"`
 	}
 	if err := json.Unmarshal(res, &wrap); err != nil {
-		return agentInfo{}, fmt.Errorf("herdr agent start: decode: %w", err)
+		return fmt.Errorf("herdr agent start: decode: %w", err)
 	}
-	return wrap.Agent, nil
+	return nil
+}
+
+// runPane starts an arbitrary command in an existing shell pane. Herdr joins
+// command arguments into shell input, so pass one fully quoted command string;
+// separate "sh", "-c", command arguments lose the -c boundary.
+func (c *client) runPane(ctx context.Context, paneID, command string) error {
+	line := "sh -c " + shellquote.Quote(command)
+	_, err := c.run(ctx, "pane", "run", paneID, line)
+	return err
 }
 
 // listAgents → `herdr agent list`.
@@ -135,6 +147,8 @@ func (c *client) listAgents(ctx context.Context) ([]agentInfo, error) {
 // read → `herdr agent read <name> --source <source> [--lines n]`. Use
 // "visible" for the current screen (the liveness/fingerprint snapshot);
 // "recent"/"recent-unwrapped" are scrollback only.
+//
+//nolint:unparam // source documents herdr's read API; every current caller snapshots the visible screen
 func (c *client) read(ctx context.Context, name, source string, lines int) (string, error) {
 	args := []string{"agent", "read", name, "--source", source}
 	if lines > 0 {
@@ -153,6 +167,24 @@ func (c *client) read(ctx context.Context, name, source string, lines int) (stri
 		return "", fmt.Errorf("herdr agent read: decode: %w", err)
 	}
 	return wrap.Read.Text, nil
+}
+
+// readPane reads a pane that is not registered as a Herdr agent. Unlike the
+// agent read command, pane read emits screen text directly rather than JSON.
+func (c *client) readPane(ctx context.Context, paneID, source string, lines int) (string, error) {
+	args := []string{"--session", c.session, "pane", "read", paneID, "--source", source}
+	if lines > 0 {
+		args = append(args, "--lines", strconv.Itoa(lines))
+	}
+	out, err := exec.CommandContext(ctx, c.bin, args...).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("herdr pane read %q: %s", paneID, ee.Stderr)
+		}
+		return "", fmt.Errorf("herdr pane read %q: %w", paneID, err)
+	}
+	return string(out), nil
 }
 
 // proc is one process in a pane's foreground tree.
@@ -223,11 +255,46 @@ func (c *client) paneRun(ctx context.Context, paneID, command string) error {
 //
 // Contract: inject + submit by pane id, confirm by agent name.
 func (c *client) deliverNudge(ctx context.Context, paneID, name, text string) error {
-	if err := c.paneRun(ctx, paneID, text); err != nil {
-		return err
-	}
-	time.Sleep(submitSettleDelay) // let the paste commit before the first submit
 	var lastErr error
+	// Paste phase: re-paste only while the screen provably didn't take it. A
+	// failed verification read is not proof — re-verify on the next attempt
+	// rather than re-pasting into a box that may already hold the text.
+	pasted := false
+	var pasteScreen string // pre-submit baseline: the screen with the paste in the box
+	needPaste := true
+	var before string
+	for attempt := 0; attempt < submitMaxAttempts && !pasted; attempt++ {
+		if needPaste {
+			b, rerr := c.read(ctx, name, "visible", 0)
+			if rerr != nil {
+				lastErr = rerr // transient read failure; retry within the bound
+			}
+			before = strings.TrimSpace(b)
+			if err := c.paneRun(ctx, paneID, text); err != nil {
+				return err
+			}
+			needPaste = false
+		}
+		time.Sleep(submitSettleDelay) // let the paste commit before we check it
+		after, rerr := c.read(ctx, name, "visible", 0)
+		if rerr != nil {
+			lastErr = rerr // can't verify this paste; re-verify next attempt
+			continue
+		}
+		if strings.TrimSpace(after) != before {
+			pasted = true
+			pasteScreen = strings.TrimSpace(after)
+		} else {
+			needPaste = true // provably swallowed — pane not input-ready yet; re-paste
+		}
+	}
+	if !pasted {
+		if lastErr != nil {
+			return fmt.Errorf("herdr deliverNudge: %q paste never landed after %d attempts: %w", name, submitMaxAttempts, lastErr)
+		}
+		return fmt.Errorf("herdr deliverNudge: %q paste never landed after %d attempts", name, submitMaxAttempts)
+	}
+	// Submit phase: retry the Enter only — a re-paste here duplicates the turn.
 	for attempt := 0; attempt < submitMaxAttempts; attempt++ {
 		if err := c.sendKeys(ctx, paneID, "Enter"); err != nil {
 			lastErr = err // transient send failure; verify + retry within the bound
@@ -242,24 +309,36 @@ func (c *client) deliverNudge(ctx context.Context, paneID, name, text string) er
 		case !strings.EqualFold(strings.TrimSpace(info.AgentStatus), "idle"):
 			return nil // left the idle prompt → submit landed, agent is running
 		}
+		cur, rerr := c.read(ctx, name, "visible", 0)
+		if rerr != nil {
+			lastErr = rerr
+			continue // can't tell whether the box consumed it; another Enter is safe
+		}
+		if strings.TrimSpace(cur) != pasteScreen {
+			return nil // box consumed the paste → submit landed; agent hasn't visibly started yet (hook/first-token latency)
+		}
 	}
 	if lastErr != nil {
-		return fmt.Errorf("herdr deliverNudge: %q still idle after %d submit attempts: %w", name, submitMaxAttempts, lastErr)
+		return fmt.Errorf("herdr deliverNudge: %q submit not confirmed after %d attempts: %w", name, submitMaxAttempts, lastErr)
 	}
-	return fmt.Errorf("herdr deliverNudge: %q still idle after %d submit attempts (nudge typed-but-unsubmitted?)", name, submitMaxAttempts)
+	return fmt.Errorf("herdr deliverNudge: %q still idle after %d attempts (submit unconfirmed)", name, submitMaxAttempts)
 }
 
 // submitSettleDelay is how long deliverNudge waits for a `pane run` paste to
 // commit in the TUI before each submit Enter and before re-reading agent status.
 // A submit that races the paste is swallowed; ~1s clears it with margin even
 // under the concurrent boot load of a town-wide restart.
-const submitSettleDelay = 1 * time.Second
+// Var (not const) so tests can shrink it; production code never writes it.
+var submitSettleDelay = 1 * time.Second
 
-// submitMaxAttempts bounds the closed-loop submit: ~submitMaxAttempts·settle is
-// the worst-case latency before deliverNudge gives up and returns an error. Sized
-// to cover a slow paste-commit under restart-time load without spinning on a
-// nudge that legitimately leaves the agent idle.
-const submitMaxAttempts = 5
+// submitMaxAttempts bounds each of deliverNudge's two phases independently
+// (paste-until-landed, then Enter-until-confirmed): with one settle wait per
+// attempt, ~2·submitMaxAttempts·settle is the worst-case latency before
+// deliverNudge gives up and returns an error. Sized to cover a slow shell→TUI
+// handoff under restart-time load without spinning on a nudge that
+// legitimately leaves the agent idle.
+// Var (not const) so tests can shrink it; production code never writes it.
+var submitMaxAttempts = 5
 
 // closePane → `herdr pane close <paneID>`.
 func (c *client) closePane(ctx context.Context, paneID string) error {
@@ -325,10 +404,12 @@ func (c *client) findWorkspace(ctx context.Context, label string) (string, error
 }
 
 // workspaceCreate makes a workspace labeled label and returns its id plus the
-// default tab and stray shell pane herdr auto-spawns inside it (the caller
-// repurposes the tab and closes the stray pane).
-func (c *client) workspaceCreate(ctx context.Context, label string) (wsID, tabID, strayPane string, err error) {
-	res, err := c.run(ctx, "workspace", "create", "--label", label, "--no-focus")
+// default tab and shell pane that herdr creates inside it. The pane is the
+// launch target for `herdr agent start --pane`.
+func (c *client) workspaceCreate(ctx context.Context, label, cwd string, env map[string]string) (wsID, tabID, paneID string, err error) {
+	args := []string{"workspace", "create", "--label", label, "--no-focus"}
+	args = appendPlacementEnv(args, cwd, env)
+	res, err := c.run(ctx, args...)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -369,10 +450,12 @@ func (c *client) findTab(ctx context.Context, wsID, label string) (string, error
 	return "", nil
 }
 
-// tabCreate makes a tab labeled label in wsID and returns its id plus the stray
-// shell pane herdr auto-spawns (the caller closes it after the agent starts).
-func (c *client) tabCreate(ctx context.Context, wsID, label string) (tabID, strayPane string, err error) {
-	res, err := c.run(ctx, "tab", "create", "--workspace", wsID, "--label", label, "--no-focus")
+// tabCreate makes a tab labeled label in wsID and returns its id plus the shell
+// pane that herdr creates inside it.
+func (c *client) tabCreate(ctx context.Context, wsID, label, cwd string, env map[string]string) (tabID, paneID string, err error) {
+	args := []string{"tab", "create", "--workspace", wsID, "--label", label, "--no-focus"}
+	args = appendPlacementEnv(args, cwd, env)
+	res, err := c.run(ctx, args...)
 	if err != nil {
 		return "", "", err
 	}
@@ -396,38 +479,52 @@ func (c *client) tabRename(ctx context.Context, tabID, label string) error {
 	return err
 }
 
-// ensurePlacement resolves where an agent's pane should live: it finds or creates
-// the per-rig/town workspace wsLabel, then finds or creates the per-agent tab
-// tabLabel inside it. It returns the tab id and, when herdr auto-spawned a stray
-// shell pane (new workspace or new tab), that pane's id so Start can close it —
-// leaving the tab holding only the agent. A reused existing tab returns "".
-func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel string) (tabID, strayPane string, err error) {
+// ensurePlacement resolves where an agent's pane should live: it finds or
+// creates the per-rig/town workspace, then creates the per-agent tab when
+// absent. It returns the tab and its shell pane, prepared with cwd and env.
+func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd string, env map[string]string) (tabID, paneID string, err error) {
 	wsID, err := c.findWorkspace(ctx, wsLabel)
 	if err != nil {
 		return "", "", err
 	}
 	if wsID == "" {
-		// New workspace: repurpose the default tab herdr spawns for this agent.
-		_, tabID, strayPane, err = c.workspaceCreate(ctx, wsLabel)
+		_, tabID, paneID, err = c.workspaceCreate(ctx, wsLabel, cwd, env)
 		if err != nil {
 			return "", "", err
 		}
-		_ = c.tabRename(ctx, tabID, tabLabel) // cosmetic; ignore failure
-		return tabID, strayPane, nil
+		_ = c.tabRename(ctx, tabID, tabLabel)
+		return tabID, paneID, nil
 	}
-	if tabID, err = c.findTab(ctx, wsID, tabLabel); err != nil {
+	tabID, err = c.findTab(ctx, wsID, tabLabel)
+	if err != nil {
 		return "", "", err
 	}
 	if tabID != "" {
-		return tabID, "", nil // reuse existing tab; no stray pane to close
+		return "", "", fmt.Errorf("herdr tab %q already exists without a registered agent", tabLabel)
 	}
-	return c.tabCreate(ctx, wsID, tabLabel)
+	return c.tabCreate(ctx, wsID, tabLabel, cwd, env)
 }
 
-// ── shared session-server lifecycle ──────────────────────────────────────────
+func appendPlacementEnv(args []string, cwd string, env map[string]string) []string {
+	if cwd != "" {
+		args = append(args, "--cwd", cwd)
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "--env", key+"="+env[key])
+	}
+	return args
+}
 
 // socketPath is the unix socket for this client's herdr session.
 func (c *client) socketPath() string {
+	if c.sockPath != "" {
+		return c.sockPath
+	}
 	home, _ := os.UserHomeDir()
 	if c.session == "" || c.session == "default" {
 		return filepath.Join(home, ".config", "herdr", "herdr.sock")

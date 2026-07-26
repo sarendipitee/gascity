@@ -2348,6 +2348,9 @@ esac
 }
 
 func TestEffectiveSlingQueryPoolNameOverride(t *testing.T) {
+	// Pool instance: the stamped gc.routed_to must be the collapsed PoolName
+	// (template identity), not the raw per-instance QualifiedName() — matching
+	// the PoolName-first idiom in poolDemandTarget/effectiveOnDeath/effectiveOnBoot.
 	a := Agent{
 		Name:              "dog-1",
 		Dir:               "hello-world",
@@ -2355,9 +2358,20 @@ func TestEffectiveSlingQueryPoolNameOverride(t *testing.T) {
 		PoolName: "hello-world/dog",
 	}
 	got := a.EffectiveSlingQuery()
-	want := "bd update {} --set-metadata gc.routed_to=hello-world/dog-1"
+	want := "bd update {} --set-metadata gc.routed_to=hello-world/dog"
 	if got != want {
 		t.Errorf("EffectiveSlingQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultSlingQueryPoolNameCollapse(t *testing.T) {
+	// Same PoolName-collapse idiom, asserted directly against DefaultSlingQuery()
+	// rather than through the EffectiveSlingQuery() wrapper.
+	a := Agent{Name: "dog-1", Dir: "hello-world", PoolName: "hello-world/dog"}
+	got := a.DefaultSlingQuery()
+	want := "bd update {} --set-metadata gc.routed_to=hello-world/dog"
+	if got != want {
+		t.Errorf("DefaultSlingQuery() = %q, want %q", got, want)
 	}
 }
 
@@ -3450,6 +3464,29 @@ func TestDaemonPatrolIntervalInvalid(t *testing.T) {
 	}
 }
 
+func TestDaemonSessionPatrolIntervalDefault(t *testing.T) {
+	d := DaemonConfig{}
+	if got := d.SessionPatrolIntervalDuration(); got != 0 {
+		t.Errorf("SessionPatrolIntervalDuration() = %v, want 0 (disabled by default)", got)
+	}
+}
+
+func TestDaemonSessionPatrolIntervalCustom(t *testing.T) {
+	d := DaemonConfig{SessionPatrolInterval: "30m"}
+	if got := d.SessionPatrolIntervalDuration(); got != 30*time.Minute {
+		t.Errorf("SessionPatrolIntervalDuration() = %v, want 30m", got)
+	}
+}
+
+func TestDaemonSessionPatrolIntervalInvalid(t *testing.T) {
+	for _, v := range []string{"not-a-duration", "-5m"} {
+		d := DaemonConfig{SessionPatrolInterval: v}
+		if got := d.SessionPatrolIntervalDuration(); got != 0 {
+			t.Errorf("SessionPatrolIntervalDuration() with %q = %v, want 0 (disabled)", v, got)
+		}
+	}
+}
+
 func TestParseDaemonConfig(t *testing.T) {
 	data := []byte(`
 [workspace]
@@ -3653,6 +3690,56 @@ func TestDaemonAutoReapClosedBeadWorktreesExplicitFalse(t *testing.T) {
 	d := DaemonConfig{AutoReapClosedBeadWorktrees: &v}
 	if d.AutoReapClosedBeadWorktreesEnabled() {
 		t.Errorf("AutoReapClosedBeadWorktreesEnabled() = true, want false (kill switch)")
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesDryRunDefault(t *testing.T) {
+	d := DaemonConfig{}
+	if d.AutoReapClosedBeadWorktreesDryRunEnabled() {
+		t.Errorf("AutoReapClosedBeadWorktreesDryRunEnabled() = true, want false (default)")
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesDryRunExplicitTrue(t *testing.T) {
+	v := true
+	d := DaemonConfig{AutoReapClosedBeadWorktreesDryRun: &v}
+	if !d.AutoReapClosedBeadWorktreesDryRunEnabled() {
+		t.Errorf("AutoReapClosedBeadWorktreesDryRunEnabled() = false, want true")
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesDryRunExplicitFalse(t *testing.T) {
+	v := false
+	d := DaemonConfig{AutoReapClosedBeadWorktreesDryRun: &v}
+	if d.AutoReapClosedBeadWorktreesDryRunEnabled() {
+		t.Errorf("AutoReapClosedBeadWorktreesDryRunEnabled() = true, want false (kill switch)")
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesMinAgeMinutesDefault(t *testing.T) {
+	d := DaemonConfig{}
+	got := d.AutoReapClosedBeadWorktreesMinAge()
+	want := time.Duration(DefaultAutoReapClosedBeadWorktreesMinAgeMinutes) * time.Minute
+	if got != want {
+		t.Errorf("AutoReapClosedBeadWorktreesMinAge() = %v, want %v (default)", got, want)
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesMinAgeMinutesExplicitValue(t *testing.T) {
+	v := 30
+	d := DaemonConfig{AutoReapClosedBeadWorktreesMinAgeMinutes: &v}
+	got := d.AutoReapClosedBeadWorktreesMinAge()
+	if got != 30*time.Minute {
+		t.Errorf("AutoReapClosedBeadWorktreesMinAge() = %v, want 30m", got)
+	}
+}
+
+func TestDaemonAutoReapClosedBeadWorktreesMinAgeMinutesExplicitZeroDisables(t *testing.T) {
+	v := 0
+	d := DaemonConfig{AutoReapClosedBeadWorktreesMinAgeMinutes: &v}
+	got := d.AutoReapClosedBeadWorktreesMinAge()
+	if got != 0 {
+		t.Errorf("AutoReapClosedBeadWorktreesMinAge() = %v, want 0 (quarantine disabled)", got)
 	}
 }
 

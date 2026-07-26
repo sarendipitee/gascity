@@ -280,6 +280,36 @@ func TestControllerSocketFallbackUsesShortPathForLongCityPath(t *testing.T) {
 	}
 }
 
+func TestControllerSocketPathUsesShortCanonicalPathForLongAlias(t *testing.T) {
+	base := shortSocketTempDir(t, "gc-controller-alias-")
+	realCityPath := filepath.Join(base, "city")
+	if err := os.MkdirAll(filepath.Join(realCityPath, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	aliasName := "alias"
+	for len(filepath.Join(base, aliasName, ".gc", "controller.sock")) <= controllerSocketPathLimit {
+		aliasName += "-segment"
+	}
+	aliasCityPath := filepath.Join(base, aliasName)
+	if err := os.Symlink(realCityPath, aliasCityPath); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalSocketPath := filepath.Join(normalizePathForCompare(aliasCityPath), ".gc", "controller.sock")
+	if len(canonicalSocketPath) > controllerSocketPathLimit {
+		t.Fatalf("canonical test socket path length = %d, want <= %d: %s", len(canonicalSocketPath), controllerSocketPathLimit, canonicalSocketPath)
+	}
+	aliasSocketPath := filepath.Join(aliasCityPath, ".gc", "controller.sock")
+	if len(aliasSocketPath) <= controllerSocketPathLimit {
+		t.Fatalf("alias test socket path length = %d, want > %d: %s", len(aliasSocketPath), controllerSocketPathLimit, aliasSocketPath)
+	}
+
+	if got := controllerSocketPath(aliasCityPath); got != canonicalSocketPath {
+		t.Fatalf("controllerSocketPath(%q) = %q, want short canonical path %q", aliasCityPath, got, canonicalSocketPath)
+	}
+}
+
 func TestSendControllerCommandWithReadTimeout(t *testing.T) {
 	dir := shortSocketTempDir(t, "gc-controller-command-")
 	sockPath := controllerSocketPath(dir)

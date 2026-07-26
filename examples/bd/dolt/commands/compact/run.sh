@@ -299,6 +299,9 @@ bare_gc_input="${GC_DOLT_COMPACT_BARE_GC:-}"
 skip_fetch_input="${GC_DOLT_COMPACT_SKIP_FETCH:-}"
 skip_fetch_dbs="${GC_DOLT_COMPACT_SKIP_FETCH_DBS:-}"
 compact_alert_to="${GC_DOLT_COMPACT_ALERT_TO:-mayor}"
+# Minimum seconds between RECURRING quarantine/stale-marker alert mails per
+# stream (marker-creation alerts are never throttled). Default one day.
+compact_alert_min_interval_secs="${GC_DOLT_COMPACT_ALERT_MIN_INTERVAL_SECS:-86400}"
 case "$bare_gc_input" in
   ''|0|false|FALSE|no|NO)
     bare_gc=0
@@ -1041,7 +1044,6 @@ verify_counts() {
   verify_counts_saw_probe_failure=0
   verify_counts_failure_reason=""
   verify_counts_failure_guidance=""
-  verify_counts_drift_details=""
   preflight_tables=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -1098,7 +1100,6 @@ verify_counts() {
       if [ "$actual" -lt "$expected" ]; then
         printf 'compact: db=%s row count decreased after flatten table=%s before=%s after=%s\n' \
           "$db" "$t" "$expected" "$actual" >&2
-        verify_counts_drift_details="${verify_counts_drift_details};table=$t,before_rows=$expected,after_rows=$actual,before_hash=$expected_hash,after_hash=$actual_hash,category=row_count_decrease"
         verify_counts_saw_row_decrease=1
         table_had_row_decrease=1
         if [ "$fail" -ne 1 ]; then
@@ -1117,7 +1118,6 @@ verify_counts() {
       if [ "$table_gained_rows" = "1" ]; then
         verify_counts_saw_gain_hash_drift=1
         verify_counts_gain_drift_tables="$verify_counts_gain_drift_tables $t"
-        verify_counts_drift_details="${verify_counts_drift_details};table=$t,before_rows=$expected,after_rows=$actual,before_hash=$expected_hash,after_hash=$actual_hash,category=row_count_gain_hash_drift"
         printf 'compact: db=%s table=%s value hash changed with row-count increase before=%s after=%s — quarantine and investigate before GC\n' \
           "$db" "$t" "$expected_hash" "$actual_hash" >&2
         if [ "$fail" -ne 1 ]; then
@@ -1127,11 +1127,9 @@ verify_counts() {
         fi
       elif [ "$table_had_row_decrease" = "1" ]; then
         verify_counts_saw_decrease_hash_drift=1
-        verify_counts_drift_details="${verify_counts_drift_details};table=$t,before_rows=$expected,after_rows=$actual,before_hash=$expected_hash,after_hash=$actual_hash,category=row_count_decrease_hash_drift"
         printf 'compact: db=%s table=%s value hash changed with row-count decrease before=%s after=%s\n' \
           "$db" "$t" "$expected_hash" "$actual_hash" >&2
       else
-        verify_counts_drift_details="${verify_counts_drift_details};table=$t,before_rows=$expected,after_rows=$actual,before_hash=$expected_hash,after_hash=$actual_hash,category=same_row_count_hash_drift"
         printf 'compact: db=%s table=%s value hash changed after flatten without row-count increase before=%s after=%s — quarantine and investigate before GC\n' \
           "$db" "$t" "$expected_hash" "$actual_hash" >&2
         verify_counts_saw_same_count_hash_drift=1
@@ -1307,15 +1305,68 @@ write_compact_marker() {
   return 0
 }
 
+# send_compact_quarantine_alert db type marker_path reason created_at [dedup_key]
+#
+# The optional dedup_key is passed for RECURRING alerts only (a marker that
+# already existed when this run started). Two stacked guards keep a
+# lingering marker from mailing the operator once per order cooldown:
+#   1. a last-sent epoch file under $PACK_STATE_DIR caps recurring alerts
+#      at one per compact_alert_min_interval_secs (default 24h), surviving
+#      the operator archiving the previous mail;
+#   2. `gc mail send --dedup` suppresses the send while the previous copy
+#      is still live in the recipient's mailbox (guards runs inside the
+#      interval when the epoch file was lost, and simultaneous dbs).
+# Marker-CREATION alerts pass no key — the transition into quarantine must
+# always mail, including a re-quarantine shortly after an operator cleared
+# the previous marker. The event is emitted unconditionally either way;
+# only the mail is throttled.
 send_compact_quarantine_alert() {
   _ca_db="$1"
   _ca_type="$2"
   _ca_path="$3"
   _ca_reason="$4"
   _ca_created_at="${5:-<unknown>}"
+  _ca_dedup="${6:-}"
   _ca_msg="db=$_ca_db type=$_ca_type marker=$_ca_path reason=$_ca_reason created_at=$_ca_created_at recipient=$compact_alert_to"
   gc event emit dolt.compact.quarantine --actor controller --message "$_ca_msg" || true
-  gc mail send "$compact_alert_to" --from controller -s "dolt compact quarantine: $_ca_db $_ca_type" -m "$_ca_msg" || true
+  if [ -n "$_ca_dedup" ]; then
+    if compact_alert_recently_sent "$_ca_dedup"; then
+      return 0
+    fi
+    gc mail send "$compact_alert_to" --from controller -s "dolt compact quarantine: $_ca_db $_ca_type" -m "$_ca_msg" --dedup "$_ca_dedup" || true
+    mark_compact_alert_sent "$_ca_dedup"
+  else
+    gc mail send "$compact_alert_to" --from controller -s "dolt compact quarantine: $_ca_db $_ca_type" -m "$_ca_msg" || true
+  fi
+}
+
+# compact_alert_state_file dedup_key — path of the last-sent epoch file for
+# one recurring-alert stream. Key characters unsafe in filenames are mapped
+# to '_' (keys are colon-separated type:db strings).
+compact_alert_state_file() {
+  printf '%s/compact-alert-sent/%s\n' "$PACK_STATE_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+}
+
+# compact_alert_recently_sent dedup_key — true when the last recurring alert
+# for this key is younger than compact_alert_min_interval_secs. A missing or
+# unreadable state file reads as "not recent" (fail-open: an extra reminder
+# beats a silently suppressed one).
+compact_alert_recently_sent() {
+  _cars_file=$(compact_alert_state_file "$1")
+  _cars_last=$(cat "$_cars_file" 2>/dev/null) || return 1
+  case "$_cars_last" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  _cars_now=$(date -u +%s)
+  [ $(( _cars_now - _cars_last )) -lt "$compact_alert_min_interval_secs" ]
+}
+
+# mark_compact_alert_sent dedup_key — best-effort stamp of the last-sent
+# epoch for one recurring-alert stream.
+mark_compact_alert_sent() {
+  _mcas_file=$(compact_alert_state_file "$1")
+  mkdir -p "$(dirname "$_mcas_file")" 2>/dev/null || return 0
+  date -u +%s > "$_mcas_file" 2>/dev/null || true
 }
 
 ensure_compact_marker_writable() {
@@ -1407,52 +1458,6 @@ compact_marker_value() {
   awk -v prefix="$key=" 'index($0, prefix) == 1 { print substr($0, length(prefix) + 1); exit }' "$marker"
 }
 
-compact_marker_summary_value() {
-  dir="$1"
-  db="$2"
-  key="$3"
-  value=$(compact_marker_value "$dir" "$db" "$key" || true)
-  if [ -n "$value" ]; then
-    printf ' %s=%s' "$key" "$value"
-  fi
-}
-
-print_existing_quarantine_marker() {
-  db="$1"
-  marker="$2"
-  reason="$3"
-  created_at="$4"
-
-  printf 'compact: db=%s integrity quarantine marker exists at %s reason=%s created_at=%s%s%s%s%s%s%s%s — manual intervention required before compaction or GC\n' \
-    "$db" "$marker" "${reason:-<unknown>}" "${created_at:-<unknown>}" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" integrity_table_drift)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" database_value_hash_drift)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" flatten_preflight_head)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" flatten_pre_reset_head)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" flatten_head)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" flatten_post_verify_head)" \
-    "$(compact_marker_summary_value "$quarantine_dir" "$db" decision)" >&2
-  printf 'compact: db=%s quarantine recovery: keep marker unless git status is clean, the Dolt server is reachable, live bead queries are healthy, and marker diff/hash evidence proves no data loss; then remove %s and rerun gc dolt compact --gc-only --only-db %s\n' \
-    "$db" "$marker" "$db" >&2
-}
-
-write_quarantine_marker() {
-  db="$1"
-  reason="$2"
-  shift 2
-
-  write_compact_marker "$quarantine_dir" "$db" "$reason" \
-    "flatten_preflight_head=${head:-}" \
-    "flatten_pre_reset_head=${head_before_reset:-}" \
-    "flatten_head=${flatten_head:-}" \
-    "flatten_post_verify_head=${post_verify_head:-}" \
-    "preflight_db_value_hash=${preflight_hash:-}" \
-    "postflight_db_value_hash=${postflight_hash:-}" \
-    "decision=preserve_marker_manual_review_required" \
-    "clear_decision=clear_only_after_clean_worktree_reachable_server_healthy_bead_queries_and_diff_hash_evidence_proves_no_loss" \
-    "$@"
-}
-
 compact_marker_created_at_epoch() {
   dir="$1"
   db="$2"
@@ -1486,7 +1491,7 @@ ensure_remote_push_retry_fresh() {
   if [ "$age_secs" -gt "$pending_push_max_age_secs" ]; then
     printf 'compact: db=%s %s marker is stale age=%ss max_age=%ss — manual review required before remote push retry\n' \
       "$db" "$marker_label" "$age_secs" "$pending_push_max_age_secs" >&2
-    send_compact_quarantine_alert "$db" "$(basename "$dir")" "$(compact_marker_path "$dir" "$db")" "$marker_label marker is stale" "$(compact_marker_value "$dir" "$db" created_at || true)" || true
+    send_compact_quarantine_alert "$db" "$(basename "$dir")" "$(compact_marker_path "$dir" "$db")" "$marker_label marker is stale" "$(compact_marker_value "$dir" "$db" created_at || true)" "dolt-compact-stale:$(basename "$dir"):$db" || true
     return 1
   fi
   return 0
@@ -1849,12 +1854,8 @@ flatten_database() {
   verify_counts_saw_probe_failure=0
   verify_counts_failure_reason=""
   verify_counts_failure_guidance=""
-  head=""
   head_before_reset=""
-  flatten_head=""
   post_verify_head=""
-  preflight_hash=""
-  postflight_hash=""
   writer_race_detected=0
 
   if [ -n "$only_dbs" ]; then
@@ -1871,8 +1872,9 @@ flatten_database() {
     quarantine_marker=$(compact_marker_path "$quarantine_dir" "$db")
     quarantine_reason=$(compact_marker_value "$quarantine_dir" "$db" reason || true)
     quarantine_created_at=$(compact_marker_value "$quarantine_dir" "$db" created_at || true)
-    print_existing_quarantine_marker "$db" "$quarantine_marker" "$quarantine_reason" "$quarantine_created_at"
-    send_compact_quarantine_alert "$db" "compact-quarantine" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" || true
+    printf 'compact: db=%s integrity quarantine marker exists at %s reason=%s created_at=%s — manual intervention required before compaction or GC\n' \
+      "$db" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" >&2
+    send_compact_quarantine_alert "$db" "compact-quarantine" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" "dolt-compact-quarantine:$db" || true
     return 1
   fi
 
@@ -2257,7 +2259,7 @@ flatten_database() {
   if [ -z "$flatten_head" ]; then
     printf 'compact: db=%s post-flatten HEAD probe failed — quarantine and investigate before GC\n' \
       "$db" >&2
-    write_quarantine_marker "$db" "post-flatten HEAD probe failed" || {
+    write_compact_marker "$quarantine_dir" "$db" "post-flatten HEAD probe failed" || {
       rm -f "$preflight_tmp"
       return 1
     }
@@ -2379,9 +2381,7 @@ flatten_database() {
     fi
     printf 'compact: db=%s post-flatten INTEGRITY check failed — escalate (%s)\n' \
       "$db" "$integrity_guidance" >&2
-    write_quarantine_marker "$db" "$integrity_reason" \
-      "integrity_table_drift=${verify_counts_drift_details#;}" \
-      "integrity_failure_guidance=$integrity_guidance" || {
+    write_compact_marker "$quarantine_dir" "$db" "$integrity_reason" || {
       preserve_head_after_integrity_failure "$db" "$flatten_head" || true
       rm -f "$preflight_tmp"
       return 1
@@ -2394,7 +2394,7 @@ flatten_database() {
   if ! postflight_hash=$(db_value_hash "$db"); then
     printf 'compact: db=%s post-flatten value hash probe failed — quarantine and investigate before GC\n' \
       "$db" >&2
-    write_quarantine_marker "$db" "post-flatten value hash probe failed" || {
+    write_compact_marker "$quarantine_dir" "$db" "post-flatten value hash probe failed" || {
       preserve_head_after_integrity_failure "$db" "$flatten_head" || true
       rm -f "$preflight_tmp"
       return 1
@@ -2406,7 +2406,7 @@ flatten_database() {
   if [ -z "$postflight_hash" ]; then
     printf 'compact: db=%s post-flatten value hash probe returned empty value — quarantine and investigate before GC\n' \
       "$db" >&2
-    write_quarantine_marker "$db" "post-flatten value hash probe returned empty value" || {
+    write_compact_marker "$quarantine_dir" "$db" "post-flatten value hash probe returned empty value" || {
       preserve_head_after_integrity_failure "$db" "$flatten_head" || true
       rm -f "$preflight_tmp"
       return 1
@@ -2476,8 +2476,7 @@ flatten_database() {
       # default here; revisit only if a real incident shows this path reachable.
       printf 'compact: db=%s value hash changed with row-count increase before=%s after=%s — quarantine and investigate before GC\n' \
         "$db" "$preflight_hash" "$postflight_hash" >&2
-      write_quarantine_marker "$db" "post-flatten value hash changed with row-count increase" \
-        "database_value_hash_drift=before=$preflight_hash,after=$postflight_hash,category=row_count_gain_db_hash_drift" || {
+      write_compact_marker "$quarantine_dir" "$db" "post-flatten value hash changed with row-count increase" || {
         preserve_head_after_integrity_failure "$db" "$flatten_head" || true
         rm -f "$preflight_tmp"
         return 1
@@ -2506,8 +2505,7 @@ flatten_database() {
       fi
       printf 'compact: db=%s value hash changed without row-count increase before=%s after=%s — quarantine and investigate before GC\n' \
         "$db" "$preflight_hash" "$postflight_hash" >&2
-      write_quarantine_marker "$db" "post-flatten value hash changed without row-count increase" \
-        "database_value_hash_drift=before=$preflight_hash,after=$postflight_hash,category=same_row_count_db_hash_drift" || {
+      write_compact_marker "$quarantine_dir" "$db" "post-flatten value hash changed without row-count increase" || {
         preserve_head_after_integrity_failure "$db" "$flatten_head" || true
         rm -f "$preflight_tmp"
         return 1
@@ -2561,8 +2559,9 @@ bare_gc_database() {
     quarantine_marker=$(compact_marker_path "$quarantine_dir" "$db")
     quarantine_reason=$(compact_marker_value "$quarantine_dir" "$db" reason || true)
     quarantine_created_at=$(compact_marker_value "$quarantine_dir" "$db" created_at || true)
-    print_existing_quarantine_marker "$db" "$quarantine_marker" "$quarantine_reason" "$quarantine_created_at"
-    send_compact_quarantine_alert "$db" "compact-quarantine" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" || true
+    printf 'compact: db=%s integrity quarantine marker exists at %s reason=%s created_at=%s — manual intervention required before compaction or GC\n' \
+      "$db" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" >&2
+    send_compact_quarantine_alert "$db" "compact-quarantine" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" "dolt-compact-quarantine:$db" || true
     return 1
   fi
 
@@ -2618,7 +2617,8 @@ gc_only_database() {
     quarantine_marker=$(compact_marker_path "$quarantine_dir" "$db")
     quarantine_reason=$(compact_marker_value "$quarantine_dir" "$db" reason || true)
     quarantine_created_at=$(compact_marker_value "$quarantine_dir" "$db" created_at || true)
-    print_existing_quarantine_marker "$db" "$quarantine_marker" "$quarantine_reason" "$quarantine_created_at"
+    printf 'compact: db=%s integrity quarantine marker exists at %s reason=%s created_at=%s — manual intervention required before compaction or GC\n' \
+      "$db" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" >&2
     return 1
   fi
 

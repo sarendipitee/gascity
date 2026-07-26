@@ -1819,41 +1819,8 @@ func TestRunSetupCommandBackgroundChildFailureBounded(t *testing.T) {
 	}
 }
 
-func TestCommandOutputTail(t *testing.T) {
-	cases := []struct {
-		name   string
-		limit  int
-		writes []string
-		label  string
-		want   string
-	}{
-		{name: "no output", limit: 8, writes: nil, label: "stderr", want: ""},
-		{name: "whitespace only", limit: 8, writes: []string{" \n\t "}, label: "stderr", want: ""},
-		{name: "under limit", limit: 8, writes: []string{"abc"}, label: "stderr", want: "stderr: abc"},
-		{name: "exact limit has no marker", limit: 4, writes: []string{"abcd"}, label: "stderr", want: "stderr: abcd"},
-		{name: "oversized single write keeps tail", limit: 4, writes: []string{"abcdefgh"}, label: "stderr", want: "stderr: ... efgh"},
-		{name: "rollover across writes", limit: 4, writes: []string{"abc", "def"}, label: "stderr", want: "stderr: ... cdef"},
-		{name: "many small writes", limit: 3, writes: []string{"a", "b", "c", "d", "e"}, label: "stdout", want: "stdout: ... cde"},
-		{name: "zero limit drops content", limit: 0, writes: []string{"abc"}, label: "stderr", want: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			tail := newCommandOutputTail(tc.limit)
-			for _, w := range tc.writes {
-				n, err := tail.Write([]byte(w))
-				if err != nil {
-					t.Fatalf("Write(%q) error: %v", w, err)
-				}
-				if n != len(w) {
-					t.Fatalf("Write(%q) = %d, want %d", w, n, len(w))
-				}
-			}
-			if got := tail.Detail(tc.label); got != tc.want {
-				t.Fatalf("Detail(%q) = %q, want %q", tc.label, got, tc.want)
-			}
-		})
-	}
-}
+// TestCommandOutputTail moved to internal/runtime/setupcommand_test.go with
+// the extraction of runSetupCommand's core into runtime.RunSetupCommand.
 
 func TestDoStartSession_SetupEnvPassthrough(t *testing.T) {
 	ops := &fakeStartOps{
@@ -2733,5 +2700,101 @@ func TestRecordStartCrashDisabledWhenNoRuntimeDir(t *testing.T) {
 	o := &tmuxStartOps{tm: tm, runtimeDir: ""}
 	if path := o.recordStartCrash("mayor", "x"); path != "" {
 		t.Fatalf("path = %q, want empty when runtimeDir unset", path)
+	}
+}
+
+// ── Activity-aware setup budget ([session] setup_max_timeout) ────────────────
+
+// TestRunSetupCommandActivityStreamingSurvivesIdleWindow is the regression for
+// slow-but-healthy setup commands killed mid-flight by the fixed wall-clock
+// deadline (e.g. a large `git worktree add` checkout streaming progress past
+// setup_timeout). With the activity budget enabled, output resets the idle
+// clock, so a command that streams for 3x the idle window and exits 0 must
+// succeed.
+func TestRunSetupCommandActivityStreamingSurvivesIdleWindow(t *testing.T) {
+	ops := &tmuxStartOps{tm: &Tmux{}, setupMaxTimeout: 30 * time.Second}
+
+	err := ops.runSetupCommand(
+		context.Background(),
+		"for i in 1 2 3 4 5 6 7 8 9 10; do echo progress $i; sleep 0.1; done; exit 0",
+		map[string]string{},
+		300*time.Millisecond, // idle budget — total runtime (~1s) far exceeds it
+	)
+	if err != nil {
+		t.Fatalf("streaming setup command killed despite visible progress: %v", err)
+	}
+}
+
+// TestRunSetupCommandActivityIdleKillsSilentHang proves the hung-command
+// protection survives the activity mode: a command producing no output still
+// dies after the idle budget, well before its own runtime.
+func TestRunSetupCommandActivityIdleKillsSilentHang(t *testing.T) {
+	ops := &tmuxStartOps{tm: &Tmux{}, setupMaxTimeout: 30 * time.Second}
+
+	start := time.Now()
+	err := ops.runSetupCommand(
+		context.Background(),
+		"sleep 30",
+		map[string]string{},
+		300*time.Millisecond,
+	)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("silent hang must fail the setup command")
+	}
+	// Idle (300ms) + cancel grace (10s) is the worst case; sleep 30 dying to
+	// the group interrupt ends it far earlier, but bound loosely for CI.
+	if elapsed >= 15*time.Second {
+		t.Fatalf("silent hang outlived the idle budget: %v", elapsed)
+	}
+	if !strings.Contains(err.Error(), "no output within the idle timeout") {
+		t.Fatalf("error should name the idle budget, got: %v", err)
+	}
+}
+
+// TestRunSetupCommandActivityCeilingKillsRunaway proves the runaway backstop:
+// continuous output must not extend a command past the absolute ceiling.
+func TestRunSetupCommandActivityCeilingKillsRunaway(t *testing.T) {
+	ops := &tmuxStartOps{tm: &Tmux{}, setupMaxTimeout: 700 * time.Millisecond}
+
+	start := time.Now()
+	err := ops.runSetupCommand(
+		context.Background(),
+		"while true; do echo spinning; sleep 0.1; done",
+		map[string]string{},
+		300*time.Millisecond,
+	)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("runaway streamer must fail the setup command at the ceiling")
+	}
+	if elapsed >= 15*time.Second {
+		t.Fatalf("runaway streamer outlived the ceiling: %v", elapsed)
+	}
+	if !strings.Contains(err.Error(), "maximum runtime ceiling") {
+		t.Fatalf("error should name the ceiling, got: %v", err)
+	}
+}
+
+// TestRunSetupCommandCancellationRunsRollbackTrap is the pre_start-level
+// regression for the staged-content data-loss class: a setup script that
+// staged files aside and registered a rollback trap must get to run that trap
+// when its deadline expires. Go's default context-cancel (SIGKILL) never let
+// it; the cooperative group interrupt must.
+func TestRunSetupCommandCancellationRunsRollbackTrap(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "restored")
+	ops := &tmuxStartOps{tm: &Tmux{}, setupMaxTimeout: 30 * time.Second}
+
+	err := ops.runSetupCommand(
+		context.Background(),
+		`trap 'echo restored > "$MARKER"; exit 130' INT TERM; sleep 30`,
+		map[string]string{"MARKER": marker},
+		300*time.Millisecond,
+	)
+	if err == nil {
+		t.Fatal("expected the canceled setup command to report an error")
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("rollback trap never ran — staged state would have been lost: %v", statErr)
 	}
 }

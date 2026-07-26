@@ -364,7 +364,11 @@
       "properties": {
         "dir": {
           "type": "string",
-          "description": "Dir is the targeting key (required with Name). Identifies the agent's\nworking directory scope. Empty for city-scoped agents."
+          "description": "Dir is legacy targeting key for rig identity. Empty means city-scoped.\n\nDeprecated: use Rig. Retained for backwards compatibility."
+        },
+        "rig": {
+          "type": "string",
+          "description": "Rig is new targeting key for rig identity (replaces Dir).\n\"*\" matches all rigs + city. Empty means city-scoped unless Dir is set."
         },
         "name": {
           "type": "string",
@@ -637,10 +641,9 @@
       "additionalProperties": false,
       "type": "object",
       "required": [
-        "dir",
         "name"
       ],
-      "description": "AgentPatch modifies an existing agent identified by (Dir, Name)."
+      "description": "AgentPatch modifies existing agents identified by rig scope and Name."
     },
     "Import": {
       "properties": {
@@ -650,7 +653,7 @@
         },
         "version": {
           "type": "string",
-          "description": "Version is an optional semver constraint for git-backed imports (e.g.,\n\"^1.2\"). Empty for local paths. \"sha:\u003chex\u003e\" pins a specific commit."
+          "description": "Version is an optional semver constraint for git-backed imports (e.g.,\n\"^1.2\"). Empty for local paths. \"sha:\u003chex\u003e\" pins a specific commit;\n\"ref:\u003cname\u003e\" follows a branch, tag, or ref and records the resolved\ncommit in packs.lock."
         }
       },
       "additionalProperties": false,

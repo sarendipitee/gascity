@@ -19,7 +19,7 @@ import (
 // Store priority: if GC_RIG_ROOT is set the rig store is queried (where
 // rig-scoped polecat work beads live), otherwise the city store at cityPath.
 // When cityPath is empty the function falls back to GC_CITY from the env.
-func wispStepInjectionContent(cityPath string) string {
+func wispStepInjectionContent(cityPath, invocationAgent string) string {
 	effective := cityPath
 	if effective == "" {
 		effective = strings.TrimSpace(os.Getenv("GC_CITY"))
@@ -28,7 +28,7 @@ func wispStepInjectionContent(cityPath string) string {
 	if store == nil {
 		return ""
 	}
-	assignees := wispStepAssignees()
+	assignees := wispStepAssignees(invocationAgent)
 	if len(assignees) == 0 {
 		return ""
 	}
@@ -61,9 +61,9 @@ func openWispStepStore(cityPath string) beads.Store {
 }
 
 // wispStepAssignees returns the deduped set of identity strings to match
-// against bead assignees. Uses GC_ALIAS (primary), GC_SESSION_NAME, and
-// GC_SESSION_ID in that priority order.
-func wispStepAssignees() []string {
+// against bead assignees. The invocation agent takes precedence, followed by
+// GC_ALIAS, GC_SESSION_NAME, and GC_SESSION_ID.
+func wispStepAssignees(invocationAgent string) []string {
 	seen := make(map[string]bool)
 	var out []string
 	add := func(v string) {
@@ -73,6 +73,7 @@ func wispStepAssignees() []string {
 			out = append(out, v)
 		}
 	}
+	add(invocationAgent)
 	add(os.Getenv("GC_ALIAS"))
 	add(os.Getenv("GC_SESSION_NAME"))
 	add(os.Getenv("GC_SESSION_ID"))
@@ -81,18 +82,11 @@ func wispStepAssignees() []string {
 
 // resolveActiveWispStep returns the agent's current formula step bead.
 //
-// Resolution order:
-//  1. Find the agent's in-progress molecule bead (type=molecule or type=wisp).
-//  2. Find that molecule's in-progress type=step child — the current step.
-//  3. If no in-progress step child exists, fall back to the entry step: the
-//     first open type=step child (deterministic formula start position).
-//  4. If no molecule bead is assigned to the agent, follow the molecule_id
-//     bridge: an attached (v1) formula routes only the source work bead and
-//     stamps its molecule_id with the (unrouted, unassigned) root, so resolve
-//     the root's active step through that bridge.
-//  5. If no molecule_id bridge exists either, fall back to any in-progress bead
-//     with a non-empty Description (legacy behavior for agents not running a
-//     formula).
+// Resolution follows assignee priority. For each identity, prefer its directly
+// assigned in-progress molecule/wisp root; only when absent follow that same
+// identity's molecule_id bridge. Resolve the selected root to its in-progress
+// step child, or fall back to its entry step. Only when an identity has neither
+// root pathway does resolution continue to the next identity.
 //
 // Returns nil, nil when no bead can be resolved. Never returns an error for
 // not-found conditions — callers treat nil as "nothing to inject".
@@ -101,80 +95,69 @@ func resolveActiveWispStep(store beads.Store, assignees []string) (*beads.Bead, 
 		return nil, nil
 	}
 
-	molecule, err := resolveActiveMolecule(store, assignees)
-	if err != nil {
-		return nil, err
-	}
-	if molecule == nil {
-		// No molecule root is assigned to the agent. Attached (v1) formulas
-		// leave the root unrouted and stamp molecule_id on the routed source
-		// bead, so follow that bridge to the root's active step before the
-		// legacy description fallback. Best-effort: a resolution error or no
-		// bridge drops to legacy.
-		if root := resolveMoleculeRootViaBridge(store, assignees); root != nil {
-			step, stepErr := resolveInProgressStepChild(store, root.ID)
-			if stepErr != nil {
-				log.Printf("wisp step inject: error resolving in-progress step for bridged molecule %s: %v", root.ID, stepErr)
-				return nil, nil
-			}
-			if step != nil {
-				return step, nil
-			}
-			return resolveEntryStepChild(store, root.ID)
+	for _, assignee := range assignees {
+		root, err := resolveActiveMolecule(store, assignee)
+		if err != nil {
+			return nil, err
 		}
-		// No molecule bridge; fall back to legacy: any in-progress bead with a description.
-		return resolveBeadWithDescription(store, assignees)
+		if root == nil {
+			root = resolveMoleculeRootViaBridge(store, assignee)
+		}
+		if root == nil {
+			continue
+		}
+
+		step, stepErr := resolveInProgressStepChild(store, root.ID)
+		if stepErr != nil {
+			log.Printf("wisp step inject: error resolving in-progress step children for molecule %s: %v", root.ID, stepErr)
+			return nil, nil
+		}
+		if step != nil {
+			return step, nil
+		}
+
+		log.Printf("wisp step inject: no in-progress step for molecule %s; resolving entry step", root.ID)
+		return resolveEntryStepChild(store, root.ID)
 	}
 
-	// Prefer the in-progress step child (the agent is mid-step).
-	step, err := resolveInProgressStepChild(store, molecule.ID)
-	if err != nil {
-		log.Printf("wisp step inject: error resolving in-progress step children for molecule %s: %v", molecule.ID, err)
-		return nil, nil
-	}
-	if step != nil {
-		return step, nil
-	}
-
-	// Fall back to the entry step: first open step child.
-	log.Printf("wisp step inject: no in-progress step for molecule %s; resolving entry step", molecule.ID)
-	return resolveEntryStepChild(store, molecule.ID)
+	return nil, nil
 }
 
-// resolveActiveMolecule returns the agent's in-progress molecule bead.
-// When multiple molecules are found, the most recently updated one is returned
-// and the ambiguity is logged. Returns nil, nil when none is found.
-func resolveActiveMolecule(store beads.Store, assignees []string) (*beads.Bead, error) {
+// resolveActiveMolecule returns the agent's newest in-progress molecule or wisp
+// root. On identical timestamps, molecule roots retain legacy preference over
+// wisp roots. Returns nil, nil when none is found.
+func resolveActiveMolecule(store beads.Store, assignee string) (*beads.Bead, error) {
+	var best beads.Bead
+	found := false
+	candidateCount := 0
+
 	for _, molType := range []string{"molecule", "wisp"} {
 		results, err := store.List(beads.ListQuery{
-			Status:    "in_progress",
-			Type:      molType,
-			Assignees: assignees,
-			TierMode:  beads.TierBoth,
-			Limit:     5,
+			Status:   "in_progress",
+			Type:     molType,
+			Assignee: assignee,
+			TierMode: beads.TierBoth,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("listing in-progress %s beads: %w", molType, err)
 		}
-		if len(results) == 0 {
-			continue
-		}
-		if len(results) > 1 {
-			ids := make([]string, len(results))
-			for i, r := range results {
-				ids[i] = r.ID
-			}
-			log.Printf("wisp step inject: %d in-progress %s beads found (%s); using most recent", len(results), molType, strings.Join(ids, ", "))
-		}
-		best := results[0]
-		for _, r := range results[1:] {
-			if r.UpdatedAt.After(best.UpdatedAt) {
-				best = r
+
+		candidateCount += len(results)
+		for _, candidate := range results {
+			if !found || candidate.UpdatedAt.After(best.UpdatedAt) {
+				best = candidate
+				found = true
 			}
 		}
-		return &best, nil
 	}
-	return nil, nil
+
+	if !found {
+		return nil, nil
+	}
+	if candidateCount > 1 {
+		log.Printf("wisp step inject: %d in-progress molecule/wisp beads found; using most recent", candidateCount)
+	}
+	return &best, nil
 }
 
 // resolveMoleculeRootViaBridge finds the molecule root reachable from an
@@ -186,16 +169,17 @@ func resolveActiveMolecule(store beads.Store, assignees []string) (*beads.Bead, 
 //
 // Returns nil on any error or when no bridge bead is found — callers treat nil
 // as "no bridge available" and fall through to the legacy path.
-func resolveMoleculeRootViaBridge(store beads.Store, assignees []string) *beads.Bead {
+func resolveMoleculeRootViaBridge(store beads.Store, assignee string) *beads.Bead {
 	results, err := store.List(beads.ListQuery{
-		Status:    "in_progress",
-		Assignees: assignees,
-		TierMode:  beads.TierBoth,
-		Limit:     10,
+		Status:   "in_progress",
+		Assignee: assignee,
+		TierMode: beads.TierBoth,
 	})
 	if err != nil {
 		return nil
 	}
+	var bestRoot *beads.Bead
+	var bestSource *beads.Bead
 	for i := range results {
 		rootID := strings.TrimSpace(results[i].Metadata[beadmeta.MoleculeIDMetadataKey])
 		if rootID == "" {
@@ -206,7 +190,16 @@ func resolveMoleculeRootViaBridge(store beads.Store, assignees []string) *beads.
 			log.Printf("wisp step inject: molecule_id %q on bead %s did not resolve: %v", rootID, results[i].ID, err)
 			continue
 		}
-		return &root
+		if root.Status != "in_progress" || (root.Type != "molecule" && root.Type != "wisp") {
+			continue
+		}
+		if bestSource == nil || results[i].UpdatedAt.After(bestSource.UpdatedAt) {
+			bestRoot = &root
+			bestSource = &results[i]
+		}
+	}
+	if bestRoot != nil {
+		return bestRoot
 	}
 	return nil
 }
@@ -219,7 +212,6 @@ func resolveInProgressStepChild(store beads.Store, moleculeID string) (*beads.Be
 		Type:     "step",
 		ParentID: moleculeID,
 		TierMode: beads.TierBoth,
-		Limit:    5,
 	})
 	if err != nil {
 		return nil, err
@@ -263,28 +255,6 @@ func resolveEntryStepChild(store beads.Store, moleculeID string) (*beads.Bead, e
 	}
 	b := results[0]
 	return &b, nil
-}
-
-// resolveBeadWithDescription returns the first in-progress bead assigned to any
-// of the given identities that has a non-empty Description. This is the legacy
-// resolution path used when no molecule bead is assigned to the agent.
-func resolveBeadWithDescription(store beads.Store, assignees []string) (*beads.Bead, error) {
-	results, err := store.List(beads.ListQuery{
-		Status:    "in_progress",
-		Assignees: assignees,
-		TierMode:  beads.TierBoth,
-		Limit:     10,
-	})
-	if err != nil {
-		return nil, err
-	}
-	for i := range results {
-		if strings.TrimSpace(results[i].Description) != "" {
-			b := results[i]
-			return &b, nil
-		}
-	}
-	return nil, nil
 }
 
 // formatWispStepReminder formats a formula step bead as a <system-reminder>

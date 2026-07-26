@@ -211,12 +211,15 @@ func TestDispatchAllQueuedNudgesDeliversAndAcks(t *testing.T) {
 
 	var nudgeMessages []string
 	for _, call := range fake.Calls {
-		if call.Method == "Nudge" {
+		if call.Method == "NudgeNow" {
 			nudgeMessages = append(nudgeMessages, call.Message)
+		}
+		if call.Method == "Nudge" {
+			t.Fatalf("unexpected provider-default nudge call: %+v", call)
 		}
 	}
 	if len(nudgeMessages) != 1 {
-		t.Fatalf("nudge calls = %d, want 1", len(nudgeMessages))
+		t.Fatalf("NudgeNow calls = %d, want 1", len(nudgeMessages))
 	}
 	if !strings.Contains(nudgeMessages[0], "review the deploy logs") {
 		t.Fatalf("nudge message = %q, want original reminder", nudgeMessages[0])
@@ -417,7 +420,7 @@ func TestMaybeStartNudgePollerSkipsACPSessionInLegacyMode(t *testing.T) {
 		sessionName: "worker-session",
 		transport:   "acp",
 		cfg:         &config.City{},
-	})
+	}, nil)
 	if called {
 		t.Fatal("startNudgePoller invoked for ACP session in legacy mode; sidecar ACP pollers cannot deliver without owning the connection")
 	}
@@ -437,7 +440,7 @@ func TestMaybeStartNudgePollerSkipsInSupervisorMode(t *testing.T) {
 		cityPath:    t.TempDir(),
 		sessionName: "worker-session",
 		cfg:         supervisorCfg(),
-	})
+	}, nil)
 	if called {
 		t.Fatal("startNudgePoller invoked in supervisor mode; supervisor dispatcher would race with the per-session poller")
 	}
@@ -446,7 +449,7 @@ func TestMaybeStartNudgePollerSkipsInSupervisorMode(t *testing.T) {
 		cityPath:    t.TempDir(),
 		sessionName: "worker-session",
 		cfg:         &config.City{},
-	})
+	}, nil)
 	if !called {
 		t.Fatal("startNudgePoller not invoked in legacy mode")
 	}

@@ -4077,7 +4077,7 @@ func TestRealizePoolDesiredSessionsRebindUpdatesPackWorkspaceMetadata(t *testing
 			"agent_name":                            "worker-7",
 			"alias":                                 "worker-7",
 			"session_name":                          "worker-reusable",
-			"state":                                 "awake",
+			"state":                                 string(sessionpkg.StateAsleep),
 			"pool_slot":                             "7",
 			poolManagedMetadataKey:                  boolMetadata(true),
 			beadmeta.TriggerBeadIDMetadataKey:       "gp-old",
@@ -11511,6 +11511,47 @@ func TestCollectOpenUnassignedRoutedWorkKeepsSameIDAcrossStoreScopes(t *testing.
 	}
 	if len(refs) != 2 || refs[0] != "city:test-city" || refs[1] != "rig:city" {
 		t.Fatalf("store refs = %v, want [city:test-city rig:city]", refs)
+	}
+}
+
+func TestSelectReadyUnassignedRoutedWorkUsesDemandStoreScope(t *testing.T) {
+	candidates := []beads.Bead{
+		{ID: "same-id", Status: "open", Title: "city copy"},
+		{ID: "same-id", Status: "open", Title: "rig copy"},
+	}
+	refs := []string{"city:test-city", "rig:fixture"}
+	demand := map[string]scaleCheckDemand{
+		"fixture/worker": {
+			WorkBeadIDs: []string{"same-id"},
+			StoreRefs:   map[string]string{"same-id": "rig:fixture"},
+		},
+	}
+
+	got, gotRefs := selectReadyUnassignedRoutedWork(candidates, refs, demand)
+	if len(got) != 1 || got[0].Title != "rig copy" {
+		t.Fatalf("selected work = %#v, want only rig copy", got)
+	}
+	if len(gotRefs) != 1 || gotRefs[0] != "rig:fixture" {
+		t.Fatalf("selected refs = %v, want [rig:fixture]", gotRefs)
+	}
+}
+
+func TestSelectReadyUnassignedRoutedWorkNormalizesCityRef(t *testing.T) {
+	candidates := []beads.Bead{{ID: "city-ready", Status: "open"}}
+	refs := []string{"city:test-city"}
+	demand := map[string]scaleCheckDemand{
+		"worker": {
+			WorkBeadIDs: []string{"city-ready"},
+			StoreRefs:   map[string]string{"city-ready": "city"},
+		},
+	}
+
+	got, gotRefs := selectReadyUnassignedRoutedWork(candidates, refs, demand)
+	if len(got) != 1 || got[0].ID != "city-ready" {
+		t.Fatalf("selected work = %#v, want city-ready", got)
+	}
+	if len(gotRefs) != 1 || gotRefs[0] != "city:test-city" {
+		t.Fatalf("selected refs = %v, want [city:test-city]", gotRefs)
 	}
 }
 

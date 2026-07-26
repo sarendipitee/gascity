@@ -64,6 +64,15 @@ type DesiredStateResult struct {
 	// Consumers that decide whether a specific agent should run must use
 	// this scope before treating a bead as reachable work for that agent.
 	AssignedWorkStoreRefs []string
+	// ReadyUnassignedRoutedWorkBeads contains the ready, routed, unassigned
+	// work selected as concrete default pool demand for this tick. It remains
+	// separate from AssignedWorkBeads so assignment/wake semantics stay
+	// assignee-only; the idle-claim backstop uses it to re-nudge an already
+	// running pool slot after that slot is rebound to newly routed work.
+	ReadyUnassignedRoutedWorkBeads []beads.Bead
+	// ReadyUnassignedRoutedWorkStoreRefs is index-aligned with
+	// ReadyUnassignedRoutedWorkBeads and uses canonical city:/rig: refs.
+	ReadyUnassignedRoutedWorkStoreRefs []string
 	// NamedSessionDemand records which named-session identities have active
 	// direct assignee demand (Assignee == identity). The reconciler merges this
 	// into poolDesired so that on-demand named sessions remain config-eligible.
@@ -596,6 +605,11 @@ func buildDesiredStateWithSessionBeads(
 	var assignedWorkBeads []beads.Bead
 	var assignedWorkStores []beads.Store
 	var assignedWorkStoreRefs []string
+	var unassignedRoutedBeads []beads.Bead
+	var unassignedRoutedStores []beads.Store
+	var unassignedRoutedStoreRefs []string
+	var readyUnassignedRoutedWorkBeads []beads.Bead
+	var readyUnassignedRoutedWorkStoreRefs []string
 	var readyAssigned map[storeScopedBeadKey]bool
 	var storePartial bool
 	var scaleCheckCounts map[string]int
@@ -651,7 +665,7 @@ func buildDesiredStateWithSessionBeads(
 		// string, so the route must be canonicalized before demand is counted or
 		// the cold pool never wakes for it.
 		subPhaseStart = time.Now()
-		unassignedRoutedBeads, unassignedRoutedStores, unassignedRoutedStoreRefs := collectOpenUnassignedRoutedWork(cfg, store, rigStores, suspendedRigPaths, stderr)
+		unassignedRoutedBeads, unassignedRoutedStores, unassignedRoutedStoreRefs = collectOpenUnassignedRoutedWork(cfg, store, rigStores, suspendedRigPaths, stderr)
 		canonicalizeLegacyBoundUnassignedRoutedWork(cfg, unassignedRoutedBeads, unassignedRoutedStores, stderr)
 		repairControlDispatcherRoutesForStoreScope(cityPath, cfg, unassignedRoutedBeads, unassignedRoutedStores, unassignedRoutedStoreRefs, stderr)
 		// canonicalizeLegacyBound* above rewrote gc.routed_to on open ready
@@ -720,6 +734,11 @@ func buildDesiredStateWithSessionBeads(
 				}
 			}
 		}
+		readyUnassignedRoutedWorkBeads, readyUnassignedRoutedWorkStoreRefs = selectReadyUnassignedRoutedWork(
+			unassignedRoutedBeads,
+			unassignedRoutedStoreRefs,
+			scaleCheckDemandByTemplate,
+		)
 		if len(defaultNamedScaleTargets) > 0 {
 			var namedErrs []error
 			var partialTemplates map[string]bool
@@ -906,19 +925,21 @@ func buildDesiredStateWithSessionBeads(
 	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
 
 	return DesiredStateResult{
-		State:                           desired,
-		BaseState:                       baseDesired,
-		ScaleCheckCounts:                scaleCheckCounts,
-		ScaleCheckPartialTemplates:      scaleCheckPartialTemplates,
-		PoolScaleCheckPartialTemplates:  poolScaleCheckPartialTemplates,
-		NamedScaleCheckPartialTemplates: namedScaleCheckPartialTemplates,
-		AssignedWorkBeads:               assignedWorkBeads,
-		AssignedWorkStores:              assignedWorkStores,
-		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
-		ReadyAssigned:                   readyAssigned,
-		NamedSessionDemand:              namedWorkReady,
-		StoreQueryPartial:               storePartial,
-		BeaconTime:                      beaconTime,
+		State:                              desired,
+		BaseState:                          baseDesired,
+		ScaleCheckCounts:                   scaleCheckCounts,
+		ScaleCheckPartialTemplates:         scaleCheckPartialTemplates,
+		PoolScaleCheckPartialTemplates:     poolScaleCheckPartialTemplates,
+		NamedScaleCheckPartialTemplates:    namedScaleCheckPartialTemplates,
+		AssignedWorkBeads:                  assignedWorkBeads,
+		AssignedWorkStores:                 assignedWorkStores,
+		AssignedWorkStoreRefs:              assignedWorkStoreRefs,
+		ReadyUnassignedRoutedWorkBeads:     readyUnassignedRoutedWorkBeads,
+		ReadyUnassignedRoutedWorkStoreRefs: readyUnassignedRoutedWorkStoreRefs,
+		ReadyAssigned:                      readyAssigned,
+		NamedSessionDemand:                 namedWorkReady,
+		StoreQueryPartial:                  storePartial,
+		BeaconTime:                         beaconTime,
 	}
 }
 
@@ -2830,23 +2851,22 @@ func computePoolTriggerBindingPatch(info session.Info, request SessionRequest, w
 	// preserve the recorded path. A live resume-mode session can also claim a
 	// retry bead without restarting; in that case the process remains in its
 	// existing cwd even though the trigger changes. The concrete session id and
-	// durable current-bead marker distinguish that continuation from an asleep,
+	// active lifecycle state distinguish that continuation from an asleep,
 	// fresh, or otherwise reusable session that will start in a newly derived
-	// worktree.
+	// worktree. currently_processing_bead_id is deliberately not required here:
+	// that secondary marker can lag the live process and must not authorize a cwd
+	// metadata rewrite while the process is still running.
 	if workDir != "" {
 		targetWorkDir := workDir
 		existingWorkDir := strings.TrimSpace(info.WorkDirCanonical)
 		if existingWorkDir == "" {
 			existingWorkDir = strings.TrimSpace(info.WorkDir)
 		}
-		currentWorkBeadID := strings.TrimSpace(info.CurrentlyProcessingBeadID)
 		liveResumeContinuation := oldWorkBeadID != workBeadID &&
 			request.Tier == "resume" &&
 			request.SessionBeadID == info.ID &&
 			info.State == session.StateActive &&
-			info.WakeMode != "fresh" &&
-			currentWorkBeadID != "" &&
-			(currentWorkBeadID == oldWorkBeadID || currentWorkBeadID == workBeadID)
+			info.WakeMode != "fresh"
 		if existingWorkDir != "" && (oldWorkBeadID == workBeadID || liveResumeContinuation) {
 			targetWorkDir = existingWorkDir
 		}
@@ -2914,10 +2934,7 @@ func poolTriggerWorkDir(bp *agentBuildParams, cfgAgent *config.Agent, qualifiedN
 	if workspace := packWorkspaceSlug(request); workspace != "" {
 		return filepath.Join(base, workspace)
 	}
-	if slug := triggerBeadPathSlug(request.WorkBeadID, request.WorkBeadTitle); slug != "" {
-		return filepath.Join(base, slug)
-	}
-	return ""
+	return base
 }
 
 func packWorkspaceSlug(request SessionRequest) string {
@@ -2925,19 +2942,6 @@ func packWorkspaceSlug(request SessionRequest) string {
 		return explicit
 	}
 	return ""
-}
-
-func triggerBeadPathSlug(beadID, title string) string {
-	id := safePathSlug(beadID, 32)
-	titleSlug := safePathSlug(title, 72)
-	switch {
-	case id != "" && titleSlug != "":
-		return id + "-" + titleSlug
-	case id != "":
-		return id
-	default:
-		return titleSlug
-	}
 }
 
 func safeWorkspaceName(value string, maxLen int) string {
@@ -2961,36 +2965,6 @@ func safeWorkspaceName(value string, maxLen int) string {
 		}
 	}
 	return strings.Trim(b.String(), ".-_")
-}
-
-func safePathSlug(value string, maxLen int) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range value {
-		var out rune
-		switch {
-		case r >= 'a' && r <= 'z':
-			out = r
-		case r >= '0' && r <= '9':
-			out = r
-		default:
-			out = '-'
-		}
-		if out == '-' {
-			if b.Len() == 0 || lastDash {
-				continue
-			}
-			lastDash = true
-		} else {
-			lastDash = false
-		}
-		b.WriteRune(out)
-		if maxLen > 0 && b.Len() >= maxLen {
-			break
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }
 
 func poolDesiredRequestIdentity(cfgAgent *config.Agent, slot int) (*config.Agent, string, int) {
@@ -4199,6 +4173,63 @@ func collectOpenUnassignedRoutedWork(cfg *config.City, store beads.Store, rigSto
 		}
 	}
 	return workBeads, workStores, workStoreRefs
+}
+
+// selectReadyUnassignedRoutedWork intersects the broad open-routed snapshot
+// with the concrete beads selected by the default ready-demand probes. The
+// broad snapshot is intentionally retained for route repair, while this narrow
+// result is safe for the idle-claim nudger: blocked or otherwise non-ready open
+// work never enters scaleCheckDemandByTemplate.
+func selectReadyUnassignedRoutedWork(
+	candidates []beads.Bead,
+	candidateStoreRefs []string,
+	demandByTemplate map[string]scaleCheckDemand,
+) ([]beads.Bead, []string) {
+	wanted := make(map[storeScopedBeadKey]struct{})
+	for _, demand := range demandByTemplate {
+		for _, id := range demand.WorkBeadIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			storeRef := normalizeDemandStoreRef(demand.StoreRefs[id])
+			wanted[storeScopedBeadKey{StoreRef: storeRef, ID: id}] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+
+	work := make([]beads.Bead, 0, len(wanted))
+	storeRefs := make([]string, 0, len(wanted))
+	for i, candidate := range candidates {
+		storeRef := ""
+		if i < len(candidateStoreRefs) {
+			storeRef = candidateStoreRefs[i]
+		}
+		key := storeScopedBeadKey{StoreRef: normalizeDemandStoreRef(storeRef), ID: candidate.ID}
+		if _, ok := wanted[key]; !ok {
+			continue
+		}
+		work = append(work, candidate)
+		storeRefs = append(storeRefs, storeRef)
+		delete(wanted, key)
+	}
+	return work, storeRefs
+}
+
+// normalizeDemandStoreRef makes the default-probe shorthand "city" compare
+// equal to canonical city:<name> refs while preserving rig ownership.
+func normalizeDemandStoreRef(storeRef string) string {
+	storeRef = strings.TrimSpace(storeRef)
+	switch {
+	case storeRef == "city", strings.HasPrefix(storeRef, "city:"):
+		return "city"
+	case strings.HasPrefix(storeRef, "rig:"):
+		return "rig:" + strings.TrimSpace(strings.TrimPrefix(storeRef, "rig:"))
+	default:
+		return storeRef
+	}
 }
 
 // rootStoreRefMatchesCandidate filters duplicate views of one physical graph
