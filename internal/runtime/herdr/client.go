@@ -16,6 +16,7 @@ package herdr
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,9 +49,21 @@ type herdrError struct {
 	Message string `json:"message"`
 }
 
+func (e *herdrError) Error() string {
+	return e.Code + ": " + e.Message
+}
+
 type envelope struct {
 	Result json.RawMessage `json:"result"`
 	Error  *herdrError     `json:"error"`
+}
+
+func decodeHerdrError(data []byte) *herdrError {
+	var env envelope
+	if json.Unmarshal(data, &env) == nil && env.Error != nil {
+		return env.Error
+	}
+	return nil
 }
 
 // run executes `herdr --session <session> <args…>` and returns the result
@@ -61,7 +74,10 @@ func (c *client) run(ctx context.Context, args ...string) (json.RawMessage, erro
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("herdr %v: %s", args, ee.Stderr)
+			if herr := decodeHerdrError(ee.Stderr); herr != nil {
+				return nil, fmt.Errorf("herdr %v: %w", args, herr)
+			}
+			return nil, fmt.Errorf("herdr %v: %s", args, strings.TrimSpace(string(ee.Stderr)))
 		}
 		return nil, fmt.Errorf("herdr %v: %w", args, err)
 	}
@@ -73,7 +89,7 @@ func (c *client) run(ctx context.Context, args ...string) (json.RawMessage, erro
 		return nil, fmt.Errorf("herdr %v: decode response: %w", args, err)
 	}
 	if env.Error != nil {
-		return nil, fmt.Errorf("herdr %v: %s: %s", args, env.Error.Code, env.Error.Message)
+		return nil, fmt.Errorf("herdr %v: %w", args, env.Error)
 	}
 	return env.Result, nil
 }
@@ -299,7 +315,49 @@ type tabInfo struct {
 	Label string `json:"label"`
 }
 
+type agentSessionInfo struct {
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Source string `json:"source"`
+	Value  string `json:"value"`
+}
+
+type paneInfo struct {
+	PaneID       string            `json:"pane_id"`
+	TabID        string            `json:"tab_id"`
+	WorkspaceID  string            `json:"workspace_id"`
+	Agent        *string           `json:"agent"`
+	AgentSession *agentSessionInfo `json:"agent_session"`
+}
+
+type placement struct {
+	WorkspaceID string
+	TabID       string
+	PaneID      string
+	CreatedPane bool
+}
+
+// placementUnavailableError marks an explicitly observed, stable placement
+// collision. Operational errors (transport, decode, or lookup failures) are
+// deliberately not wrapped: callers must not create recovery tabs from an
+// uncertain view of the server.
+type placementUnavailableError struct{ err error }
+
+func (e *placementUnavailableError) Error() string { return e.err.Error() }
+func (e *placementUnavailableError) Unwrap() error { return e.err }
+
+func placementUnavailablef(format string, args ...any) error {
+	return &placementUnavailableError{err: fmt.Errorf(format, args...)}
+}
+
+func isPlacementUnavailable(err error) bool {
+	var unavailable *placementUnavailableError
+	return errors.As(err, &unavailable)
+}
+
 // findWorkspace returns the id of the workspace whose label matches, or "".
+// findWorkspace returns the unique workspace whose label matches. Duplicate
+// exact labels are ambiguous and are never resolved by list order.
 func (c *client) findWorkspace(ctx context.Context, label string) (string, error) {
 	res, err := c.run(ctx, "workspace", "list")
 	if err != nil {
@@ -311,10 +369,21 @@ func (c *client) findWorkspace(ctx context.Context, label string) (string, error
 	if err := json.Unmarshal(res, &wrap); err != nil {
 		return "", fmt.Errorf("herdr workspace list: decode: %w", err)
 	}
+	matches := make([]workspaceInfo, 0, 1)
 	for _, w := range wrap.Workspaces {
 		if w.Label == label {
-			return w.WorkspaceID, nil
+			matches = append(matches, w)
 		}
+	}
+	if len(matches) > 1 {
+		ids := make([]string, len(matches))
+		for i := range matches {
+			ids[i] = matches[i].WorkspaceID
+		}
+		return "", fmt.Errorf("herdr workspace label %q is ambiguous: workspace_ids=%v", label, ids)
+	}
+	if len(matches) == 1 {
+		return matches[0].WorkspaceID, nil
 	}
 	return "", nil
 }
@@ -347,6 +416,8 @@ func (c *client) workspaceCreate(ctx context.Context, label, cwd string, env map
 }
 
 // findTab returns the id of the tab in wsID whose label matches, or "".
+// findTab returns the unique tab in wsID whose label matches. Duplicate exact
+// labels are reported rather than selecting an arbitrary placement.
 func (c *client) findTab(ctx context.Context, wsID, label string) (string, error) {
 	res, err := c.run(ctx, "tab", "list", "--workspace", wsID)
 	if err != nil {
@@ -358,10 +429,21 @@ func (c *client) findTab(ctx context.Context, wsID, label string) (string, error
 	if err := json.Unmarshal(res, &wrap); err != nil {
 		return "", fmt.Errorf("herdr tab list: decode: %w", err)
 	}
-	for _, t := range wrap.Tabs {
-		if t.Label == label {
-			return t.TabID, nil
+	matches := make([]tabInfo, 0, 1)
+	for _, tab := range wrap.Tabs {
+		if tab.Label == label {
+			matches = append(matches, tab)
 		}
+	}
+	if len(matches) > 1 {
+		ids := make([]string, len(matches))
+		for i := range matches {
+			ids[i] = matches[i].TabID
+		}
+		return "", fmt.Errorf("herdr tab label %q is ambiguous in workspace %q: tab_ids=%v", label, wsID, ids)
+	}
+	if len(matches) == 1 {
+		return matches[0].TabID, nil
 	}
 	return "", nil
 }
@@ -395,30 +477,123 @@ func (c *client) tabRename(ctx context.Context, tabID, label string) error {
 	return err
 }
 
-// ensurePlacement resolves where an agent's pane should live: it finds or
-// creates the per-rig/town workspace, then creates the per-agent tab when
-// absent. It returns the tab and its shell pane, prepared with cwd and env.
-func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd string, env map[string]string) (tabID, paneID string, err error) {
+func (c *client) listTabPanes(ctx context.Context, wsID, tabID string) ([]paneInfo, error) {
+	res, err := c.run(ctx, "pane", "list", "--workspace", wsID)
+	if err != nil {
+		return nil, err
+	}
+	var wrap struct {
+		Panes []paneInfo `json:"panes"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return nil, fmt.Errorf("herdr pane list: decode: %w", err)
+	}
+	panes := make([]paneInfo, 0, 1)
+	for _, pane := range wrap.Panes {
+		if pane.TabID == tabID {
+			panes = append(panes, pane)
+		}
+	}
+	return panes, nil
+}
+
+func shellProcess(name string) bool {
+	name = strings.TrimPrefix(strings.ToLower(filepath.Base(strings.TrimSpace(name))), "-")
+	switch name {
+	case "sh", "bash", "dash", "zsh", "fish", "ksh", "ksh93", "mksh", "ash", "nu", "elvish", "xonsh", "pwsh":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *client) reusableShellPane(ctx context.Context, wsID, tabID string) (string, error) {
+	panes, err := c.listTabPanes(ctx, wsID, tabID)
+	if err != nil {
+		return "", err
+	}
+	if len(panes) != 1 {
+		return "", placementUnavailablef("workspace=%q tab=%q blocked: pane_count=%d panes=%s", wsID, tabID, len(panes), describePanes(panes))
+	}
+	pane := panes[0]
+	if pane.Agent != nil || pane.AgentSession != nil {
+		return "", placementUnavailablef("workspace=%q tab=%q pane=%q blocked: agent=%q agent_session=%q", wsID, tabID, pane.PaneID, stringValue(pane.Agent), describeAgentSession(pane.AgentSession))
+	}
+	_, foreground, err := c.processInfo(ctx, pane.PaneID)
+	if err != nil {
+		return "", fmt.Errorf("workspace=%q tab=%q pane=%q process preflight: %w", wsID, tabID, pane.PaneID, err)
+	}
+	if len(foreground) != 1 || !shellProcess(foreground[0].Name) {
+		return "", placementUnavailablef("workspace=%q tab=%q pane=%q blocked: agent=%q agent_session=%q foreground=%v", wsID, tabID, pane.PaneID, stringValue(pane.Agent), describeAgentSession(pane.AgentSession), foreground)
+	}
+	return pane.PaneID, nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}
+
+func describeAgentSession(session *agentSessionInfo) string {
+	if session == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("agent=%s kind=%s source=%s value=%s", session.Agent, session.Kind, session.Source, session.Value)
+}
+
+func describePanes(panes []paneInfo) string {
+	parts := make([]string, len(panes))
+	for i, pane := range panes {
+		parts[i] = fmt.Sprintf("%s(agent=%s,session=%s)", pane.PaneID, stringValue(pane.Agent), describeAgentSession(pane.AgentSession))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+// ensurePlacement resolves the unique intended placement and conservatively
+// reuses an existing pane only when it is an unowned, shell-only pane.
+func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd string, env map[string]string) (placement, error) {
 	wsID, err := c.findWorkspace(ctx, wsLabel)
 	if err != nil {
-		return "", "", err
+		return placement{}, err
 	}
 	if wsID == "" {
-		_, tabID, paneID, err = c.workspaceCreate(ctx, wsLabel, cwd, env)
+		wsID, tabID, paneID, err := c.workspaceCreate(ctx, wsLabel, cwd, env)
 		if err != nil {
-			return "", "", err
+			return placement{}, err
 		}
 		_ = c.tabRename(ctx, tabID, tabLabel)
-		return tabID, paneID, nil
+		return placement{WorkspaceID: wsID, TabID: tabID, PaneID: paneID, CreatedPane: true}, nil
 	}
-	tabID, err = c.findTab(ctx, wsID, tabLabel)
+	tabID, err := c.findTab(ctx, wsID, tabLabel)
 	if err != nil {
-		return "", "", err
+		return placement{}, err
 	}
-	if tabID != "" {
-		return "", "", fmt.Errorf("herdr tab %q already exists without a registered agent", tabLabel)
+	if tabID == "" {
+		tabID, paneID, err := c.tabCreate(ctx, wsID, tabLabel, cwd, env)
+		return placement{WorkspaceID: wsID, TabID: tabID, PaneID: paneID, CreatedPane: err == nil}, err
 	}
-	return c.tabCreate(ctx, wsID, tabLabel, cwd, env)
+	paneID, err := c.reusableShellPane(ctx, wsID, tabID)
+	if err != nil {
+		return placement{WorkspaceID: wsID, TabID: tabID}, err
+	}
+	return placement{WorkspaceID: wsID, TabID: tabID, PaneID: paneID}, nil
+}
+
+func recoveryTabLabel(tabLabel string) string {
+	sum := sha256.Sum256([]byte(tabLabel))
+	suffix := fmt.Sprintf("-gc-%x", sum[:4])
+	maxBase := 32 - len(suffix)
+	if len(tabLabel) > maxBase {
+		tabLabel = tabLabel[:maxBase]
+	}
+	return tabLabel + suffix
+}
+
+func isHerdrError(err error, code string) bool {
+	var herr *herdrError
+	return errors.As(err, &herr) && herr.Code == code
 }
 
 func appendPlacementEnv(args []string, cwd string, env map[string]string) []string {

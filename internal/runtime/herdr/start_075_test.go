@@ -33,14 +33,14 @@ esac
 	c := newClient("test", dir)
 	c.bin = bin
 
-	tabID, paneID, err := c.ensurePlacement(context.Background(), "rig", "worker", "/work", map[string]string{"Z": "last", "A": "first"})
+	placed, err := c.ensurePlacement(context.Background(), "rig", "worker", "/work", map[string]string{"Z": "last", "A": "first"})
 	if err != nil {
 		t.Fatalf("ensurePlacement: %v", err)
 	}
-	if tabID != "t1" || paneID != "p1" {
-		t.Fatalf("placement = %q, %q; want t1, p1", tabID, paneID)
+	if placed.TabID != "t1" || placed.PaneID != "p1" {
+		t.Fatalf("placement = %q, %q; want t1, p1", placed.TabID, placed.PaneID)
 	}
-	if _, err := c.startAgent(context.Background(), "worker", "omp", paneID, []string{"omp", "--model", "fast"}); err != nil {
+	if _, err := c.startAgent(context.Background(), "worker", "omp", placed.PaneID, []string{"omp", "--model", "fast"}); err != nil {
 		t.Fatalf("startAgent: %v", err)
 	}
 
