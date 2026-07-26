@@ -133,6 +133,14 @@ workspace/tab structure mirrors the town:
 - **One tab per agent.** Rig polecats land in their rig's workspace as
   `polecat-<themed-name>` tabs; the placement is display-only and does not
   change agent identity.
+  In a clean layout, each agent has one intended tab. Workspace/tab reuse is
+  conservative during reconciliation: ambiguous, foreign, or occupied panes
+  are never closed. If the intended pane is blocked, the provider uses one
+  deterministic recovery tab and one bounded retry; a failed-start pane may be
+  retained rather than deleted and is reused on a later reconciler retry. When
+  recovery remains blocked, the provider reports the precise workspace and tab
+  identities so the collision can be resolved explicitly. The recovery tab is
+  exceptional, not part of the normal layout.
 
 See `internal/runtime/herdr-provider-design.md` in the source tree for the
 provider's design notes, capabilities, and pilot rationale.
