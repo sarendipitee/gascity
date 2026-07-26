@@ -95,10 +95,9 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err := p.runPreStart(ctx, cfg); err != nil {
 		return fmt.Errorf("herdr: running pre_start: %w", err)
 	}
-	// Place the agent in its own tab under a per-rig (per-town) workspace, so
-	// agents are separate switchable spaces rather than tiled panes. The
-	// find-or-create is serialized so concurrent same-rig Starts share one
-	// workspace instead of racing to create duplicates.
+	// Placement, start, and collision recovery share one lock. This makes the
+	// deterministic recovery tab a reconciler-stable singleton rather than a
+	// race that can create an unbounded set of replacement tabs.
 	wsLabel, tabLabel := placementFor(name, cfg.Env)
 	workDir := effectiveWorkDir(cfg, p.c.cityRoot)
 	kind, argv, err := herdrAgentLaunch(cfg)
@@ -106,15 +105,41 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
 	p.mu.Lock()
-	_, paneID, err := p.c.ensurePlacement(ctx, wsLabel, tabLabel, workDir, cfg.Env)
-	p.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("herdr: place %q: %w", name, err)
+	defer p.mu.Unlock()
+
+	// The pre-lock check is only a fast path. A concurrent Start may have
+	// completed while this invocation prepared its command.
+	if p.IsRunning(name) {
+		return runtime.ErrSessionExists
 	}
-	info, err := p.c.startAgent(ctx, herdrName, kind, paneID, argv)
-	if err != nil {
-		_ = p.c.closePane(ctx, paneID)
-		return fmt.Errorf("herdr: start %q: %w", name, err)
+
+	primary, placementErr := p.c.ensurePlacement(ctx, wsLabel, tabLabel, workDir, cfg.Env)
+	var info agentInfo
+	var primaryErr error
+	if placementErr == nil {
+		info, primaryErr = p.c.startAgent(ctx, herdrName, kind, primary.PaneID, argv)
+		if primaryErr != nil && !isHerdrError(primaryErr, "agent_pane_busy") {
+			return fmt.Errorf("herdr: start %q workspace=%q tab=%q pane=%q: %w", name, primary.WorkspaceID, primary.TabID, primary.PaneID, primaryErr)
+		}
+	}
+
+	if placementErr != nil && !isPlacementUnavailable(placementErr) {
+		return fmt.Errorf("herdr: place %q workspace=%q tab=%q: %w", name, wsLabel, tabLabel, placementErr)
+	}
+
+	if isPlacementUnavailable(placementErr) || isHerdrError(primaryErr, "agent_pane_busy") {
+		recoveryLabel := recoveryTabLabel(tabLabel)
+		recovery, recoveryErr := p.c.ensurePlacement(ctx, wsLabel, recoveryLabel, workDir, cfg.Env)
+		if recoveryErr != nil {
+			if placementErr != nil {
+				return fmt.Errorf("herdr: recover %q after expected placement blocked (%w): recovery_label=%q: %w", name, placementErr, recoveryLabel, recoveryErr)
+			}
+			return fmt.Errorf("herdr: recover %q after agent_pane_busy workspace=%q tab=%q pane=%q: recovery_label=%q: %w", name, primary.WorkspaceID, primary.TabID, primary.PaneID, recoveryLabel, recoveryErr)
+		}
+		info, err = p.c.startAgent(ctx, herdrName, kind, recovery.PaneID, argv)
+		if err != nil {
+			return fmt.Errorf("herdr: recovery start %q workspace=%q tab=%q label=%q pane=%q: %w", name, recovery.WorkspaceID, recovery.TabID, recoveryLabel, recovery.PaneID, err)
+		}
 	}
 	// Seed the metadata sidecar from cfg.Env NOW, before the (long) startup
 	// delivery below. tmux gets this for free — its GetMeta reads the tmux
