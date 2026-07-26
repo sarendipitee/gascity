@@ -95,6 +95,7 @@ export type AgentPatch = {
     PromptTemplate: string | null;
     Provider: string | null;
     ResumeCommand: string | null;
+    Rig: string;
     ScaleCheck: string | null;
     Scope: string | null;
     Session: string | null;

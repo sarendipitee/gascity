@@ -108,7 +108,7 @@ func (p *Provider) SubscribeSessionEvents(ctx context.Context) (<-chan runtime.S
 // backoff. Failures are logged once per streak, not per retry.
 func (p *Provider) runSessionEventStream(ctx context.Context, ch chan runtime.SessionEvent) {
 	defer close(ch)
-	s := &sessionEventStream{c: p.c, ch: ch}
+	s := &sessionEventStream{c: p.c, p: p, ch: ch}
 	backoff := sessionEventMinBackoff
 	for {
 		if ctx.Err() != nil {
@@ -146,8 +146,8 @@ func (p *Provider) runSessionEventStream(ctx context.Context, ch chan runtime.Se
 // sessionEventStream is one subscriber's translation state.
 type sessionEventStream struct {
 	c  *client
+	p  *Provider
 	ch chan runtime.SessionEvent
-
 	// paneNames maps pane id → gc session name. Rebuilt at cycle start and
 	// merge-only within a cycle: entries are never deleted mid-cycle, so a
 	// late pane_exited for an agent that already dropped out of the registry
@@ -183,7 +183,7 @@ func (s *sessionEventStream) runCycle(ctx context.Context) (resubscribe bool, er
 		if a.PaneID == "" || a.Name == "" {
 			continue
 		}
-		s.paneNames[a.PaneID] = a.Name
+		s.paneNames[a.PaneID] = s.gasCityName(a.Name)
 		if !s.subscribed[a.PaneID] {
 			s.subscribed[a.PaneID] = true
 			subs = append(subs, subscribeSub{Type: "pane.agent_status_changed", PaneID: a.PaneID})
@@ -269,7 +269,7 @@ func (s *sessionEventStream) runCycle(ctx context.Context) (resubscribe bool, er
 				if a.PaneID == "" || a.Name == "" {
 					continue
 				}
-				s.paneNames[a.PaneID] = a.Name
+				s.paneNames[a.PaneID] = s.gasCityName(a.Name)
 				if !s.subscribed[a.PaneID] {
 					resubscribe = true
 				}
@@ -289,6 +289,13 @@ func (s *sessionEventStream) runCycle(ctx context.Context) (resubscribe bool, er
 // handleFrame translates one wire frame into a SessionEvent. It reports
 // whether the frame hints at a new agent pane (arm the debounced re-list).
 // Unknown frame shapes and kinds are ignored for forward compatibility.
+func (s *sessionEventStream) gasCityName(agentName string) string {
+	if name, ok := s.p.gasCityName(agentName); ok {
+		return name
+	}
+	return agentName
+}
+
 func (s *sessionEventStream) handleFrame(line []byte) (relistHint bool) {
 	var f struct {
 		Event string `json:"event"`
